@@ -1,6 +1,14 @@
-import { MoreHorizontal, Pin } from 'lucide-react';
+import { AlertTriangle, CornerDownLeft, Loader2, MoreHorizontal, Pin } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import {
+  isPetDrag,
+  PetThumbnail,
+  readPetDrag,
+  usePetDrag,
+  type InstalledPet,
+  type PetDragPayload,
+} from '@/components/marketplace';
 import type { SessionListItem } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -76,13 +84,24 @@ type SessionRowProps = {
   onHover: (anchor: HTMLElement | null) => void;
   onCommitRename: (title: string) => void;
   onCancelRename: () => void;
+  /** The pet assigned to this chat, once its sprite is known. */
+  pet?: InstalledPet | null;
+  /** Set while a pet is being installed for this row, or while one failed to. */
+  dropStatus?: { state: 'installing' | 'failed'; message: string } | null;
+  onAssignPet?: (payload: PetDragPayload) => void;
 };
 
 export function SessionRow({
   session, active, renaming, onOpen, onOpenMenu, onHover, onCommitRename, onCancelRename,
+  pet = null, dropStatus = null, onAssignPet,
 }: SessionRowProps) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  // What is being dragged right now, so the row can name it before the drop.
+  const dragging = usePetDrag();
+  const droppable = Boolean(onAssignPet) && dragging !== null;
 
   if (renaming) {
     return (
@@ -116,6 +135,27 @@ export function SessionRow({
         setHovered(false);
         onHover(null);
       }}
+      onDragOver={(event) => {
+        if (!onAssignPet || !isPetDrag(event)) return;
+        // Both required, and both on every move: without `preventDefault` the
+        // browser refuses the drop, and without it on `dragover` specifically
+        // the cursor keeps showing "no entry" the whole way down the list.
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        setDragOver(true);
+      }}
+      onDragLeave={(event) => {
+        // Ignore the leave events fired while crossing this row's own children.
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDragOver(false);
+      }}
+      onDrop={(event) => {
+        if (!onAssignPet || !isPetDrag(event)) return;
+        event.preventDefault();
+        setDragOver(false);
+        const payload = readPetDrag(event);
+        if (payload) onAssignPet(payload);
+      }}
     >
       <button
         type="button"
@@ -133,13 +173,50 @@ export function SessionRow({
           active
             ? 'bg-accent text-accent-foreground'
             : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+          // A pet is in flight: every row it could land on says so quietly, and
+          // the one under the pointer says so loudly.
+          droppable && 'outline-dashed outline-1 outline-offset-[-1px] outline-border',
+          dragOver && 'bg-primary/10 text-foreground outline outline-2 outline-offset-[-2px] outline-primary',
         )}
       >
         {session.pinned ? (
           <Pin className="size-3 shrink-0 rotate-45 opacity-70" aria-hidden="true" />
         ) : null}
-        <MarqueeTitle text={session.title} active={hovered} />
+
+        {/* Kept inside the fixed-height row: the thumbnail is the cell's own
+            aspect at 18px, which fits an h-8 row without changing it. */}
+        {pet ? <PetThumbnail pet={pet} size={18} className="-my-1" /> : null}
+
+        <MarqueeTitle text={session.title} active={hovered && !dragOver} />
       </button>
+
+      {/* The promise, made before the drop. The user asked to know what will
+          happen before letting go, so this replaces the row's contents rather
+          than sitting beside them where it could be missed. */}
+      {dragOver && dragging ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center gap-1.5 rounded-sm bg-primary/15 px-2.5 text-xs font-medium text-primary">
+          <CornerDownLeft className="size-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">
+            Assign {dragging.displayName} to this chat
+          </span>
+        </div>
+      ) : null}
+
+      {dropStatus ? (
+        <div
+          className={cn(
+            'pointer-events-none absolute inset-0 flex items-center gap-1.5 rounded-sm px-2.5 text-xs',
+            dropStatus.state === 'installing'
+              ? 'bg-background/90 text-muted-foreground'
+              : 'bg-destructive/15 text-destructive',
+          )}
+        >
+          {dropStatus.state === 'installing'
+            ? <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
+            : <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />}
+          <span className="truncate">{dropStatus.message}</span>
+        </div>
+      ) : null}
 
       {/* A sibling rather than a child: a button cannot be nested in a button,
           and this has to be reachable by keyboard in its own right. */}

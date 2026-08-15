@@ -33,13 +33,23 @@ export const COLOR_ROLES = [
   'shadow',
   'light',
   'ink',
+  // The semantic three. They were derived and emitted as `--positive` and
+  // friends from the beginning, and a recipe could not name them — so a theme
+  // that wanted its "saved" toast to actually be its own green, or a caret to
+  // cycle through the palette's full set, had to reach for the accent and
+  // approximate. Adding them costs nothing: they are already solved against the
+  // page, and referencing a colour the theme already publishes cannot introduce
+  // a contrast failure the theme did not already have.
+  'positive',
+  'warning',
+  'destructive',
 ] as const;
 
 export type ColorRole = (typeof COLOR_ROLES)[number];
 
 export const colorRefSchema = z.object({
   role: z.enum(COLOR_ROLES)
-    .describe('Which derived role this colour comes from. "surface" is the page/panel body, "ink" is maximum-contrast text, "foreground" is solved body text, "shadow"/"light" are the two depth poles the ramp derives (use these for shadows — never assume black), "accent" is the primary action colour, "support" is the secondary hue from the palette scheme, "border" is the solved separator colour.'),
+    .describe('Which derived role this colour comes from. "surface" is the page/panel body, "ink" is maximum-contrast text, "foreground" is solved body text, "shadow"/"light" are the two depth poles the ramp derives (use these for shadows — never assume black), "accent" is the primary action colour, "support" is the secondary hue from the palette scheme, "border" is the solved separator colour, and "positive"/"warning"/"destructive" are the semantic colours this theme already publishes, solved against the page.'),
   tier: z.number().int().min(0).max(12).optional()
     .describe('Position on the 13-step lightness ladder, where 0 is the page background and 12 is maximum contrast against it. Tier is direction-free: tier 2 is "two steps away from the background" in a dark theme and in a light theme alike, so one recipe reads correctly in both ramps. Omit to use the role\'s solved tier.'),
   alpha: z.number().min(0).max(1).optional()

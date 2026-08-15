@@ -1,6 +1,11 @@
 import { ArrowUp, ImagePlus, Mic, Paperclip, PawPrint, Plus, Sparkles, Square, Wand2, X } from 'lucide-react';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
+import {
+  CommandToken,
+  readStyledCommand,
+  type StyledCommandName,
+} from '@/components/chat/commandStyle';
 import { api, type SlashCommand } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import type { AttachmentPayload, PermissionMode } from '@/types/chat';
@@ -441,6 +446,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   };
 
   const activeMode = PERMISSION_MODES.find((entry) => entry.value === mode) ?? PERMISSION_MODES[0];
+  const armedCommand = readStyledCommand(draft);
 
   return (
     <div className="relative mx-auto max-w-2xl space-y-2">
@@ -460,7 +466,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 index === selectedIndex ? 'bg-accent' : 'hover:bg-accent/50',
               )}
             >
-              <span className="font-mono text-sm">/{command.name}</span>
+              {readStyledCommand(`/${command.name}`) ? (
+                <CommandToken
+                  name={command.name as StyledCommandName}
+                  className="font-mono text-sm"
+                />
+              ) : (
+                <span className="font-mono text-sm">/{command.name}</span>
+              )}
               {command.argumentHint ? (
                 <span className="font-mono text-xs text-muted-foreground">{command.argumentHint}</span>
               ) : null}
@@ -660,6 +673,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           {activeMode.label}
           <span className="opacity-50">shift + tab</span>
         </button>
+
+        {/* A textarea cannot style a run of its own text, so the command the
+            draft is carrying is shown beside it rather than inside it — which
+            also survives the user scrolling the input. */}
+        {armedCommand ? (
+          <span className="flex items-center gap-1 text-xs">
+            <CommandToken name={armedCommand} className="text-xs" />
+            <span className="text-muted-foreground">
+              {armedCommand === 'ultracode' ? 'subagents, in parallel' : 'redesigning the app'}
+            </span>
+          </span>
+        ) : null}
       </div>
     </div>
   );

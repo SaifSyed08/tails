@@ -32,7 +32,7 @@ to do — the short list of things that are actually refused is at the bottom.
 **Compose. Do not pick.** The presets returned alongside this guide are worked
 examples of the format, kept because reading how a look is *constructed* is the
 fastest way to learn the vocabulary. They are not a menu. If the answer to
-"make it feel like a rainy Tokyo evening" is "the closest preset is Neon", the
+"make it feel like a rainy Tokyo evening" is "the closest preset is Bloom", the
 system has failed, and so have you. Build the thing that was asked for.
 
 If it genuinely cannot be built, name the missing primitive. That is a useful
@@ -45,8 +45,29 @@ and get the contrast report → \`theme_propose\` if the change is substantial,
 then ask → \`theme_apply\` to bind it → \`theme_controls\` to publish the knobs.
 \`theme_css\` slots in wherever the spec runs out of vocabulary.
 
+**\`theme_reset\` puts everything back to the built-in look** — every binding,
+any CSS layer, any published controls, any knob the user dragged. Reach for it
+the moment a change goes wrong or the user asks to go back, and before trying a
+genuinely different direction so the previous attempt is not underneath the new
+one. It is cheap and complete, and far better than composing a theme that tries
+to undo whatever the last one did.
+
 Preview is free and nothing needs undoing, so iterate there rather than
 reasoning in your head about what a spec will look like.
+
+## Two things every look owes the user
+
+**The sidebar must read as a different plane from the chat.** They are the two
+largest surfaces on screen and if they share a fill the app looks like one
+undifferentiated slab. Give the rail its own \`sidebar\` recipe with a fill a
+tier or two along the \`surface\` role — that role is direction-free, so one
+recipe separates correctly in both ramps. A test asserts a minimum measured
+separation for every shipped preset, so this is a floor rather than a
+suggestion.
+
+**A look has to be leaveable.** If the user does not like it, \`theme_reset\`
+is one call and puts everything back. Do not make someone live with the third of
+three looks they disliked because going back was awkward.
 
 ## Where a look actually lives
 
@@ -67,6 +88,9 @@ composing:
 | glass | translucent fill + backdrop blur *with saturation* + a gradient-ring border + a wide ambient drop |
 | neon | zero offset, wide blur, accent-coloured, plus a 1px spread ring |
 | editorial | no shadow at all; separation by a single hairline rule on one side |
+
+None of those six ships as a preset. They are recipes, not options — the table
+is there so you can build any of them, or something none of them describes.
 
 Glass is worth dwelling on because it is the one people reach for a preset for.
 It is four things and the third is the one that gets forgotten: a fill whose
@@ -95,8 +119,24 @@ a soft wide ambient shadow so it floats. Add \`refraction\` for the edge.
 - **\`interaction\`** covers the caret — \`caretColor\` and \`caretShape\`,
   where \`block\` is the fat terminal cursor and \`underscore\` the DOS one —
   plus \`selectionFill\` / \`selectionInk\` and \`cursor\`, which picks from the
-  shapes the OS already draws. A phosphor-green block caret is most of what
-  sells a terminal.
+  shapes the OS already draws. An amber block caret is most of what sells a
+  terminal. \`caretCycle\` takes two to four colour refs and steps the caret
+  through them; use it sparingly, it is a strong effect on a very small object.
+
+## Colour roles you can name
+
+\`surface\`, \`ink\`, \`foreground\`, \`border\`, \`accent\`, \`support\`, and
+the two depth poles \`shadow\` and \`light\` — never assume black for a shadow,
+\`shadow\` already *is* the theme-correct dark pole.
+
+Also \`positive\`, \`warning\` and \`destructive\`: the semantic colours the
+theme already publishes, solved against the page. Reach for those rather than
+approximating with the accent when you want the theme's own green or red.
+
+\`tier\` is direction-free — tier 2 is "two steps more contrasty than the page"
+in a light theme and a dark one alike — which is why it is the role to use when
+a surface has to separate in **both** ramps. \`light\` and \`shadow\` each run
+out of headroom at one end.
 
 ## The cursor
 
@@ -143,6 +183,11 @@ handles and the like — keep it too.
 
 \`trail.kind\` is \`comet\`, which tapers each segment toward nothing, or
 \`ribbon\`, which keeps the width and lets opacity do all the work.
+
+\`click: { kind: 'ripple', size, seconds }\` expands a ring from wherever the
+pointer went down. It is independent of the drawn cursor — a look can want click
+feedback without wanting to replace the pointer — and like the trail it is off
+entirely under reduced motion and adds no listener when the kind is \`none\`.
 
 \`trail\` is autonomous motion: it is switched off entirely under
 \`prefers-reduced-motion\`, and it runs no animation frame loop while the

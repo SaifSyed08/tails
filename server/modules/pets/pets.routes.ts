@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'node:fs';
 
+import { renderDesktopWindowHtml } from '@/modules/pets/desktop-window.js';
 import { petsService } from '@/modules/pets/pets.service.js';
 
 /** Thin transport around the pets service: parse, call, format. */
@@ -35,24 +36,29 @@ export function createPetsRouter(): express.Router {
   ));
 
   /**
-   * Proxies a catalogue thumbnail.
+   * Proxies the two catalogue images.
    *
    * Here so the renderer makes no third-party requests: the marketplace shows
-   * remote artwork without the remote host ever seeing the user.
+   * remote artwork without the remote host ever seeing the user. `poster` is a
+   * single cell and `strip` is the filmstrip — two routes rather than one
+   * "preview", because conflating them is what put a row of 57 sprites in a
+   * card.
    */
-  router.get('/catalogue/:petId/preview', async (req, res, next) => {
-    try {
-      const preview = await petsService.fetchCataloguePreview(String(req.params.petId));
-      res.setHeader('Content-Type', preview.contentType);
-      res.setHeader('Content-Length', String(preview.bytes.byteLength));
-      // Long and immutable-ish: thumbnails are versioned in their upstream URL,
-      // and a browsing session revisits the same page constantly.
-      res.setHeader('Cache-Control', 'private, max-age=3600');
-      res.end(preview.bytes);
-    } catch (error) {
-      next(error);
-    }
-  });
+  for (const kind of ['poster', 'strip'] as const) {
+    router.get(`/catalogue/:petId/${kind}`, async (req, res, next) => {
+      try {
+        const image = await petsService.fetchCatalogueImage(String(req.params.petId), kind);
+        res.setHeader('Content-Type', image.contentType);
+        res.setHeader('Content-Length', String(image.bytes.byteLength));
+        // Long and immutable-ish: these are versioned in their upstream URL,
+        // and a browsing session revisits the same page constantly.
+        res.setHeader('Cache-Control', 'private, max-age=3600');
+        res.end(image.bytes);
+      } catch (error) {
+        next(error);
+      }
+    });
+  }
 
   /**
    * Which pet a surface should render.
@@ -62,9 +68,26 @@ export function createPetsRouter(): express.Router {
    * caller gets the same answer; this route exists so a caller does not have to
    * be on the server to ask.
    */
+  /** Which conversation has which pet, for surfaces showing many rows at once. */
+  router.get('/assignments', respond(() => petsService.listAssignments()));
+
   router.get('/display', respond((req) => petsService.resolveDisplayPet(
     typeof req.query.sessionPetId === 'string' ? req.query.sessionPetId : null,
   )));
+
+  /**
+   * The desktop pet's page.
+   *
+   * Served rather than bundled so the always-on-top window has a URL that works
+   * the same in development and in a packaged build, with no second renderer
+   * entry point to configure. It is a whole document, so it answers HTML rather
+   * than going through `respond`.
+   */
+  router.get('/window', (_req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(renderDesktopWindowHtml());
+  });
 
   router.get('/', respond(() => petsService.listPets()));
 

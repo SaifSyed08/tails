@@ -17,6 +17,8 @@ type PickablePet = {
     name: string;
     frame?: { width: number; height: number; columns: number; rows: number };
     states?: { idle?: { from: number } };
+    /** Lines this pet says while the agent works; the indicator mixes them in. */
+    thinkingPhrases?: string[];
   };
   spriteUrl: string;
 };
@@ -66,8 +68,11 @@ type PetPickerProps = {
   sessionId: string;
   /** The pet this conversation already has, if any. */
   petId: string | null;
-  /** Carries the name too: the caller shows it, and only this list knows it. */
-  onAssigned: (pet: { id: string; name: string } | null) => void;
+  /**
+   * Carries the whole pet, not just its id: the caller shows the name and the
+   * thinking indicator uses the phrases, and only this list has either.
+   */
+  onAssigned: (pet: { id: string; name: string; phrases: string[] } | null) => void;
   onClose: () => void;
 };
 
@@ -109,7 +114,7 @@ export function PetPicker({ sessionId, petId, onAssigned, onClose }: PetPickerPr
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const assign = async (next: { id: string; name: string } | null) => {
+  const assign = async (next: { id: string; name: string; phrases: string[] } | null) => {
     setSaving(true);
     try {
       await api.setSessionPet(sessionId, next?.id ?? null);
@@ -174,7 +179,11 @@ export function PetPicker({ sessionId, petId, onAssigned, onClose }: PetPickerPr
                 type="button"
                 disabled={saving}
                 aria-pressed={selected}
-                onClick={() => void assign({ id: pet.definition.id, name: pet.definition.name })}
+                onClick={() => void assign({
+                  id: pet.definition.id,
+                  name: pet.definition.name,
+                  phrases: pet.definition.thinkingPhrases ?? [],
+                })}
                 className={cn(
                   'flex w-full items-center gap-3 rounded-lg border p-2 text-left transition-colors duration-quick disabled:opacity-60',
                   selected ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50',

@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import { cn } from '@/lib/utils';
 
 import type { InstalledPet } from './marketplace-api';
+import { frameOffset, resolveCellBox } from './sprite-geometry';
 
 /**
  * One still frame of a pet, at any size.
@@ -23,25 +24,25 @@ type PetThumbnailProps = {
   pet: InstalledPet;
   /** Rendered height in CSS pixels. The width follows the cell's aspect ratio. */
   size?: number;
+  /** `right` is the sheet as drawn; `left` mirrors it. */
+  facing?: 'right' | 'left';
   className?: string;
 };
 
-export function PetThumbnail({ pet, size = 32, className }: PetThumbnailProps) {
-  const { frame } = pet.definition;
-  const { column, row } = pet.preview;
-
-  const scale = size / Math.max(1, frame.height);
-  const cellWidth = frame.width * scale;
+export function PetThumbnail({ pet, size = 32, facing = 'right', className }: PetThumbnailProps) {
+  const box = resolveCellBox(pet.definition.frame, size);
+  const offset = frameOffset(pet.preview.frame, box);
 
   const style: CSSProperties = {
-    width: `${cellWidth}px`,
-    height: `${size}px`,
+    width: `${box.cellWidth}px`,
+    height: `${box.cellHeight}px`,
     backgroundImage: `url(${pet.spriteUrl})`,
-    backgroundSize: `${frame.columns * cellWidth}px ${frame.rows * size}px`,
-    backgroundPosition: `${-column * cellWidth}px ${-row * size}px`,
+    backgroundSize: `${box.sheetWidth}px ${box.sheetHeight}px`,
+    backgroundPosition: `${offset.x}px ${offset.y}px`,
     backgroundRepeat: 'no-repeat',
     // Pixel art: smoothing it at a fractional scale turns it to mush.
     imageRendering: 'pixelated',
+    transform: facing === 'left' ? 'scaleX(-1)' : undefined,
   };
 
   return (

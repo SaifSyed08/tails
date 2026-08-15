@@ -76,6 +76,20 @@ export type InstalledPet = {
    * no fallback for a range that points past the end.
    */
   preview: { frame: number; column: number; row: number };
+  /**
+   * A theme this pet brings to a conversation it is assigned to, or null.
+   *
+   * An opaque id. Themes come and go, so one that no longer exists means "no
+   * theme" — never an error, and never a reason to refuse to render the pet.
+   */
+  assignedTheme: string | null;
+  /**
+   * What the pet says while the agent is thinking.
+   *
+   * Plain text, always rendered as text. Capped server-side at twelve phrases
+   * of eighty characters.
+   */
+  thinkingPhrases: string[];
   /** ISO timestamp of when this pet entered the library, not when it was made. */
   installedAt: string | null;
   removable: boolean;
@@ -114,8 +128,16 @@ export type CatalogueEntry = {
   downloads: number | null;
   likes: number | null;
   tags: string[];
-  /** A URL on our own server: the renderer never requests anything from codex-pets.net. */
-  previewUrl: string | null;
+  /**
+   * A single cell of the pet, proxied by our server.
+   *
+   * The catalogue's own "preview" is a filmstrip of every frame in one row, so
+   * these are two separate fields: showing the strip where a portrait belongs
+   * renders the pet as a line of sprites.
+   */
+  posterUrl: string | null;
+  /** The filmstrip, one row, for surfaces that animate it. Also proxied. */
+  stripUrl: string | null;
   validation: CatalogueValidation | null;
 };
 
@@ -193,6 +215,15 @@ export const petsApi = {
   resolveDisplayPet: (sessionPetId?: string | null) =>
     request<DisplayPet>(`/display${sessionPetId ? `?sessionPetId=${encodeURIComponent(sessionPetId)}` : ''}`),
 
+  /**
+   * Every conversation's pet, as `{ [sessionId]: petId }`.
+   *
+   * One request for a whole sidebar. Ids that no longer resolve to an installed
+   * pet are included as stored — the caller shows nothing for them rather than
+   * treating a deleted pet as an error.
+   */
+  listAssignments: () => request<Record<string, string>>('/assignments'),
+
   /** Copies a pet folder from anywhere on disk into `~/.tails/pets`. */
   importFromPath: (folderPath: string) =>
     request<InstalledPet>('/import', {
@@ -207,8 +238,20 @@ export const petsApi = {
       body: JSON.stringify({ definition, image }),
     }),
 
-  /** Saves a corrected frame grid or state ranges. Stored per pet, even for read-only Codex pets. */
-  updatePet: (id: string, patch: { frame?: FrameGrid; states?: PetStates }) =>
+  /**
+   * Saves anything the user can change about a pet.
+   *
+   * All of it is stored in our own database, never written back to the pet's
+   * folder — most pets live in `~/.codex/pets`, which belongs to another tool.
+   * For the two preference fields `null` clears and omitting leaves alone, so a
+   * form that edits one cannot wipe the other.
+   */
+  updatePet: (id: string, patch: {
+    frame?: FrameGrid;
+    states?: PetStates;
+    assignedTheme?: string | null;
+    thinkingPhrases?: string[] | null;
+  }) =>
     request<InstalledPet>(`/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),

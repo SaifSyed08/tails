@@ -3,7 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { TAILS_HOME } from '@/db/connection.js';
+import { sessionsRepository } from '@/db/sessions.repository.js';
 import {
+  assignedThemeSchema,
   buildDefaultStates,
   DEFAULT_SPRITESHEET_NAME,
   findOutOfRangeStates,
@@ -15,6 +17,7 @@ import {
   petIdSchema,
   petStatesSchema,
   spritePathSchema,
+  thinkingPhrasesSchema,
   type FrameGrid,
   type PetDefinition,
   type PetFile,
@@ -24,6 +27,7 @@ import { petsRepository, type PetSource } from '@/modules/pets/pets.repository.j
 import {
   createRemoteCatalogue,
   DEFAULT_PAGE_SIZE,
+  type CatalogueImageKind,
   type CataloguePage,
   type CatalogueValidation,
 } from '@/modules/pets/remote-catalogue.js';
@@ -97,6 +101,15 @@ export type InstalledPet = {
    * component to reuse rather than re-derive.
    */
   preview: { frame: number; column: number; row: number };
+  /**
+   * A theme id this pet brings to a conversation, or null.
+   *
+   * Opaque here on purpose: this module never imports the appearance module,
+   * and an id that no longer resolves to a theme means "no theme".
+   */
+  assignedTheme: string | null;
+  /** What the pet says while it is thinking. Plain text, capped, possibly empty. */
+  thinkingPhrases: string[];
   /**
    * When T.A.I.L.S. first recorded this pet, as an ISO timestamp.
    *
@@ -341,6 +354,8 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     spriteSize: size ? { width: size.width, height: size.height } : null,
     gridBasis,
     preview: describePreviewFrame(grid, states),
+    assignedTheme: override?.assignedTheme ?? null,
+    thinkingPhrases: override?.thinkingPhrases ?? [],
     installedAt: toIsoTimestamp(override?.installedAt),
     removable: source === 'tails',
     hidden: Boolean(override?.hiddenAt),
@@ -581,7 +596,7 @@ function readPetArchive(bytes: Buffer): { file: PetFile; spriteBytes: Buffer; sp
  * Anything that does not parse or divide evenly is dropped rather than
  * patched — a half-understood report is worth less than an honest inference.
  */
-function gridFromValidation(validation: CatalogueValidation | null): FrameGrid | undefined {
+export function gridFromValidation(validation: CatalogueValidation | null): FrameGrid | undefined {
   const cell = parseDimensions(validation?.cellSize);
   const atlas = parseDimensions(validation?.atlasSize);
   if (!cell || !atlas) return undefined;
@@ -696,6 +711,31 @@ export const petsService = {
     } catch {
       return null;
     }
+  },
+
+  /**
+   * Which conversation points at which pet.
+   *
+   * A read-only view, and a deliberately odd-looking one: assignments are
+   * stored on the *session* row and the sessions module owns writing them. But
+   * its list payload does not carry the field, and the sidebar needs the answer
+   * for thirty rows at once — so this reads the same rows rather than adding a
+   * per-row request or a second copy of the assignment.
+   *
+   * Ids are returned exactly as stored, including ones whose pet has since been
+   * deleted. A caller that cannot resolve one shows nothing, which is the right
+   * reading of a dangling assignment.
+   */
+  listAssignments(): Record<string, string> {
+    const assignments: Record<string, string> = {};
+
+    for (const archived of [false, true]) {
+      for (const session of sessionsRepository.listSessions({ limit: 500, archived })) {
+        if (session.petId) assignments[session.id] = session.petId;
+      }
+    }
+
+    return assignments;
   },
 
   /**
@@ -850,8 +890,29 @@ export const petsService = {
       throw toValidationError('Those frame ranges do not fit the grid.', outOfRange);
     }
 
+    // `null` clears, `undefined` leaves alone — so a form that only edits the
+    // phrases cannot wipe the theme by omitting it.
+    const theme = input.assignedTheme === undefined || input.assignedTheme === null
+      ? input.assignedTheme as null | undefined
+      : assignedThemeSchema.safeParse(input.assignedTheme);
+    if (theme && typeof theme === 'object' && !theme.success) {
+      throw toValidationError('That theme id is not usable.', theme.error.issues);
+    }
+
+    const phrases = input.thinkingPhrases === undefined || input.thinkingPhrases === null
+      ? input.thinkingPhrases as null | undefined
+      : thinkingPhrasesSchema.safeParse(input.thinkingPhrases);
+    if (phrases && typeof phrases === 'object' && !phrases.success) {
+      throw toValidationError('Those thinking phrases are not usable.', phrases.error.issues);
+    }
+
     petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
     petsRepository.saveCustomisation(pet.definition.id, { frame: frame?.data, states: states?.data });
+    petsRepository.savePreferences(pet.definition.id, {
+      assignedTheme: theme && typeof theme === 'object' ? theme.data : theme,
+      thinkingPhrases: phrases && typeof phrases === 'object' ? phrases.data : phrases,
+    });
+
     return requirePet(id);
   },
 
@@ -950,13 +1011,16 @@ export const petsService = {
     });
   },
 
-  /** Proxies a catalogue thumbnail so the renderer never talks to the remote host. */
-  fetchCataloguePreview(id: string): Promise<{ bytes: Buffer; contentType: string }> {
+  /** Proxies a catalogue image so the renderer never talks to the remote host. */
+  fetchCatalogueImage(
+    id: string,
+    kind: CatalogueImageKind,
+  ): Promise<{ bytes: Buffer; contentType: string }> {
     const parsed = petIdSchema.safeParse(id);
     if (!parsed.success) {
       throw new AppError('That is not a valid pet id.', { code: 'PET_INVALID_ID', statusCode: 400 });
     }
-    return catalogue.fetchPreview(parsed.data);
+    return catalogue.fetchImage(parsed.data, kind);
   },
 
   /**

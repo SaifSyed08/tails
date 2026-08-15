@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
 import type { FrameGrid, FrameRange } from './marketplace-api';
+import { resolveCellBox } from './sprite-geometry';
 import { usePlayableRange } from './sprite-usage';
 
 /**
@@ -37,6 +38,14 @@ type SpritePreviewProps = {
   /** Rendered cell height in CSS pixels; the width follows the cell's aspect ratio. */
   height?: number;
   paused?: boolean;
+  /**
+   * Which way the pet faces.
+   *
+   * `right` is however the sheet was drawn — nothing records a pet's natural
+   * direction, so this is "as authored" rather than a claim about east. `left`
+   * mirrors it, which is what a pet being dragged leftwards needs.
+   */
+  facing?: 'right' | 'left';
   /**
    * Whether to stop at the last cell that holds artwork.
    *
@@ -80,6 +89,7 @@ export function SpritePreview({
   range,
   height = 96,
   paused = false,
+  facing = 'right',
   trimBlankFrames = true,
   className,
 }: SpritePreviewProps) {
@@ -101,9 +111,10 @@ export function SpritePreview({
   const startRow = Math.floor(start / grid.columns);
   const rowSpan = Math.floor(end / grid.columns) - startRow + 1;
 
-  const scale = height / Math.max(1, grid.height);
-  const cellWidth = grid.width * scale;
-  const cellHeight = grid.height * scale;
+  // One shared derivation of "one cell, this tall", so this component and the
+  // thumbnail and the desktop window cannot disagree about it.
+  const box = resolveCellBox(grid, height);
+  const { cellWidth, cellHeight } = box;
 
   const fps = played.fps ?? grid.fps ?? 8;
   const framesPerSweep = rowSpan === 1 ? frameCount : grid.columns;
@@ -117,7 +128,7 @@ export function SpritePreview({
     width: `${cellWidth}px`,
     height: `${cellHeight}px`,
     backgroundImage: `url(${spriteUrl})`,
-    backgroundSize: `${grid.columns * cellWidth}px ${grid.rows * cellHeight}px`,
+    backgroundSize: `${box.sheetWidth}px ${box.sheetHeight}px`,
     backgroundRepeat: 'no-repeat',
     // Sprites are pixel art; smoothing them on a non-integer scale is the
     // difference between crisp and mush.
@@ -149,6 +160,11 @@ export function SpritePreview({
         : []),
     ].join(', ');
   }
+
+  // Mirrored rather than re-drawn, because no sheet carries a second facing.
+  // `scaleX` flips the painted cell only; the frame arithmetic above is
+  // untouched, so the walk cycle is identical in both directions.
+  if (facing === 'left') style.transform = 'scaleX(-1)';
 
   return (
     <div

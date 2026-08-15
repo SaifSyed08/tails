@@ -43,7 +43,52 @@ database, never returned from `/resolve`, gone on reload. That is not an
 oversight to be tidied up later — it is what makes "reload the window" a
 complete recovery path, and the loosened freeform validator (§8) depends on it.
 
-### 1.1 When an ephemeral layer is retired
+### 1.1 The invariant
+
+> Applying appearance state X must produce a rendering indistinguishable from a
+> fresh app that has only ever had X applied. No residue from anything applied
+> before it.
+
+Three shipped bugs came from not having this written down: a cursor glow that
+outlived the theme that created it, a background texture that survived a change
+of preset, and a `.dark` class that survived the adaptive theme after a pinned
+one. Each was diagnosed and fixed alone, which was the mistake — they are one
+bug, and patching instances is how you get a fourth.
+
+It is enforced structurally rather than by remembering to clean up. A theme
+event does not modify the state, it **replaces** it: `reduceAppearance` in
+`layer-state.ts` returns `{ ...EMPTY_APPEARANCE_STATE, …theme }`, so everything
+not carried by the event returns to its empty value in the same expression that
+sets the new theme. `commitAppearance` then writes **every** layer it owns
+unconditionally, with no "if this changed" anywhere. Asserted over every
+ordering of every layer in `tests/layer-state.test.ts`.
+
+The price, stated plainly: a `theme_css` layer does not survive the next theme
+application, including a re-preview of the same spec. The alternative was a rule
+distinguishing "the agent is still composing this look" from "the user switched
+looks" — and that special case is precisely what produced the texture bug.
+Compose, apply, *then* layer CSS.
+
+### 1.2 Every layer, and what clears it
+
+| layer | lives in | owner | cleared by |
+| --- | --- | --- | --- |
+| theme stylesheet | adopted sheet `theme` | `applyTheme.ts` | `replaceSync` replaces it whole; `clearTheme()` empties it |
+| freeform stylesheet | adopted sheet `css` | `applyFreeformCss` | `commitAppearance` writes `state.freeformCss` every time; a theme event empties it |
+| live control values | adopted sheet, `:root:root` | `liveTokens.ts` | `commitAppearance` writes the whole map; a theme event empties it |
+| colour-mode class | `.dark` on `<html>` | `colorMode.ts` | `setPinnedMode(null)` on every commit hands it back to the user |
+| pointer tokens | inline on `<html>` | `pointerTokens.ts` | `refreshPointerTracking()` removes them when nothing reads them |
+| drawn cursor / trail / ripple | DOM under `#root` | `PointerLayer.tsx` | re-reads tokens per appearance change; unmounts when off |
+| ambient paint | `::after` on parts and `body` | tokens only | no teardown needed — replaced with the theme sheet |
+| published controls | React state | `AppearancePanel.tsx` | `reduceAppearance`; a theme event empties it |
+| proposal miniatures | React state | `AppearancePanel.tsx` | `reduceAppearance`; a theme event empties it |
+| bindings + cached CSS | sqlite, `localStorage` | `theme.service.ts` | `resetAppearance` clears both scopes; `theme_reset` and the Settings button both call it |
+
+**Adding a layer means adding a field to `AppearanceState` first.** If it is not
+in that type, `reduceAppearance` cannot reset it and `commitAppearance` cannot
+write it, and it will accumulate exactly like the three above did.
+
+### 1.3 When an ephemeral layer is retired
 
 Ephemeral is not the same as self-clearing, and conflating the two shipped a
 real bug. The `css` layer is its own adopted stylesheet, and nothing dropped it
@@ -53,21 +98,24 @@ written for, survived switching to a different theme, and survived *reset
 appearance* as well. Only a reload or the panic key cleared it. From the user's
 side that is indistinguishable from a permanent app feature with no switch.
 
-The lifecycle is now explicit:
+The lifecycle is now uniform, and that uniformity is the fix:
 
-| event | theme | css | controls |
-| --- | --- | --- | --- |
-| `theme_preview` | replaced | kept | kept |
-| `theme_apply` **from the agent** | replaced | **kept** | kept |
-| `POST /apply` **from Settings** | replaced | **dropped** | kept |
-| `unbind` / reset | dropped | **dropped** | **dropped** |
+| event | theme | css | controls | proposal |
+| --- | --- | --- | --- | --- |
+| `theme_preview` | replaced | dropped | dropped | dropped |
+| `theme_apply` (agent) | replaced | dropped | dropped | dropped |
+| `POST /apply` (Settings) | replaced | dropped | dropped | dropped |
+| `theme_css` | kept | replaced | kept | kept |
+| `theme_controls` | kept | kept | replaced | kept |
+| `theme_reset` / `unbind` | dropped | dropped | dropped | dropped |
 
-The split on apply is the whole subtlety. An agent applying a theme is
-mid-composition — the CSS it wrote a moment ago is part of the look it is now
-binding — so `theme_apply` passes `keepFreeformLayer`. A user picking a theme in
-Settings means the opposite: a different look, from a clean slate. Same service
-method, opposite intent, so the intent is stated at the call site rather than
-guessed at from the arguments.
+An earlier attempt at this had `theme_apply` pass a `keepFreeformLayer` flag, on
+the reasoning that an agent applying a theme is mid-composition while a user
+picking one in Settings is switching looks. It was a defensible distinction and
+it was wrong: it is exactly the exception through which the background texture
+survived. There is no flag now. Every path that changes which look is on screen
+calls `themeService.dropEphemeralLayers`, and `tests/safety.test.ts` asserts
+that each of them does and that the flag has not come back.
 
 Never write theme tokens as inline styles on `documentElement`. Inline styles
 outrank every selector, so a theme applied that way silently defeats the `.dark`
@@ -364,6 +412,34 @@ because the contract owns `box-shadow` at (0,2,0), a Tailwind `shadow-*` or
 put the utility on a wrapper, or set the shadow through `--t-shadow`. The same
 applies to `background-*`, `border-*`, `border-radius`, `color` and
 `backdrop-filter`.
+
+### 7.1.1 The window chrome wins fights you did not know were happening
+
+Three variants of one trap have now shipped, and they are worth listing together
+because none of them is visible to typecheck, to lint, or to reading either file
+alone:
+
+1. **Surface tokens beat utilities.** The doubled attribute selector is (0,2,0),
+   so `bg-card` on a tagged element does nothing.
+2. **`position` beat layout.** Folding `position: relative` into the doubled
+   rule outranked `.fixed`, and a modal laid itself out below the fold — which
+   read as "the Settings button does nothing".
+3. **Drag regions beat overlays.** `-webkit-app-region` is resolved by the
+   compositor as a set of rectangles and is **not** governed by z-index. A
+   dialog rendered over the header does not escape the header's drag rect on its
+   own: the part overlapping the header stops taking clicks while the part below
+   it works. That shipped as a close button whose top half was dead.
+
+The fix for the third is in `index.css`, next to `.app-drag`: every floating
+part — `[data-tails-part="scrim"]`, `[data-tails-part="popover"]`,
+`[role="dialog"]`, `[role="menu"]`, `.t-overlay` — declares
+`-webkit-app-region: no-drag`, **and so does every descendant**, at (0,2,0) so a
+`.app-drag` inside an overlay cannot punch a hole back through. It is scoped to
+overlays rather than applied globally, because `no-drag` everywhere is a window
+with no way to move it.
+
+A new overlay must carry one of those hooks or it will inherit the bug. `.t-overlay`
+exists for the case where none of the others fit.
 
 ### 7.2 The rules
 

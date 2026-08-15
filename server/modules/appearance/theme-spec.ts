@@ -181,6 +181,17 @@ const pointerRecipeSchema = z.object({
   replace: z.boolean().default(false)
     .describe('Hide the native cursor and let the drawn shape stand in for it. Read the note on lag before setting this: it is correct for a large soft shape and a mistake for a small hard one. The native cursor returns over text fields and critical controls regardless.'),
   trail: trailRecipeSchema,
+  click: z.object({
+    kind: z.enum(['none', 'ripple']).default('none')
+      .describe('What happens where the user clicks. "ripple" expands a ring from the click point and fades it. Off by default: feedback on every click in the app is a strong choice, and it is the wrong one for anything that wants to feel quiet.'),
+    size: z.number().min(8).max(240).default(72)
+      .describe('Diameter the ripple reaches, in pixels. Around 60-100 reads as acknowledgement; past ~150 it reads as a splash and starts competing with whatever the click actually did.'),
+    color: colorRefSchema.optional()
+      .describe('Ripple colour. Omit to follow the cursor colour.'),
+    seconds: z.number().min(0.15).max(2).default(0.45)
+      .describe('How long one ripple takes. Default 0.45. Longer than about 0.8 and two quick clicks overlap into a mess.'),
+  }).strict().default({ kind: 'none', size: 72, seconds: 0.45 })
+    .describe('Click feedback. Motion, so it is off entirely under reduced motion, and it adds no listener when the kind is "none".'),
 // Zod's `.default()` wants a complete output object, so a group whose own
 // fields are all defaulted still has to be spelled out at the group level. The
 // nested one is read back off its schema rather than written twice, because two
@@ -192,6 +203,7 @@ const pointerRecipeSchema = z.object({
   blend: 'screen' as const,
   replace: false,
   trail: trailRecipeSchema.parse(undefined),
+  click: { kind: 'none' as const, size: 72, seconds: 0.45 },
 }))
   .describe('An app-drawn cursor and its trail. Off by default; "system" means the native pointer and nothing else.');
 
@@ -242,6 +254,10 @@ export const themeSpecV2Schema = z.object({
   interaction: z.object({
     caretColor: colorRefSchema.optional()
       .describe('The text insertion caret. Omit for the accent colour. This is the smallest change with the largest effect on whether a look feels *inhabited*: a phosphor-green caret is most of what sells a terminal.'),
+    caretCycle: z.array(colorRefSchema).min(2).max(4).optional()
+      .describe('Cycle the caret through two to four colours instead of holding one. Hard steps rather than a crossfade, because a caret that fades between colours reads as a rendering fault. Two to four is the whole range: a caret is a few pixels wide and nobody can distinguish six colours at that size.'),
+    caretCycleSeconds: z.number().min(0.4).max(20).default(4)
+      .describe('Seconds for one full cycle through `caretCycle`. Default 4. Under about 1.5 seconds it competes with the blink and reads as a fault.'),
     caretShape: z.enum(['auto', 'bar', 'block', 'underscore']).default('auto')
       .describe('Caret geometry. "block" is the fat terminal cursor and "underscore" is the DOS one. Blink rate is the operating system\'s and cannot be set from here — a look that needs a specific blink needs a different primitive, not this one. Needs Chromium 139+, which the desktop app is; elsewhere it degrades to a bar.'),
     selectionFill: colorRefSchema.optional()
@@ -254,6 +270,7 @@ export const themeSpecV2Schema = z.object({
     pointer: pointerRecipeSchema,
   }).strict().default(() => ({
     caretShape: 'auto' as const,
+    caretCycleSeconds: 4,
     cursor: 'auto' as const,
     pointer: pointerRecipeSchema.parse(undefined),
   }))

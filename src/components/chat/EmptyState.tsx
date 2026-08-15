@@ -38,9 +38,75 @@ const SUGGESTIONS = [
   },
 ] as const;
 
+/** The headline, split so the last word can be animated on its own. */
+const HEADLINE = ['What', 'are', 'we', 'building', 'today?'];
+
+/** When the last word has finished its entrance: its stagger plus its duration. */
+const HEADLINE_SETTLED_MS = 540;
+
+/** Per-character offsets. The colour drifts; the hop travels. */
+const COLOUR_STEP_MS = 140;
+const JUMP_STEP_MS = 80;
+
+/**
+ * The closing word: always changing colour, and rippling when pointed at.
+ *
+ * The two effects are deliberately on two different elements. They are
+ * independent states — the colour is ambient, the ripple is a response — and
+ * putting them on one element would mean one `animation` shorthand, where
+ * gating the hop on hover would take the colour with it.
+ *
+ * Both are pure CSS: every character runs the same pair of keyframes and only
+ * its `animation-delay` differs, so nothing in React drives a frame and the
+ * hop stays on the compositor.
+ *
+ * Split for animation but not for reading — the characters are hidden from
+ * assistive tech and the wrapper carries the word, so a screen reader hears
+ * "today?" rather than six letters, and the text still selects as one word.
+ */
+function JumpingWord({ word, animate }: { word: string; animate: boolean }) {
+  if (!animate) return <span className="text-primary">{word}</span>;
+
+  return (
+    // `group` scopes the hover to the word itself: pointing anywhere else in
+    // the headline is not pointing at this.
+    <span className="group text-primary" aria-label={word}>
+      {[...word].map((character, index) => (
+        <span
+          key={`${character}-${index}`}
+          aria-hidden="true"
+          className="animate-hue-cycle inline-block"
+          // Held until the headline has finished arriving, so the word is not
+          // already cycling while it is still sliding into place.
+          style={{ animationDelay: `${HEADLINE_SETTLED_MS + index * COLOUR_STEP_MS}ms` }}
+        >
+          <span
+            className={cn(
+              'inline-block group-hover:animate-letter-jump',
+              // Covers the one ugly case: a pointer leaving mid-hop would
+              // otherwise drop the character straight back to the baseline.
+              'transition-transform duration-quick ease-standard',
+            )}
+            /*
+              No entrance offset here, unlike the colour: this starts when the
+              pointer arrives, and a delay measured from mount would make the
+              first hover late by however long the screen had been open.
+            */
+            style={{ animationDelay: `${index * JUMP_STEP_MS}ms` }}
+          >
+            {character}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 type EmptyStateProps = {
   /** The folder this conversation runs in, shown as the one bit of real context. */
   cwd: string;
+  /** The model this chat runs on, when it could be read. */
+  model?: string | null;
   onPick: (prompt: string) => void;
 };
 
@@ -52,7 +118,7 @@ type EmptyStateProps = {
  * Under reduced motion the whole thing simply arrives: same layout, no drift,
  * no shimmer.
  */
-export function EmptyState({ cwd, onPick }: EmptyStateProps) {
+export function EmptyState({ cwd, model, onPick }: EmptyStateProps) {
   const reduced = useReducedMotion();
   // Only the last two segments; an absolute path is noise on a hero.
   const folder = cwd ? cwd.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).join('/') : null;
@@ -71,6 +137,10 @@ export function EmptyState({ cwd, onPick }: EmptyStateProps) {
           style={{
             background: 'radial-gradient(circle, hsl(var(--primary) / 0.45), transparent 68%)',
             animationDuration: '7s',
+            // Promoted so the pulse runs on the compositor. Left unpromoted, a
+            // 28rem blurred radial re-rasterises its blur every frame and drags
+            // the text sweep in front of it down with it.
+            willChange: 'opacity',
           }}
         />
         <div
@@ -79,23 +149,32 @@ export function EmptyState({ cwd, onPick }: EmptyStateProps) {
             background: 'radial-gradient(circle, hsl(var(--accent-foreground) / 0.28), transparent 70%)',
             animationDuration: '11s',
             animationDelay: '1.4s',
+            willChange: 'opacity',
           }}
         />
       </div>
 
       <div className="relative flex flex-col items-center">
-        <span
-          className={cn(
-            'mb-5 flex items-center gap-1.5 rounded-full border border-border/70 bg-card/60 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground backdrop-blur',
-            !reduced && 'animate-rise-in',
-          )}
-        >
-          <Sparkles className="size-3 text-primary" aria-hidden="true" />
-          Ready
-        </span>
+        {/*
+          The model, or no badge at all. "Ready" said nothing the rest of the
+          screen was not already saying, and a guessed model name would be
+          worse than the silence — so when the CLI cannot tell us, this is
+          simply absent.
+        */}
+        {model ? (
+          <span
+            className={cn(
+              'mb-5 flex items-center gap-1.5 rounded-full border border-border/70 bg-card/60 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground backdrop-blur',
+              !reduced && 'animate-rise-in',
+            )}
+          >
+            <Sparkles className="size-3 text-primary" aria-hidden="true" />
+            {model}
+          </span>
+        ) : null}
 
         <h2 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">
-          {['What', 'are', 'we', 'building', 'today?'].map((word, index) => (
+          {HEADLINE.map((word, index) => (
             <span
               key={word}
               className={cn('mr-[0.3em] inline-block', !reduced && 'animate-rise-in')}
@@ -103,19 +182,8 @@ export function EmptyState({ cwd, onPick }: EmptyStateProps) {
               // ramp every staggered list in the app uses.
               style={reduced ? undefined : { animationDelay: `${120 + readStaggerDelay(index)}ms` }}
             >
-              {/* The last word carries the sweep, so the eye finishes the
-                  headline where the emphasis is. */}
-              {index === 4 && !reduced ? (
-                <span
-                  className="animate-shimmer bg-clip-text text-transparent"
-                  style={{
-                    backgroundImage:
-                      'linear-gradient(90deg, hsl(var(--foreground)) 35%, hsl(var(--primary)) 50%, hsl(var(--foreground)) 65%)',
-                    backgroundSize: '250% 100%',
-                  }}
-                >
-                  {word}
-                </span>
+              {index === HEADLINE.length - 1 ? (
+                <JumpingWord word={word} animate={!reduced} />
               ) : (
                 word
               )}

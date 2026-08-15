@@ -245,6 +245,41 @@ Not a generated image: an image would be an approximation of something the
 engine can already render exactly, it would have to come from somewhere (and
 nothing here may name a URL), and it would go stale the moment the spec moved.
 
+## The invariant, and why it needed one
+
+> Applying appearance state X must produce a rendering indistinguishable from a
+> fresh app that has only ever had X applied. No residue from anything applied
+> before it.
+
+Three bugs got to users before this was written down. A cursor glow, layered in
+through `theme_css`, outlived the theme that created it — it survived switching
+preset and survived *reset appearance*, so it read as a permanent app feature
+with no switch. A background texture did the same. A `.dark` class set by a
+pinned theme survived the adaptive theme after it, loading a light ramp with
+every `dark:` utility still on the dark branch.
+
+Each was found and fixed on its own, and that was the mistake: they are one bug.
+Appearance is six or seven layers, each was applied by whichever path produced
+it, and none of them was cleared by anything except the path that had set it.
+Patching instances of that is how you get a fourth.
+
+The fix is structural rather than diligent. `layer-state.ts` holds the whole
+appearance state in one value and a theme event **replaces** it rather than
+merging into it, so everything not carried by the event returns to its empty
+value in the same expression that sets the new theme. `commitAppearance` then
+writes every layer it owns unconditionally, with no "if this changed" anywhere.
+There is no teardown to forget, because there is no accumulation to tear down.
+
+`tests/layer-state.test.ts` asserts it over every ordering of every layer, and
+`RENDERER-CONTRACT.md` §1.2 enumerates the layers with what clears each. Adding
+a layer means adding a field to `AppearanceState` first — otherwise it cannot be
+reset, and it will accumulate exactly like the three above.
+
+One casualty worth naming: a `theme_css` layer no longer survives the next theme
+application. The alternative was a rule distinguishing "the agent is still
+composing" from "the user switched looks", and that special case is precisely
+what let the texture through.
+
 ## Getting back
 
 Every appearance change — a theme, a stylesheet, a control drag — puts **save as
@@ -261,3 +296,28 @@ Save exists because preview is deliberately not persisted. Without it the only
 route from "I like that" to "it is mine" was asking the agent to make it again —
 and that is not the same operation, because the spec is deterministic and the
 model is not. What the user saw is what gets saved.
+
+Reset is now `theme_reset` on the agent's side and one button in Settings, both
+calling `themeService.resetAppearance` — every binding in both scopes, every
+ephemeral layer, in one call. The Settings button used to unbind only the global
+theme, which left a hand-written CSS layer and a set of published controls on
+screen; "reset" meaning "reset some of it" is how a user learns not to trust the
+button.
+
+## The floor has exactly one design decision in it
+
+The built-in look is meant to be the absence of a design — if every layer above
+it fails to resolve, the app still looks like itself. It now carries one
+deliberate exception: a very faint glow that follows the cursor, at roughly 7%
+alpha over a 160px circle, because it was asked for directly.
+
+The tension is real and worth recording rather than smoothing over. The
+justification is that it costs nothing to remove (any theme setting
+`pointer.kind: "system"` takes it away, which is the correct default — a theme
+replaces the built-in look rather than inheriting pieces of it) and that it is
+subtle enough to read as the screen being faintly aware of where you are rather
+than as an effect. If it ever needs defending harder than that, it should go.
+
+It does mean the pointer writer runs by default, which is only affordable
+because of the gating: four custom-property writes on one animation frame, and
+only while the mouse is actually moving.

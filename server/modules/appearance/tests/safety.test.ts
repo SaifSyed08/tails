@@ -70,21 +70,31 @@ test('an ephemeral layer cannot outlive the look it was written for', () => {
   // Asserted against the source for the same reason as the tests around it: the
   // bug was the *absence* of a call, and absences do not show up in a unit test
   // that only checks what a function returns.
-  const unbind = methodBody(themeService, 'unbind');
-  assert.match(unbind, /this\.clearFreeformCss\(/, 'unbind must drop the freeform layer: "reset appearance" has to mean every layer.');
-  assert.match(unbind, /this\.clearControls\(/, 'unbind must drop the published controls too — a knob wired to a theme that is gone is a knob that does nothing.');
+  //
+  // The first fix for this bug gave `unbind` its own list of clears and left
+  // `applyTheme` with a hand-tuned exception — which is what let the texture
+  // bug through. Each caller keeping its own list is the failure mode; these
+  // assertions are that there is only one list.
+  const teardown = methodBody(themeService, 'dropEphemeralLayers');
+  for (const layer of ['clearFreeformCss', 'clearControls', 'clearProposal']) {
+    assert.ok(
+      teardown.includes(`this.${layer}(`),
+      `dropEphemeralLayers must retire the ${layer} layer.`,
+    );
+  }
 
-  const apply = methodBody(themeService, 'applyTheme');
-  assert.match(apply, /keepFreeformLayer/, 'switching theme must retire the freeform layer unless the caller opts out.');
+  for (const caller of ['unbind', 'applyTheme', 'resetAppearance']) {
+    assert.match(
+      methodBody(themeService, caller),
+      /this\.dropEphemeralLayers\(/,
+      `${caller} changes which look is on screen, so it must go through the shared teardown rather than clearing layers itself.`,
+    );
+  }
 
-  // The opt-out belongs to the agent and only to the agent: it is
-  // mid-composition and the CSS it wrote a moment ago is part of the look it is
-  // applying. The user picking a theme in Settings means the opposite, so the
-  // HTTP route must not pass it.
-  const tools = read('server', 'modules', 'appearance', 'appearance.tools.ts');
-  assert.match(tools, /keepFreeformLayer: true/);
-  const routes = read('server', 'modules', 'appearance', 'appearance.routes.ts');
-  assert.doesNotMatch(routes, /keepFreeformLayer/, 'the Settings apply path must start from a clean slate.');
+  // And no caller may opt out. An exception here is exactly how a background
+  // texture came to survive a change of preset.
+  const service = themeService;
+  assert.doesNotMatch(service, /keepFreeformLayer/, 'the per-caller exception is gone and must stay gone.');
 });
 
 test('the pointer writer does not run when nothing reads it', () => {

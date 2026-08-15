@@ -1,6 +1,12 @@
-import { Check, Eye, Pencil, Sparkles, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { Check, Eye, Monitor, Moon, Pencil, Sparkles, Sun, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
+import {
+  readColorMode,
+  setColorModePreference,
+  subscribeColorMode,
+  type ColorModePreference,
+} from '@/components/appearance/colorMode';
 import { api, type ThemeSummary } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Reveal, Stagger } from '@/shared/ui/Motion';
@@ -37,6 +43,96 @@ function ThemeSwatches({ theme }: { theme: ThemeSummary }) {
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * Light, dark, or whatever the operating system is doing.
+ *
+ * Three states rather than a toggle, because "follow the system" is a real
+ * answer and a two-way switch cannot express it — and because the app defaults
+ * to dark, someone whose machine is set to light has no way to say so without
+ * it.
+ *
+ * `system` is live: `colorMode.ts` holds a `prefers-color-scheme` listener, so
+ * a machine on a scheduled theme flips this app at dusk along with everything
+ * else. Reading the media query once at boot would make "system" mean "whatever
+ * the system was when you launched", which is the version of this feature
+ * everyone has been annoyed by.
+ *
+ * When a theme pins a mode the control is disabled rather than ignored. A
+ * segmented control that silently does nothing is worse than one that is
+ * visibly unavailable: the first looks broken, the second explains itself.
+ */
+function ColorModeControl() {
+  const { preference, effective, pinnedMode } = useSyncExternalStore(
+    subscribeColorMode,
+    readColorMode,
+    readColorMode,
+  );
+
+  const options: { value: ColorModePreference; label: string; icon: typeof Sun }[] = [
+    { value: 'light', label: 'Light', icon: Sun },
+    { value: 'dark', label: 'Dark', icon: Moon },
+    { value: 'system', label: 'System', icon: Monitor },
+  ];
+
+  return (
+    <section className="space-y-2 border-t border-border pt-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-sm font-semibold">Colour mode</h3>
+        {pinnedMode ? (
+          <span className="text-xs text-muted-foreground">
+            Locked to {pinnedMode} by the current look
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {preference === 'system' ? `Following your system — ${effective} right now` : null}
+          </span>
+        )}
+      </div>
+
+      <div
+        role="radiogroup"
+        aria-label="Colour mode"
+        className={cn(
+          'inline-flex gap-1 rounded-lg border border-border p-1',
+          pinnedMode && 'pointer-events-none opacity-50',
+        )}
+      >
+        {options.map((option) => {
+          const Icon = option.icon;
+          const active = !pinnedMode && preference === option.value;
+
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={pinnedMode !== null}
+              onClick={() => setColorModePreference(option.value)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors duration-quick',
+                active
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
+            >
+              <Icon className="size-3.5" />
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {pinnedMode ? (
+        <p className="text-xs text-muted-foreground">
+          Looks like Terminal are built for one mode only. Pick another look, or reset the
+          appearance, to choose again.
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -279,12 +375,21 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
               </Stagger>
 
               <div className="flex flex-wrap gap-2 pt-1">
+                {/* The full teardown, not an unbind: every layer, both scopes,
+                    the same endpoint the agent's `theme_reset` calls. Clearing
+                    only the global binding used to leave a hand-written CSS
+                    layer and a set of published controls on screen, which is
+                    how "reset" came to mean "reset some of it". */}
                 <button
                   type="button"
-                  onClick={() => void runAction('reset', () => api.unbindTheme('global'))}
+                  onClick={() => void runAction('reset', () => fetch('/api/appearance/reset', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ sessionId }),
+                  }))}
                   className="rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors duration-quick hover:bg-accent"
                 >
-                  Reset default look
+                  Reset everything
                 </button>
                 {sessionId ? (
                   <button
@@ -304,6 +409,8 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
                 builds to keep it as a preset.
               </p>
             </section>
+
+            <ColorModeControl />
 
             <section className="space-y-2 border-t border-border pt-5">
               <h3 className="text-sm font-semibold">Startup</h3>

@@ -110,6 +110,32 @@ export const petStatesSchema = z.object({
 
 export type PetStates = z.infer<typeof petStatesSchema>;
 
+/**
+ * A theme the pet brings with it.
+ *
+ * An opaque id: the appearance module owns what these mean, and this module
+ * deliberately does not import it — a pet holding a theme reference must not
+ * couple pets to theming. Presets come and go, so a stored id that no longer
+ * resolves is treated as "no theme" by whoever applies it, never as an error.
+ */
+export const assignedThemeSchema = z.string().min(1).max(64);
+
+/**
+ * How many things a pet may say while thinking, and how long each may be.
+ *
+ * Capped because these are stored per pet and rendered in a small indicator: a
+ * hundred phrases is not a personality, it is a payload, and a 500-character
+ * "phrase" is a paragraph in a space built for four words.
+ */
+export const MAX_THINKING_PHRASES = 12;
+
+export const thinkingPhrasesSchema = z.array(
+  z.string().trim().min(1).max(80)
+    .describe('Plain text. Rendered as text, never as markup.'),
+).max(MAX_THINKING_PHRASES);
+
+export type ThinkingPhrases = z.infer<typeof thinkingPhrasesSchema>;
+
 export const PET_STATE_NAMES = ['idle', 'walk', 'talk', 'sleep'] as const;
 
 export type PetStateName = (typeof PET_STATE_NAMES)[number];

@@ -12,9 +12,16 @@
       // renders. Kept tiny and dependency-free on purpose.
       (function () {
         try {
+          // Three states, matching src/components/appearance/colorMode.ts,
+          // which owns this class once the bundle is running. 'system' has to
+          // be resolved here too or a light-mode machine flashes dark on every
+          // launch and then corrects itself, which is the flash this whole
+          // script exists to prevent.
           var mode = localStorage.getItem('tails.colorMode');
-          if (mode === 'light') document.documentElement.classList.remove('dark');
-          else document.documentElement.classList.add('dark');
+          var dark = mode === 'system'
+            ? window.matchMedia('(prefers-color-scheme: dark)').matches
+            : mode !== 'light';
+          document.documentElement.classList.toggle('dark', dark);
 
           var css = localStorage.getItem('tails.themeCss');
           if (css) {

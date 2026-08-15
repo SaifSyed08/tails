@@ -2,8 +2,10 @@ import { AlertTriangle, Check, CopyPlus, EyeOff, Film, Trash2 } from 'lucide-rea
 import { useState } from 'react';
 
 import { cn } from '@/lib/utils';
+import { useReducedMotion } from '@/shared/ui/Motion';
 
 import type { InstalledPet } from './marketplace-api';
+import { endPetDrag, startPetDrag } from './pet-drag';
 import { frameCount, isGridUncertain, SOURCE_LABEL } from './pet-filters';
 import { PetStage } from './PetStage';
 import { Pill } from './Pill';
@@ -48,18 +50,33 @@ export function PetCard({
   onHide,
 }: PetCardProps) {
   const [hovered, setHovered] = useState(false);
+  const reduced = useReducedMotion();
   const { definition } = pet;
-  const showcase = hovered && definition.states.walk ? definition.states.walk : definition.states.idle;
+  // Hovering plays the walk cycle when the pet has one; `PetSprite` falls
+  // back to idle by itself for the many sheets that label only one state.
+  const showcase = hovered ? 'walk' : 'idle';
 
   return (
     <article
       data-tails-part="card"
+      draggable
+      onDragStart={(event) => startPetDrag(event, {
+        kind: 'installed',
+        id: definition.id,
+        displayName: definition.displayName,
+      })}
+      onDragEnd={endPetDrag}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      title={`Drag ${definition.displayName} onto a chat to assign it`}
       className={cn(
-        'group flex h-full flex-col overflow-hidden transition-transform duration-quick ease-standard hover:-translate-y-0.5',
-        // Outline rather than a ring: the surface contract owns `box-shadow` on
-        // any element carrying `data-tails-part`, so a ring utility never lands.
+        'group flex h-full cursor-grab flex-col overflow-hidden active:cursor-grabbing',
+        // Lift and outline on hover. Outline rather than a ring or a shadow:
+        // the surface contract owns `box-shadow` on any element carrying
+        // `data-tails-part`, so those utilities never land here.
+        'transition-transform duration-quick ease-standard',
+        !reduced && 'hover:-translate-y-1',
+        'hover:outline hover:outline-2 hover:-outline-offset-2 hover:outline-primary/40',
         pet.active && 'outline outline-2 -outline-offset-2 outline-primary',
         busy && 'pointer-events-none opacity-60',
       )}
@@ -70,7 +87,7 @@ export function PetCard({
         className="relative block w-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         aria-label={`Open ${definition.displayName}`}
       >
-        <PetStage pet={pet} height={104} range={showcase} className="h-36 w-full" />
+        <PetStage pet={pet} height={104} state={showcase} glow={hovered} className="h-36 w-full" />
         <span className="pointer-events-none absolute right-2 top-2 rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground opacity-0 transition-opacity duration-quick group-hover:opacity-100">
           Details
         </span>

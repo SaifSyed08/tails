@@ -43,9 +43,9 @@ const MAX_SEGMENTS = 16;
 /** Frames with nothing left to draw before the loop gives up and waits for a move. */
 const IDLE_FRAMES = 3;
 
-type DrawnPointer = { cursor: boolean; segments: number };
+type DrawnPointer = { cursor: boolean; segments: number; click: boolean };
 
-const OFF: DrawnPointer = { cursor: false, segments: 0 };
+const OFF: DrawnPointer = { cursor: false, segments: 0, click: false };
 
 /** What the current theme has asked for, read back from the resolved tokens. */
 function readDrawnPointer(): DrawnPointer {
@@ -67,6 +67,7 @@ function readDrawnPointer(): DrawnPointer {
     segments: trail && !reduced && Number.isFinite(length)
       ? Math.min(MAX_SEGMENTS, Math.max(0, Math.round(length)))
       : 0,
+    click: !reduced && computed.getPropertyValue('--t-click-image').trim() !== 'none',
   };
 }
 
@@ -182,6 +183,27 @@ export function PointerLayer() {
       if (frame) window.cancelAnimationFrame(frame);
     };
   }, [drawn.segments]);
+
+  // Click feedback. No React state and no listener at all unless a theme asked
+  // for it: each ripple is a bare element that removes itself when its
+  // animation ends, so nothing is in the tree between clicks.
+  useEffect(() => {
+    if (!drawn.click) return undefined;
+
+    const onDown = (event: PointerEvent) => {
+      const ripple = document.createElement('div');
+      ripple.className = 't-click-ripple';
+      ripple.setAttribute('aria-hidden', 'true');
+      ripple.style.translate = `${event.clientX}px ${event.clientY}px`;
+      // `once` and `remove` together, so a ripple whose animation never fires
+      // an end event (a display change mid-flight, say) still cannot pile up.
+      ripple.addEventListener('animationend', () => ripple.remove(), { once: true });
+      document.body.appendChild(ripple);
+    };
+
+    window.addEventListener('pointerdown', onDown, { passive: true });
+    return () => window.removeEventListener('pointerdown', onDown);
+  }, [drawn.click]);
 
   if (!drawn.cursor && drawn.segments === 0) return null;
 

@@ -3,7 +3,16 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, Menu, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, nativeImage, shell } from 'electron';
+
+import {
+  createPetWindow,
+  destroyPetWindow,
+  isPetHidden,
+  refreshPetWindow,
+  setPetHidden,
+  setPetSuppressed,
+} from './pet-window.js';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -49,6 +58,31 @@ function readUiStatePath() {
   return path.join(app.getPath('userData'), 'ui-state.json');
 }
 
+/**
+ * The persisted UI state, as a whole.
+ *
+ * One file with several owners — the zoom level, the desktop pet's position —
+ * so every write has to merge rather than replace. Writing just the field you
+ * changed is how the pet's position used to disappear whenever someone zoomed.
+ */
+function readUiState() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(readUiStatePath(), 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function patchUiState(patch) {
+  try {
+    fs.writeFileSync(readUiStatePath(), JSON.stringify({ ...readUiState(), ...patch }));
+  } catch {
+    // State that does not survive a restart is a far smaller problem than a
+    // crash on quit.
+  }
+}
+
 function clampZoomLevel(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(ZOOM_LIMIT, Math.max(-ZOOM_LIMIT, value));
@@ -56,25 +90,14 @@ function clampZoomLevel(value) {
 
 /** Reads the persisted zoom, tolerating a missing or corrupt file. */
 function readStoredZoomLevel() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(readUiStatePath(), 'utf8'));
-    return clampZoomLevel(Number(parsed?.zoomLevel));
-  } catch {
-    return 0;
-  }
+  return clampZoomLevel(Number(readUiState().zoomLevel));
 }
 
 /** Writes the level out now, tolerating a read-only or full disk. */
 function writeZoomLevel() {
   if (zoomSaveTimer) clearTimeout(zoomSaveTimer);
   zoomSaveTimer = null;
-
-  try {
-    fs.writeFileSync(readUiStatePath(), JSON.stringify({ zoomLevel }));
-  } catch {
-    // A zoom level that does not survive a restart is a far smaller problem
-    // than a crash on quit.
-  }
+  patchUiState({ zoomLevel });
 }
 
 /**
@@ -337,9 +360,56 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // The pet is a companion to the app, not a second app: leaving its window
+    // open would also keep the process alive past the last real window, since
+    // `window-all-closed` counts every BrowserWindow.
+    destroyPetWindow();
   });
 
   void mainWindow.loadURL(APP_URL);
+}
+
+/**
+ * The always-on-top pet.
+ *
+ * Created once the app window exists so it starts above it, and given the
+ * shell services it cannot reach on its own: the shared UI-state file, and a
+ * way to bring the app forward from its context menu.
+ */
+function startPetWindow() {
+  createPetWindow({
+    appRoot: APP_ROOT,
+    serverUrl: SERVER_URL,
+    readState: readUiState,
+    writeState: patchUiState,
+    onOpenSettings: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      // The settings panel belongs to the renderer; the shell can only ask.
+      mainWindow.webContents.send('tails:open-settings');
+    },
+  });
+}
+
+/**
+ * The app's control over the desktop pet.
+ *
+ * `suppress` is the handoff for an in-window pet taking over — temporary, and
+ * deliberately not the same switch as the user's own Hide, so a handoff can
+ * never overwrite a preference. `refresh` exists so activating a pet shows it
+ * immediately instead of at the window's next poll.
+ */
+function installPetBridge() {
+  ipcMain.on('tails:desktop-pet', (_event, payload) => {
+    const action = payload?.action;
+    if (action === 'suppress') setPetSuppressed(payload?.value !== false);
+    else if (action === 'hide') setPetHidden(payload?.value !== false);
+    else if (action === 'refresh') refreshPetWindow();
+  });
+
+  ipcMain.handle('tails:desktop-pet-state', () => ({ hidden: isPetHidden() }));
 }
 
 /**
@@ -429,7 +499,9 @@ async function bootstrap() {
     return;
   }
 
+  installPetBridge();
   createMainWindow();
+  startPetWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
@@ -444,6 +516,7 @@ app.on('before-quit', () => {
   // Quitting inside the save debounce would otherwise lose the last change,
   // which is exactly the one the user just made.
   if (zoomSaveTimer) writeZoomLevel();
+  destroyPetWindow();
   serverProcess?.kill();
 });
 

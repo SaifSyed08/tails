@@ -139,6 +139,7 @@ export const sessionsService = {
       external: false,
       pinned: session.pinnedAt !== null,
       archived: session.archivedAt !== null,
+      petId: session.petId,
     }));
 
     // Claude Code's own history has no notion of our archive, so the archived
@@ -156,6 +157,9 @@ export const sessionsService = {
             external: true,
             pinned: false,
             archived: false,
+            // A conversation Claude Code owns has no row here, so it can carry
+            // no assignment of its own.
+            petId: null,
           });
         }
       } catch {

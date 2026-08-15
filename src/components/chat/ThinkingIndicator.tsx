@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
+import { buildThinkingRotation } from '@/components/chat/thinkingPhrases';
 import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
@@ -35,14 +36,21 @@ const SHIMMER_STYLE = {
     'hsl(var(--foreground)) 50%,',
     'hsl(var(--muted-foreground)) 60%)',
   ].join(' '),
-  // Wider than the text so the highlight has somewhere to travel from and
-  // somewhere to go, leaving a beat between sweeps.
-  backgroundSize: '250% 100%',
+  // Two tiles per cycle. The shimmer keyframe travels 400%, so only a tile
+  // that divides that evenly wraps without the pattern jumping.
+  backgroundSize: '200% 100%',
 };
 
 type ThinkingIndicatorProps = {
   /** Optional detail from a status event, e.g. "Compacting context". */
   detail?: string | null;
+  /**
+   * Lines contributed by the conversation's pet, mixed into the rotation.
+   *
+   * Never the whole rotation: the ordinary words are what keep this reading as
+   * "work is happening" rather than as an idle animation.
+   */
+  petPhrases?: readonly string[];
 };
 
 /**
@@ -52,7 +60,7 @@ type ThinkingIndicatorProps = {
  * thing during a long tool run is knowing how long it has actually been —
  * that is the difference between patience and reaching for the stop button.
  */
-export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
+export function ThinkingIndicator({ detail, petPhrases }: ThinkingIndicatorProps) {
   const reduced = useReducedMotion();
   /**
    * The two words on screen, and which of them is showing.
@@ -62,8 +70,16 @@ export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
    * made the indicator blank for a frame on every change. Cross-fading two
    * live nodes means something is always fully legible.
    */
+  /**
+   * The words this indicator walks, pet lines included.
+   *
+   * Built once per pet rather than per tick, and the ellipsis is baked in
+   * here: an ordinary word needs one, a hand-written pet line is already
+   * punctuated the way its author wanted.
+   */
+  const rotation = useMemo(() => buildThinkingRotation(WORDS, petPhrases), [petPhrases]);
   const [slots, setSlots] = useState<[string, string]>(
-    () => [WORDS[Math.floor(Math.random() * WORDS.length)], ''],
+    () => [`${WORDS[Math.floor(Math.random() * WORDS.length)]}…`, ''],
   );
   const [active, setActive] = useState<0 | 1>(0);
   const [seconds, setSeconds] = useState(0);
@@ -80,8 +96,10 @@ export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
       setActive((current) => {
         const next = current === 0 ? 1 : 0;
         setSlots((words) => {
-          const showing = WORDS.indexOf(words[current]);
-          const upcoming = WORDS[(showing + 1 + WORDS.length) % WORDS.length];
+          // A rotation that changed underneath us (a pet was just assigned)
+          // reports -1 and simply starts again from the top.
+          const showing = rotation.indexOf(words[current]);
+          const upcoming = rotation[(showing + 1 + rotation.length) % rotation.length];
           const swapped: [string, string] = [...words] as [string, string];
           // Written into the hidden slot, so the text changes while that node
           // is still invisible and only then fades up.
@@ -93,7 +111,7 @@ export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
     }, WORD_INTERVAL_MS);
 
     return () => window.clearInterval(rotate);
-  }, [reduced]);
+  }, [reduced, rotation]);
 
   const shimmerClass = !reduced && 'animate-shimmer bg-clip-text text-transparent';
 
@@ -126,7 +144,6 @@ export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
               style={reduced ? undefined : SHIMMER_STYLE}
             >
               {word}
-              {word ? '…' : null}
             </span>
           ))}
         </span>

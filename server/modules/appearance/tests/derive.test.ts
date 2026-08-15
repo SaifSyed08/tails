@@ -96,6 +96,39 @@ test('every shipped preset passes contrast in both ramps at its own target', () 
   }
 });
 
+/**
+ * How far apart the rail and the transcript have to read.
+ *
+ * 1.15:1 is deliberately low as contrast ratios go — this is not a legibility
+ * floor, it is a "these are two different planes" floor, and anything much
+ * above it starts dictating that the sidebar be a dark rail in every theme.
+ * Below it the two surfaces merge: the presets were shipping at 1.000, exactly
+ * identical, which is what prompted the requirement.
+ */
+const SIDEBAR_SEPARATION = 1.15;
+
+test('the sidebar reads as a different plane from the chat, in every preset', () => {
+  // "Noticeably different" is exactly the kind of requirement that silently
+  // regresses — nothing type-checks it, nothing lints it, and a preset author
+  // who omits a `sidebar` recipe gets a rail that is byte-identical to the page
+  // without ever being told. Measured off the *composited* fill rather than the
+  // recipe, because a fill of `surface tier 2` says nothing about whether the
+  // result actually separates once alpha and gradients have been flattened.
+  for (const [id, preset] of Object.entries(THEME_PRESETS)) {
+    const derived = deriveTokens(preset);
+
+    for (const [label, ramp] of [['light', derived.light], ['dark', derived.dark]] as const) {
+      if (!ramp?.effectiveFills) continue;
+
+      const ratio = contrastRatio(ramp.effectiveFills.sidebar, ramp.effectiveFills.page);
+      assert.ok(
+        ratio >= SIDEBAR_SEPARATION,
+        `${id} ${label}: the sidebar sits at ${ratio.toFixed(3)}:1 against the chat, which needs to be at least ${SIDEBAR_SEPARATION}:1. Give the preset a \`sidebar\` recipe with a fill a tier or two along the \`surface\` role.`,
+      );
+    }
+  }
+});
+
 test('the presets differ structurally, not just in hue', () => {
   // The presets are the model's worked examples. If they are all the same shape
   // in different colours, that is what the model learns a theme is.
@@ -405,12 +438,18 @@ test('an accent-filled surface gets ink from whichever pole works', () => {
   // The failure this catches: in a dark theme the ladder runs toward white, and
   // white on a bright accent button is about 2:1. The ink solver has to be able
   // to leave the ladder.
-  const derived = deriveTokens(THEME_PRESETS.brutalist);
+  const derived = deriveTokens(baseSpec({
+    mode: 'adaptive',
+    surfaces: {
+      button: { fill: [{ kind: 'solid', stops: [{ color: { role: 'accent' } }] }] },
+      bubbleUser: { fill: [{ kind: 'solid', stops: [{ color: { role: 'accent' } }] }] },
+    },
+  }));
   for (const ramp of [derived.light, derived.dark]) {
     if (!ramp) continue;
     assert.notEqual(ramp.surfaces.button['t-ink'], ramp.surfaces.button['t-fill-color']);
   }
-  assertEverySurfaceLegible(derived, 'brutalist');
+  assertEverySurfaceLegible(derived, 'accent-filled');
 });
 
 test('status hues stay recognisable despite the allowed shift', () => {
@@ -533,7 +572,7 @@ test('serialized css uses real selectors, never inline style declarations', () =
 });
 
 test('every part in the contract gets its own scoped rule', () => {
-  const css = serializeStylesheet(deriveTokens(THEME_PRESETS.neon));
+  const css = serializeStylesheet(deriveTokens(THEME_PRESETS.bloom));
   for (const part of SURFACE_PARTS) {
     if (part === 'default') continue;
     assert.ok(
@@ -573,7 +612,7 @@ test('the type and density knobs all reach a token', () => {
 
 test('the ink glow knob emits a text shadow only when asked for', () => {
   assert.notEqual(deriveTokens(THEME_PRESETS.terminal).light.surfaces.default['t-ink-shadow'], 'none');
-  assert.equal(deriveTokens(THEME_PRESETS.editorial).light.surfaces.default['t-ink-shadow'], 'none');
+  assert.equal(deriveTokens(THEME_PRESETS.paper).light.surfaces.default['t-ink-shadow'], 'none');
 });
 
 test('upgrading a v2 spec is the identity', () => {

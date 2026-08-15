@@ -1,4 +1,13 @@
-import { AlertTriangle, ChevronDown, ChevronRight, PawPrint, Plus, RefreshCw, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Monitor,
+  PawPrint,
+  Plus,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -6,6 +15,12 @@ import { Reveal } from '@/shared/ui/Motion';
 import { readStaggerDelay } from '@/theme/motion';
 
 import { CatalogueShelf } from './CatalogueShelf';
+import {
+  hasDesktopPet,
+  hideDesktopPet,
+  readDesktopPetState,
+  refreshDesktopPet,
+} from './desktop-pet';
 import { ImportPetDialog } from './ImportPetDialog';
 import { LibraryEmpty, LibrarySkeleton, NoMatches } from './LibraryStates';
 import {
@@ -86,6 +101,19 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
   const [catalogueQuery, setCatalogueQuery] = useState('');
   const [catalogueSearch, setCatalogueSearch] = useState('');
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const [desktopHidden, setDesktopHidden] = useState<boolean | null>(null);
+
+  // Only meaningful in the desktop build; in a browser there is no window to
+  // float and the control is not rendered at all.
+  useEffect(() => {
+    let cancelled = false;
+    void readDesktopPetState().then((state) => {
+      if (!cancelled) setDesktopHidden(state?.hidden ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Reloads are requested by bumping a token rather than by calling a fetcher
   // directly, which keeps every state write inside a promise callback instead
@@ -174,6 +202,10 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
     try {
       await action();
       refresh();
+      // The desktop window polls on its own, but the two seconds after someone
+      // clicks "Set active" are exactly when a companion arriving late reads as
+      // nothing having happened.
+      refreshDesktopPet();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'That did not work.');
     } finally {
@@ -306,6 +338,29 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {hasDesktopPet() && desktopHidden !== null ? (
+            <button
+              type="button"
+              onClick={() => {
+                const next = !desktopHidden;
+                setDesktopHidden(next);
+                hideDesktopPet(next);
+              }}
+              aria-pressed={!desktopHidden}
+              title={desktopHidden
+                ? 'The active pet is not shown on your desktop.'
+                : 'The active pet floats above your other apps. Right-click it to hide it.'}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors duration-quick',
+                desktopHidden
+                  ? 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+                  : 'border-primary bg-primary/15 text-primary',
+              )}
+            >
+              <Monitor className="size-3.5" aria-hidden="true" />
+              {desktopHidden ? 'Off desktop' : 'On desktop'}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={refresh}
@@ -521,6 +576,7 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
           onAddCopy={handleAddCopy}
           onRemove={handleRemove}
           onHide={(target) => handleHide(target, true)}
+          onRefresh={refresh}
           onSaveLayout={handleSaveLayout}
         />
       ) : null}

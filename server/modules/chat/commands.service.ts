@@ -54,6 +54,33 @@ export const LOCAL_COMMANDS: Record<string, { description: string; argumentHint?
       'Compose the thing I asked for. If some part of it genuinely cannot be built, tell me which primitive is missing rather than giving me the nearest shipped look.',
     ].join(' '),
   },
+
+  /**
+   * Claude Code's "go wide" gesture, as an instruction rather than a mood.
+   *
+   * The whole value is in being specific about *how* to spread the work, so
+   * this reads as a method: split the task, fan out with the Task tool, and
+   * only then converge. Left vague ("work really hard, use subagents") the
+   * model reliably does the ordinary thing and narrates it as if it had not.
+   *
+   * The caveats are as load-bearing as the instruction. Subagents cannot see
+   * each other's work, so overlapping edits are the failure mode this has to
+   * pre-empt; and a task with one obvious sequential path is made slower, not
+   * faster, by being cut into four.
+   */
+  ultracode: {
+    description: 'Attack a task hard, in parallel, with subagents',
+    argumentHint: '<what to build or fix>',
+    expand: (args) => [
+      args.trim() ? `Task: ${args.trim()}` : 'Take the task we have been discussing and attack it properly.',
+      'Work at full depth on this one. Before writing anything, decompose it into the smallest set of genuinely independent pieces of work, and say what they are.',
+      'Then fan out: dispatch those pieces in parallel with the Task tool, one subagent per piece, in a single message so they run concurrently rather than one after another. Give each subagent the full context it needs and a crisp definition of done — they cannot see this conversation, each other, or each other\'s edits.',
+      'Split by file ownership wherever you can, so two subagents never edit the same file. Anything that genuinely has to be sequential, or that touches a file another piece owns, keep and do yourself.',
+      'Use subagents for the parts that are wide — searching, reading, independent implementation, writing tests, checking your work against a fresh reading of the code. Do not use them for the parts that are narrow: if the task has one obvious sequential path, say so and just do it, because four agents on a one-file change is slower and worse.',
+      'When the pieces come back, review what each one actually did rather than trusting the summary, reconcile the edges between them, and run the project\'s checks yourself.',
+      'Report what you parallelised, what you kept, and anything a subagent got wrong that you had to fix.',
+    ].join(' '),
+  },
 };
 
 /**

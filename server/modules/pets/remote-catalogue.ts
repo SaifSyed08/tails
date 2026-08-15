@@ -61,8 +61,22 @@ export type CatalogueEntry = {
   downloads: number | null;
   likes: number | null;
   tags: string[];
-  /** Same-origin URL on *our* server, so the renderer makes no third-party requests. */
-  previewUrl: string | null;
+  /**
+   * A single 192x208 cell — the pet standing still.
+   *
+   * The one to show in a card. The catalogue's `previewUrl` is **not** this: it
+   * is a 5472x104 filmstrip of every frame in a row, and painting that into an
+   * image element is what made pets render as a line of sprites.
+   */
+  posterUrl: string | null;
+  /**
+   * The filmstrip, for surfaces that want to animate it.
+   *
+   * One row, frame count implied by the cell aspect rather than stated, and
+   * about a tenth the size of the full spritesheet — which is what makes an
+   * animated preview affordable for fifty pets at once.
+   */
+  stripUrl: string | null;
   validation: CatalogueValidation | null;
 };
 
@@ -93,9 +107,12 @@ export interface PetCatalogue {
   listPets(options: { page?: number; pageSize?: number; query?: string }): Promise<CataloguePage>;
   /** Fetches one pet's archive. The id is ours to validate; the URL is never the caller's to choose. */
   downloadPet(id: string): Promise<CatalogueDownload>;
-  /** Streams a preview image the catalogue advertised for this pet. */
-  fetchPreview(id: string): Promise<{ bytes: Buffer; contentType: string }>;
+  /** Streams one of the preview images the catalogue advertised for this pet. */
+  fetchImage(id: string, kind: CatalogueImageKind): Promise<{ bytes: Buffer; contentType: string }>;
 }
+
+/** `poster` is one cell; `strip` is the filmstrip of every frame. */
+export type CatalogueImageKind = 'poster' | 'strip';
 
 /** "Top 50 by views" is the landing shelf, and the API's own page size is 30. */
 export const DEFAULT_PAGE_SIZE = 50;
@@ -172,7 +189,7 @@ type RemoteEntry = z.infer<typeof remoteEntrySchema>;
  */
 const MAX_REMEMBERED = 600;
 
-type RememberedUrls = { download: string | null; preview: string | null };
+type RememberedUrls = { download: string | null; poster: string | null; strip: string | null };
 
 export function createRemoteCatalogue(
   baseUrl: string | undefined = process.env.TAILS_PET_CATALOGUE_URL,
@@ -235,8 +252,11 @@ export function createRemoteCatalogue(
     tags: raw.tags ?? [],
     // Pointed at our own proxy rather than at the host, so the renderer makes
     // no request to codex-pets.net at all.
-    previewUrl: (raw.previewUrl ?? raw.posterUrl)
-      ? `/api/pets/catalogue/${encodeURIComponent(raw.id)}/preview`
+    posterUrl: raw.posterUrl
+      ? `/api/pets/catalogue/${encodeURIComponent(raw.id)}/poster`
+      : null,
+    stripUrl: raw.previewUrl
+      ? `/api/pets/catalogue/${encodeURIComponent(raw.id)}/strip`
       : null,
     validation: raw.validationReport
       ? {
@@ -259,7 +279,8 @@ export function createRemoteCatalogue(
         // A download URL is always constructible from the id, and the listing's
         // `?v=` is optional, so a missing field is not a reason to refuse.
         download: resolveOnCatalogue(raw.downloadUrl ?? `/api/pets/${encodeURIComponent(raw.id)}/download`),
-        preview: resolveOnCatalogue(raw.previewUrl ?? raw.posterUrl),
+        poster: resolveOnCatalogue(raw.posterUrl),
+        strip: resolveOnCatalogue(raw.previewUrl),
       },
       entry,
     );
@@ -417,27 +438,27 @@ export function createRemoteCatalogue(
       };
     },
 
-    async fetchPreview(id: string): Promise<{ bytes: Buffer; contentType: string }> {
+    async fetchImage(id: string, kind: CatalogueImageKind): Promise<{ bytes: Buffer; contentType: string }> {
       if (!configured) throw new Error('No catalogue is configured.');
 
       if (!remembered.has(id)) await fetchEntry(id);
-      const previewUrl = remembered.get(id)?.preview;
-      if (!previewUrl) throw new Error(`No preview image for "${id}".`);
+      const imageUrl = remembered.get(id)?.[kind];
+      if (!imageUrl) throw new Error(`No ${kind} image for "${id}".`);
 
-      const response = await fetch(previewUrl, {
+      const response = await fetch(imageUrl, {
         signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
         redirect: 'error',
       });
 
-      if (!response.ok) throw new Error(`The preview for "${id}" answered ${response.status}.`);
+      if (!response.ok) throw new Error(`The ${kind} for "${id}" answered ${response.status}.`);
 
       const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
       if (!contentType.startsWith('image/')) {
-        throw new Error(`The preview for "${id}" is not an image.`);
+        throw new Error(`The ${kind} for "${id}" is not an image.`);
       }
 
       return {
-        bytes: await readCapped(response, MAX_PREVIEW_BYTES, 'preview'),
+        bytes: await readCapped(response, MAX_PREVIEW_BYTES, kind),
         contentType,
       };
     },

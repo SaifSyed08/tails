@@ -47,6 +47,13 @@ export function createAppearanceRouter(): express.Router {
     return { ok: true };
   }));
 
+  // Everything back to the built-in look. The same call the `theme_reset` tool
+  // makes, so the button and the tool cannot drift apart.
+  router.post('/reset', respond((req) => {
+    themeService.resetAppearance(readString(req.body?.sessionId) ?? '');
+    return { ok: true };
+  }));
+
   // "Keep this one." Separate from /apply because applying binds a look and
   // this promotes it — a user can want either without the other.
   router.post('/keep', respond((req) => themeService.keepCurrent(

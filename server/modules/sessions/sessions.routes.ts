@@ -1,6 +1,7 @@
 import express from 'express';
 
 import { listSlashCommands } from '@/modules/chat/commands.service.js';
+import { readSessionModel } from '@/modules/chat/model.service.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { readString } from '@/shared/utils.js';
 
@@ -65,6 +66,19 @@ export function createSessionsRouter(): express.Router {
     const cwd = readString(req.body?.cwd);
     if (cwd) return sessionsService.setWorkingDirectory(sessionId, cwd);
     return sessionsService.renameSession(sessionId, readString(req.body?.title) ?? 'Untitled');
+  }));
+
+  /**
+   * The model this conversation runs on.
+   *
+   * Same shape of answer as `/commands`: read from the CLI in the session's
+   * own folder, because a project can override the model and only the CLI
+   * knows the resolved answer. Null when it cannot be read — the client shows
+   * nothing rather than a guess.
+   */
+  router.get('/:sessionId/model', respond(async (req) => {
+    const session = sessionsService.findSession(String(req.params.sessionId));
+    return readSessionModel(session?.cwd ?? sessionsService.defaultWorkingDirectory());
   }));
 
   router.get('/:sessionId/commands', respond(async (req) => {

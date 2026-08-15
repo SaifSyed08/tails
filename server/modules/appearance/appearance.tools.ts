@@ -142,11 +142,6 @@ const themeApplyTool = tool(
         themeId,
         args.scope === 'conversation' ? 'session' : 'global',
         args.scope === 'conversation' ? args.sessionId ?? '' : '',
-        // The agent is mid-composition: a `theme_css` layer it wrote a moment
-        // ago is part of the look it is now applying, not a leftover from a
-        // previous one. The user switching theme in Settings means the opposite,
-        // which is why that path (the /apply route) does not pass this.
-        { keepFreeformLayer: true },
       );
 
       return textResult({
@@ -229,6 +224,27 @@ const themeCssTool = tool(
   },
 );
 
+const themeResetTool = tool(
+  'theme_reset',
+  [
+    'Put the interface back to the built-in look. Everything: the bound theme in this conversation and globally, any hand-written CSS layer, any published controls and the values the user dragged them to, and any comparison on screen.',
+    'Reach for this the moment the user says a change went wrong, or asks to go back, or when you are about to try a genuinely different direction and do not want the previous attempt underneath it. It is cheap and complete, and it is a much better answer than trying to compose a theme that undoes whatever the last one did.',
+    'It is also the honest response to "I do not like any of these". Leaving someone on the third of three looks they disliked because reverting was awkward is worse than a plain white app.',
+  ].join(' '),
+  {
+    sessionId: z.string().optional()
+      .describe('The conversation to reset. The global binding is cleared either way, because a reset that leaves the app still themed on the next restart is not a reset.'),
+  },
+  async (args) => {
+    try {
+      themeService.resetAppearance(args.sessionId ?? '');
+      return textResult({ ok: true, reset: true });
+    } catch (error) {
+      return failureResult(error);
+    }
+  },
+);
+
 const themeControlsTool = tool(
   'theme_controls',
   [
@@ -268,6 +284,7 @@ export const appearanceMcpServer = createSdkMcpServer({
     themeApplyTool,
     themeCssTool,
     themeControlsTool,
+    themeResetTool,
   ],
 });
 
@@ -306,4 +323,5 @@ export const APPEARANCE_ALLOWED_TOOLS = [
   'mcp__tails-appearance__theme_apply',
   'mcp__tails-appearance__theme_css',
   'mcp__tails-appearance__theme_controls',
+  'mcp__tails-appearance__theme_reset',
 ];

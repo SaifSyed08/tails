@@ -1,9 +1,10 @@
 import {
-  Archive, ArchiveRestore, ArrowDownUp, ChevronDown, PanelLeftClose, Pencil, Pin, PinOff,
+  Archive, ArchiveRestore, ArrowDownUp, ChevronDown, PanelLeftClose, PawPrint, Pencil, Pin, PinOff,
   Plus, Search, Settings, Store, Trash2, X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { petsApi, type InstalledPet, type PetDragPayload } from '@/components/marketplace';
 import { FloatingCard } from '@/components/sidebar/FloatingCard';
 import { SessionRow } from '@/components/sidebar/SessionRow';
 import { useWebSocket } from '@/contexts/WebSocketContext';
@@ -53,6 +54,12 @@ function readFolderName(cwd: string): string {
 }
 
 type MenuState = { session: SessionListItem; x: number; y: number } | null;
+
+/** Progress, or a failure, for a pet being dropped onto one row. */
+type DropStatus = { id: string; state: 'installing' | 'failed'; message: string } | null;
+
+/** How long a failed drop stays on the row before the row goes back to normal. */
+const DROP_ERROR_MS = 6000;
 type HoverState = { session: SessionListItem; x: number; y: number } | null;
 
 export function Sidebar({
@@ -73,6 +80,19 @@ export function Sidebar({
   const [showArchived, setShowArchived] = useState(false);
   const [orderMenuOpen, setOrderMenuOpen] = useState(false);
   const [menu, setMenu] = useState<MenuState>(null);
+
+  /**
+   * The pets referenced by these conversations, by id.
+   *
+   * Fetched once rather than per row: a sidebar of thirty chats sharing three
+   * pets should ask about pets once. A chat whose pet has since been deleted
+   * simply finds nothing here and shows no icon, which is the correct reading
+   * of a dangling assignment.
+   */
+  const [pets, setPets] = useState<Map<string, InstalledPet>>(new Map());
+  /** `sessionId -> petId`, from the pets module. The sessions list payload does not carry it. */
+  const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [dropStatus, setDropStatus] = useState<DropStatus>(null);
   const [hover, setHover] = useState<HoverState>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -132,6 +152,28 @@ export function Sidebar({
   }, [subscribe, requestReload]);
 
   useEffect(() => () => window.clearTimeout(hoverTimerRef.current), []);
+
+  const loadPets = useCallback(() => Promise.all([petsApi.listPets(), petsApi.listAssignments()])
+    .then(([library, next]) => {
+      setPets(new Map([...library.pets, ...library.hidden].map((pet) => [pet.definition.id, pet])));
+      setAssignments(next);
+    })
+    .catch(() => {
+      // No pets is a perfectly good answer for a sidebar; the rows just show
+      // no icons.
+    }), []);
+
+  useEffect(() => {
+    void loadPets();
+  }, [loadPets]);
+
+  // A failed drop explains itself and then gets out of the way, rather than
+  // leaving a red row the user has to work out how to dismiss.
+  useEffect(() => {
+    if (dropStatus?.state !== 'failed') return undefined;
+    const timer = window.setTimeout(() => setDropStatus(null), DROP_ERROR_MS);
+    return () => window.clearTimeout(timer);
+  }, [dropStatus]);
 
   const closeMenu = useCallback(() => setMenu(null), []);
   const closeOrderMenu = useCallback(() => setOrderMenuOpen(false), []);
@@ -210,6 +252,53 @@ export function Sidebar({
       requestReload();
     }
   }, [ensureOwned, onRenamed, patchLocal, requestReload]);
+
+  /**
+   * Assigns a dragged pet to a conversation, installing it first if it is only
+   * a catalogue listing.
+   *
+   * The install is a download, so it is shown on the row and its failure is
+   * shown there too — an assignment that silently pointed a chat at a pet that
+   * never arrived would leave the user with a conversation referencing nothing.
+   * Nothing is assigned unless the pet is actually on disk.
+   */
+  const assignPet = useCallback(async (session: SessionListItem, payload: PetDragPayload) => {
+    setDropStatus({ id: session.id, state: 'installing', message: `Installing ${payload.displayName}…` });
+
+    try {
+      await ensureOwned(session);
+
+      if (payload.kind === 'catalogue' && !pets.has(payload.id)) {
+        await petsApi.installFromCatalogue(payload.id);
+      }
+
+      await api.setSessionPet(session.id, payload.id);
+      setAssignments((current) => ({ ...current, [session.id]: payload.id }));
+      setDropStatus(null);
+      void loadPets();
+    } catch (error) {
+      setDropStatus({
+        id: session.id,
+        state: 'failed',
+        message: error instanceof Error ? error.message : `${payload.displayName} could not be added.`,
+      });
+    }
+  }, [ensureOwned, loadPets, pets]);
+
+  const unassignPet = useCallback(async (session: SessionListItem) => {
+    setAssignments((current) => {
+      const next = { ...current };
+      delete next[session.id];
+      return next;
+    });
+
+    try {
+      await ensureOwned(session);
+      await api.setSessionPet(session.id, null);
+    } catch {
+      void loadPets();
+    }
+  }, [ensureOwned, loadPets]);
 
   const togglePinned = useCallback(async (session: SessionListItem) => {
     patchLocal(session.id, { pinned: !session.pinned });
@@ -498,6 +587,9 @@ export function Sidebar({
               onHover={(anchor) => scheduleHover(session, anchor)}
               onCommitRename={(title) => void commitRename(session, title)}
               onCancelRename={() => setRenamingId(null)}
+              pet={pets.get(assignments[session.id] ?? '') ?? null}
+              dropStatus={dropStatus?.id === session.id ? dropStatus : null}
+              onAssignPet={(payload) => void assignPet(session, payload)}
             />
           ))}
         </div>
@@ -548,6 +640,20 @@ export function Sidebar({
               ? <><PinOff className="size-3.5" /> Unpin</>
               : <><Pin className="size-3.5" /> Pin</>}
           </button>
+          {/* Only when there is one to remove: a menu entry that does nothing
+              is worse than a menu without it. */}
+          {assignments[menu.session.id] ? (
+            <button
+              type="button"
+              onClick={() => {
+                void unassignPet(menu.session);
+                closeMenu();
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors duration-quick hover:bg-accent"
+            >
+              <PawPrint className="size-3.5" /> Unassign pet
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => {

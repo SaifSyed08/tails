@@ -13,13 +13,15 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 import { Reveal } from '@/shared/ui/Motion';
 import { readStaggerDelay } from '@/theme/motion';
 
+import { CataloguePreview } from './CataloguePreview';
 import type { CatalogueEntry, CataloguePage } from './marketplace-api';
+import { endPetDrag, startPetDrag } from './pet-drag';
 import { Pill } from './Pill';
 
 /**
@@ -95,9 +97,9 @@ function SkeletonRow() {
 /**
  * One remote pet.
  *
- * The thumbnail is the catalogue's own preview image rather than a live sprite:
- * animating 50 remote spritesheets would mean downloading 85MB to render a
- * page. The animation starts once the pet is installed.
+ * Shows the poster — one cell — and plays the catalogue's filmstrip while the
+ * pointer is over the card. The full spritesheet is 1.7MB and is not fetched
+ * until the pet is installed; fifty of those to render a page would be 85MB.
  */
 function CatalogueCard({
   entry,
@@ -110,17 +112,40 @@ function CatalogueCard({
   installing: boolean;
   onInstall: (entry: CatalogueEntry) => void;
 }) {
+  const [hovered, setHovered] = useState(false);
+
   return (
-    <div data-tails-part="card" className="flex h-full flex-col overflow-hidden">
+    <div
+      data-tails-part="card"
+      draggable
+      onDragStart={(event) => startPetDrag(event, {
+        kind: installed ? 'installed' : 'catalogue',
+        id: entry.id,
+        displayName: entry.displayName,
+      })}
+      onDragEnd={endPetDrag}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      title={`Drag ${entry.displayName} onto a chat to install and assign it`}
+      className={cn(
+        'flex h-full cursor-grab flex-col overflow-hidden active:cursor-grabbing',
+        'transition-transform duration-quick ease-standard',
+        'hover:-translate-y-1 hover:outline hover:outline-2 hover:-outline-offset-2 hover:outline-primary/40',
+      )}
+    >
       <div className="relative flex h-28 items-center justify-center bg-gradient-to-b from-muted/70 to-transparent">
-        {entry.previewUrl ? (
-          <img
-            src={entry.previewUrl}
-            alt=""
-            loading="lazy"
-            className="h-full w-full object-contain"
-            style={{ imageRendering: 'pixelated' }}
-          />
+        {/* The same stage lighting the installed cards use, so the two shelves
+            respond to the pointer identically. */}
+        <div
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-0 transition-opacity duration-settle ease-standard',
+            'bg-[radial-gradient(60%_55%_at_50%_60%,hsl(var(--primary)/0.28),transparent_70%)]',
+            hovered ? 'opacity-100' : 'opacity-0',
+          )}
+        />
+        {entry.posterUrl || entry.stripUrl ? (
+          <CataloguePreview entry={entry} size={96} hovered={hovered} />
         ) : (
           <PawPrint className="size-6 text-muted-foreground/40" aria-hidden="true" />
         )}

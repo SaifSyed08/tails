@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS active_pet (
  */
 const ADDED_COLUMNS: { name: string; definition: string }[] = [
   { name: 'hidden_at', definition: 'DATETIME' },
+  { name: 'assigned_theme', definition: 'TEXT' },
+  { name: 'thinking_phrases_json', definition: 'TEXT' },
 ];
 
 /** Applies the pets schema to a connection. Idempotent. */
@@ -124,6 +126,18 @@ export type InstalledPetRecord = {
    * leave a pet out of.
    */
   hiddenAt: string | null;
+  /**
+   * A theme id the pet brings with it, or null.
+   *
+   * Stored here rather than in `pet.json` for the same reason the frame
+   * overrides are: most pets live in `~/.codex/pets`, which belongs to another
+   * tool. Held as an opaque string — the appearance module owns what theme ids
+   * mean, and one that no longer exists resolves to "no theme" rather than to
+   * an error.
+   */
+  assignedTheme: string | null;
+  /** Things the pet says while it is thinking. Plain text, always. */
+  thinkingPhrases: string[] | null;
 };
 
 type InstalledPetRow = {
@@ -135,6 +149,8 @@ type InstalledPetRow = {
   installed_at: string;
   updated_at: string;
   hidden_at: string | null;
+  assigned_theme: string | null;
+  thinking_phrases_json: string | null;
 };
 
 /**
@@ -161,9 +177,12 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   installedAt: row.installed_at,
   updatedAt: row.updated_at,
   hiddenAt: row.hidden_at,
+  assignedTheme: row.assigned_theme,
+  thinkingPhrases: parseJson<string[]>(row.thinking_phrases_json),
 });
 
-const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, hidden_at';
+const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, '
+  + 'hidden_at, assigned_theme, thinking_phrases_json';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -214,6 +233,32 @@ export const petsRepository = {
     `).run(
       input.frame ? JSON.stringify(input.frame) : null,
       input.states ? JSON.stringify(input.states) : null,
+      id,
+    );
+  },
+
+  /**
+   * Stores the pet's own preferences: the look it brings, and what it says.
+   *
+   * `undefined` leaves a field alone; `null` clears it. Without that
+   * distinction "save the phrases" would have to also re-send the theme, and a
+   * form that forgets one field would silently wipe the other.
+   */
+  savePreferences(
+    id: string,
+    input: { assignedTheme?: string | null; thinkingPhrases?: string[] | null },
+  ): void {
+    db().prepare(`
+      UPDATE installed_pets
+      SET assigned_theme = CASE WHEN ? THEN ? ELSE assigned_theme END,
+          thinking_phrases_json = CASE WHEN ? THEN ? ELSE thinking_phrases_json END,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      input.assignedTheme === undefined ? 0 : 1,
+      input.assignedTheme ?? null,
+      input.thinkingPhrases === undefined ? 0 : 1,
+      input.thinkingPhrases ? JSON.stringify(input.thinkingPhrases) : null,
       id,
     );
   },

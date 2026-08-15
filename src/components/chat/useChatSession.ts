@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { endsSuggestion } from '@/components/chat/suggestion';
 import { mergeTranscript, unaccountedFor } from '@/components/chat/transcript';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { api } from '@/lib/api';
@@ -231,6 +232,9 @@ export function useChatSession(sessionId: string | null) {
       if (message.sessionId !== sessionId) return;
       if (typeof message.seq === 'number') lastSeqRef.current = message.seq;
 
+      // Whatever the last turn predicted, this turn has overtaken it.
+      if (endsSuggestion(message.kind)) setSuggestion(null);
+
       switch (message.kind) {
         case 'stream_delta': {
           streamBufferRef.current += message.content ?? '';
@@ -387,6 +391,8 @@ export function useChatSession(sessionId: string | null) {
   }, [sessionId, send]);
 
   const answerPermission = useCallback((requestId: string, allow: boolean, remember = false) => {
+    // Answering is the next turn starting; the previous turn's guess is spent.
+    setSuggestion(null);
     setState((current) => ({
       ...current,
       pendingPermissions: current.pendingPermissions.filter(
@@ -408,6 +414,7 @@ export function useChatSession(sessionId: string | null) {
     answers: Record<string, string>,
     response?: string,
   ) => {
+    setSuggestion(null);
     setState((current) => ({
       ...current,
       pendingPrompts: current.pendingPrompts.filter((prompt) => prompt.requestId !== requestId),
@@ -420,6 +427,7 @@ export function useChatSession(sessionId: string | null) {
     approve: boolean,
     options: { autoAcceptEdits?: boolean; message?: string } = {},
   ) => {
+    setSuggestion(null);
     setState((current) => ({
       ...current,
       pendingPrompts: current.pendingPrompts.filter((prompt) => prompt.requestId !== requestId),

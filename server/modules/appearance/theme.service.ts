@@ -186,22 +186,14 @@ export const themeService = {
    * the settings UI, the agent tool, and a preset click all travel the same
    * path and cannot drift apart.
    */
-  applyTheme(
-    themeId: string,
-    scope: ThemeScope,
-    scopeKey = '',
-    options: { keepFreeformLayer?: boolean } = {},
-  ): ResolvedAppearance {
+  applyTheme(themeId: string, scope: ThemeScope, scopeKey = ''): ResolvedAppearance {
     // Resolve before binding so a bad id fails loudly instead of leaving a
     // dangling binding that silently falls through to the default.
     const resolved = this.resolveThemeId(themeId, scope);
     themesRepository.setBinding(scope, scopeKey, themeId);
     lastShown.set(scopeKey, { spec: null, themeId });
 
-    // The freeform layer was written against a particular look, so switching
-    // look retires it — unless the caller is the agent, which is mid-composition
-    // and knows what it layered. See the note on `clearFreeformCss`.
-    if (!options.keepFreeformLayer) this.clearFreeformCss(scopeKey);
+    this.dropEphemeralLayers(scopeKey);
 
     appBroadcast.publish(createMessage('appearance_changed', scopeKey, {
       // Spread first so the explicit binding scope wins over the resolved one.
@@ -275,20 +267,63 @@ export const themeService = {
    * An empty `css` is the signal to drop the override entirely and let the
    * built-in stylesheet show through — the floor needs no rules of its own.
    */
+  /**
+   * Retires every layer that is not the theme.
+   *
+   * The single teardown, called by everything that changes which look is on
+   * screen. It exists because the alternative — each caller remembering which
+   * layers its change invalidates — is what produced three separate user-facing
+   * bugs: a cursor glow that outlived its theme, a background texture that
+   * survived a change of preset, and a pinned colour mode that survived the
+   * adaptive theme after it. One caller forgetting one layer is invisible until
+   * someone reports it months later.
+   *
+   * The renderer does not depend on these broadcasts to be correct — its
+   * reducer resets on a theme event regardless (see `layer-state.ts`). They are
+   * sent so the *server's* published state matches what the renderer will
+   * compute, and so any other listener sees the same thing.
+   */
+  dropEphemeralLayers(scopeKey = ''): void {
+    this.clearFreeformCss(scopeKey);
+    this.clearControls(scopeKey);
+    this.clearProposal(scopeKey);
+  },
+
+  /**
+   * Puts everything back to the built-in look.
+   *
+   * Both scopes, every layer, one call — because "reset" that leaves the global
+   * binding in place while clearing the session one is the kind of half-reset
+   * that teaches people the button does not work. The theme event carries an
+   * empty stylesheet, so it reduces through exactly the same path as any other
+   * theme rather than being a second implementation of "clear everything".
+   */
+  resetAppearance(sessionId = ''): void {
+    themesRepository.clearBinding('global', '');
+    if (sessionId) themesRepository.clearBinding('session', sessionId);
+    lastShown.delete(sessionId);
+    lastShown.delete('');
+
+    this.dropEphemeralLayers(sessionId);
+
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'theme',
+        scope: 'builtin',
+        scopeKey: sessionId,
+        themeId: 'builtin',
+        name: 'Default',
+        css: '',
+        pinnedMode: null,
+      },
+    }));
+  },
+
   unbind(scope: ThemeScope, scopeKey = ''): void {
     themesRepository.clearBinding(scope, scopeKey);
     const fallback = this.resolveAppearance();
 
-    // Every layer, not just the bound theme. This was a real leak and it is
-    // worth naming: a `theme_css` layer is adopted as its own stylesheet and
-    // nothing here ever dropped it, so an effect written into it — a glow that
-    // follows the cursor was the case that surfaced it — outlived the theme it
-    // was written for, survived switching to a different theme, and survived
-    // "reset appearance" as well. The only things that cleared it were a
-    // reload and the panic key. To the user that is indistinguishable from a
-    // permanent app feature nobody can find the switch for.
-    this.clearFreeformCss(scopeKey);
-    this.clearControls(scopeKey);
+    this.dropEphemeralLayers(scopeKey);
 
     appBroadcast.publish(createMessage('appearance_changed', scopeKey, {
       appearance: {

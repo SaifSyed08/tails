@@ -240,6 +240,49 @@ test('the pet library', async (t) => {
       assert.deepEqual(petsService.resolveDisplayPet(null), { pet: null, source: 'none' });
     });
 
+    /**
+     * A pet's own look and voice.
+     *
+     * Stored in our database rather than in `pet.json`, because most pets live
+     * in a directory another tool owns — so these have to survive for a pet we
+     * are not allowed to write to, and they have to survive a rescan.
+     */
+    await t.test('remembers a pet theme and its thinking phrases', () => {
+      petsService.updatePet('testpet', {
+        assignedTheme: 'midnight-terminal',
+        thinkingPhrases: ['collecting rings…', 'pondering at the speed of sound…'],
+      });
+
+      const saved = petsService.listPets().pets
+        .find((pet) => pet.definition.id === 'testpet');
+      assert.equal(saved?.assignedTheme, 'midnight-terminal');
+      assert.deepEqual(saved?.thinkingPhrases, [
+        'collecting rings…',
+        'pondering at the speed of sound…',
+      ]);
+
+      // Editing one field must not wipe the other — the common way a
+      // two-field form eats data.
+      petsService.updatePet('testpet', { thinkingPhrases: ['gotta go fast…'] });
+      assert.equal(petsService.getPet('testpet').assignedTheme, 'midnight-terminal');
+
+      // Null clears; a rescan does not.
+      petsService.updatePet('testpet', { assignedTheme: null });
+      assert.equal(petsService.getPet('testpet').assignedTheme, null);
+      assert.deepEqual(petsService.getPet('testpet').thinkingPhrases, ['gotta go fast…']);
+
+      // Capped, and refused rather than truncated.
+      assert.throws(
+        () => petsService.updatePet('testpet', { thinkingPhrases: Array(20).fill('x') }),
+        /not usable/,
+      );
+      assert.throws(
+        () => petsService.updatePet('testpet', { thinkingPhrases: ['x'.repeat(200)] }),
+        /not usable/,
+      );
+      assert.deepEqual(petsService.getPet('testpet').thinkingPhrases, ['gotta go fast…']);
+    });
+
     await t.test('names one representative frame, always inside the sheet', () => {
       const pet = petsService.getPet('sonic');
       const lastFrame = pet.definition.frame.columns * pet.definition.frame.rows - 1;

@@ -140,6 +140,13 @@ export type SessionListItem = {
   external: boolean;
   pinned: boolean;
   archived: boolean;
+  /**
+   * The companion assigned to this conversation, if it has one of its own.
+   *
+   * Always null for external conversations: the assignment lives in this app's
+   * table, and a chat Claude Code owns has no row here to carry it.
+   */
+  petId: string | null;
 };
 
 // ---------------------------

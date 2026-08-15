@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CopyPlus, EyeOff, Sliders, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CopyPlus, EyeOff, Sliders, Sparkles, Trash2, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -19,6 +19,7 @@ import {
   isGridUncertain,
   SOURCE_LABEL,
 } from './pet-filters';
+import { PetPersonalityEditor } from './PetPersonalityEditor';
 import { PetStage } from './PetStage';
 import { Pill } from './Pill';
 
@@ -44,6 +45,8 @@ type PetDetailDialogProps = {
   onAddCopy: (pet: InstalledPet) => void;
   onRemove: (pet: InstalledPet) => void;
   onHide: (pet: InstalledPet) => void;
+  /** Re-reads the library after a change this dialog made. */
+  onRefresh: () => void;
   onSaveLayout: (id: string, patch: { frame: FrameGrid; states: PetStates }) => Promise<void>;
 };
 
@@ -67,11 +70,13 @@ export function PetDetailDialog({
   onAddCopy,
   onRemove,
   onHide,
+  onRefresh,
   onSaveLayout,
 }: PetDetailDialogProps) {
   const { definition } = pet;
   const [previewState, setPreviewState] = useState<PetStateName>('idle');
   const [adjusting, setAdjusting] = useState(false);
+  const [editingPersonality, setEditingPersonality] = useState(false);
 
   // Escape closes, because this opens over a page the user was browsing and
   // reaching for the corner every time is what makes a modal feel like a trap.
@@ -199,6 +204,14 @@ export function PetDetailDialog({
                 {definition.personality ? (
                   <Fact label="Personality">{definition.personality}</Fact>
                 ) : null}
+                {pet.assignedTheme ? <Fact label="Theme">{pet.assignedTheme}</Fact> : null}
+                {pet.thinkingPhrases.length > 0 ? (
+                  <Fact label="Says">
+                    {/* Joined as text, deliberately: these are user-authored
+                        strings and are never treated as markup. */}
+                    {pet.thinkingPhrases.join(' · ')}
+                  </Fact>
+                ) : null}
               </dl>
 
               {pet.warnings.map((warning) => (
@@ -218,6 +231,16 @@ export function PetDetailDialog({
                 setAdjusting(false);
               }}
               onCancel={() => setAdjusting(false)}
+            />
+          ) : null}
+
+          {editingPersonality ? (
+            <PetPersonalityEditor
+              pet={pet}
+              onSaved={() => {
+                setEditingPersonality(false);
+                onRefresh();
+              }}
             />
           ) : null}
         </div>
@@ -243,6 +266,15 @@ export function PetDetailDialog({
           >
             <Sliders className="size-3.5" aria-hidden="true" />
             {adjusting ? 'Close editor' : 'Adjust frames'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setEditingPersonality((current) => !current)}
+            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm transition-colors duration-quick hover:bg-accent"
+          >
+            <Sparkles className="size-3.5" aria-hidden="true" />
+            {editingPersonality ? 'Close personality' : 'Personality'}
           </button>
 
           {pet.source === 'codex' ? (

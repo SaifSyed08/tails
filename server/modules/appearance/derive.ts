@@ -24,6 +24,7 @@ import {
 } from '@/modules/appearance/surface-recipe.js';
 import {
   readAmbientPaint,
+  readClickPaint,
   readOverlayPaint,
   readPointerPaint,
   readTexturePaint,
@@ -69,6 +70,18 @@ export type ThemeTokens = {
    * must still serialize.
    */
   interaction?: Record<string, string>;
+  /**
+   * The colour each surface actually presents to the eye, per part.
+   *
+   * Derivation metadata rather than a token: it is never serialized (the
+   * serializer's group list does not include it) and the renderer never sees
+   * it. It exists so tests can assert things about the *result* that no single
+   * token expresses — the one that matters is separation, because a fill of
+   * `light tier 2` tells you nothing about whether the sidebar actually reads
+   * as a different plane from the chat beside it, and "noticeably different"
+   * is exactly the kind of requirement that silently regresses.
+   */
+  effectiveFills?: Record<string, Hsl>;
 };
 
 export type DerivedTheme = {
@@ -176,6 +189,15 @@ type Ramp = {
   target: { text: number; nonText: number };
   /** Solved tiers for the roles a recipe can reference without a tier. */
   roleTiers: { foreground: number; border: number };
+  /**
+   * The semantic colours, solved once.
+   *
+   * On the ramp rather than only in `buildColors` because a recipe can now name
+   * them, and two places walking a hue toward the non-text floor would be two
+   * places to keep in step — the second one drifts, and the drift shows up as a
+   * card whose border is a slightly different red from the text inside it.
+   */
+  statusColors: { positive: Hsl; warning: Hsl; destructive: Hsl };
 };
 
 const round = (value: number): number => Math.round(value * 10) / 10;
@@ -236,6 +258,18 @@ export function resolveColorRef(ref: ColorRef, ramp: Ramp): { color: Hsl; alpha:
         },
         alpha,
       };
+    // Copied rather than returned by reference: the contrast solver walks the
+    // lightness of the colours it is handed, and letting it reach the ramp's
+    // own solved values would quietly restyle every recipe that named one.
+    case 'positive':
+    case 'warning':
+    case 'destructive': {
+      const solved = ramp.statusColors[ref.role];
+      return {
+        color: { ...solved, ...(ref.tier === undefined ? {} : { l: tierOf(ladder.toward, ref.tier) }) },
+        alpha,
+      };
+    }
   }
 }
 
@@ -266,6 +300,8 @@ function buildRamp(spec: ThemeSpecV2, mode: 'light' | 'dark'): Ramp {
     accentLightness: ladder.direction > 0 ? 62 : 45,
     target,
     roleTiers: { foreground: LADDER_TIERS - 1, border: LADDER_TIERS - 1 },
+    // Filled in below, once the page colour is known.
+    statusColors: { positive: background, warning: background, destructive: background },
   };
 
   const surfaceTone = (scale: number) => (lightness: number): Hsl =>
@@ -292,13 +328,38 @@ function buildRamp(spec: ThemeSpecV2, mode: 'light' | 'dark'): Ramp {
     steps += 1;
   }
 
+  // The semantic three, walked away from the page until each clears the
+  // non-text floor. Solved here rather than in `buildColors` because a surface
+  // recipe can name them too, and one solve serving both is the only way the
+  // border of a danger card and the text inside it stay the same red.
+  const statusSaturation = STATUS_SATURATION[accentChroma];
+  const solveStatus = (hue: number): Hsl => {
+    const shifted = wrapHue(hue + spec.palette.statusHueShift);
+    let lightness = ladder.direction > 0 ? 58 : 38;
+    let walked = 0;
+    while (
+      contrastRatio({ h: shifted, s: statusSaturation, l: lightness }, background) < target.nonText
+      && walked < 60
+    ) {
+      const next = lightness - ladder.direction * 2;
+      if (next < 0 || next > 100) break;
+      lightness = next;
+      walked += 1;
+    }
+    return { h: shifted, s: statusSaturation, l: lightness };
+  };
+
+  skeleton.statusColors = {
+    positive: solveStatus(STATUS_HUES.positive),
+    warning: solveStatus(STATUS_HUES.warning),
+    destructive: solveStatus(STATUS_HUES.destructive),
+  };
+
   return skeleton;
 }
 
-function buildColors(spec: ThemeSpecV2, ramp: Ramp): Record<string, Hsl> {
+function buildColors(ramp: Ramp): Record<string, Hsl> {
   const { ladder, surfaceHue, surfaceSaturation, target } = ramp;
-  const { statusHueShift } = spec.palette;
-  const statusSaturation = STATUS_SATURATION[spec.palette.accentChroma];
 
   const surface = (tier: number, scale = 1): Hsl =>
     ({ h: surfaceHue, s: surfaceSaturation * scale, l: tierOf(ladder.toward, tier) });
@@ -334,30 +395,16 @@ function buildColors(spec: ThemeSpecV2, ramp: Ramp): Record<string, Hsl> {
     ? { h: ramp.accentHue, s: 10, l: 100 }
     : { h: ramp.accentHue, s: 10, l: 0 };
 
-  const status = (hue: number): Hsl => {
-    const shifted = wrapHue(hue + statusHueShift);
-    let lightness = ladder.direction > 0 ? 58 : 38;
-    let steps = 0;
-    while (
-      contrastRatio({ h: shifted, s: statusSaturation, l: lightness }, background) < target.nonText
-      && steps < 60
-    ) {
-      const next = lightness - ladder.direction * 2;
-      if (next < 0 || next > 100) break;
-      lightness = next;
-      steps += 1;
-    }
-    return { h: shifted, s: statusSaturation, l: lightness };
-  };
-
   const statusForeground = (color: Hsl): Hsl =>
     (contrastRatio({ h: 0, s: 0, l: 100 }, color) >= contrastRatio({ h: 0, s: 0, l: 0 }, color)
       ? { h: 0, s: 0, l: 100 }
       : { h: 0, s: 0, l: 0 });
 
-  const destructive = status(STATUS_HUES.destructive);
-  const positive = status(STATUS_HUES.positive);
-  const warning = status(STATUS_HUES.warning);
+  // Copies: `solveContrast` walks the lightness of whatever it is given, and
+  // the ramp's own solved values have to survive that untouched.
+  const destructive = { ...ramp.statusColors.destructive };
+  const positive = { ...ramp.statusColors.positive };
+  const warning = { ...ramp.statusColors.warning };
 
   return {
     background,
@@ -536,7 +583,7 @@ function buildSurfaceTokens(
   recipe: ResolvedSurfaceRecipe,
   ramp: Ramp,
   part: SurfacePart,
-): { tokens: Record<string, string>; ratio: number; adjusted: string[] } {
+): { tokens: Record<string, string>; ratio: number; adjusted: string[]; effective: Hsl } {
   const adjusted: string[] = [];
   const effective = flattenFill(recipe, ramp);
 
@@ -721,6 +768,7 @@ function buildSurfaceTokens(
   return {
     ratio: contrastRatio(ink, effective),
     adjusted,
+    effective,
     tokens: {
       't-fill-color': fillColor,
       't-fill-image': painted.length > 0 ? painted.map((entry) => entry.image).join(', ') : 'none',
@@ -841,9 +889,31 @@ function buildInteractionTokens(
   const drawn = pointer.kind !== 'system';
   const trailOn = drawn && pointer.trail.kind !== 'none';
 
+  // Four stops, always, padded by repeating whatever the author gave. The
+  // keyframes live in `index.css` as an app-owned constant and read these
+  // tokens, which is what keeps the caret cycle out of the serializer: a
+  // generated `@keyframes` block would need a per-ramp name to stop the dark
+  // one overwriting the light one, and this needs neither.
+  const cycle = spec.interaction.caretCycle ?? [];
+  const caretStop = (index: number): string => (
+    cycle.length > 0
+      ? resolve(cycle[index % cycle.length], formatColor(colors.primary))
+      : 'inherit'
+  );
+
   return {
     't-caret-color': resolve(spec.interaction.caretColor, formatColor(colors.primary)),
     't-caret-shape': spec.interaction.caretShape,
+    't-caret-animation': cycle.length > 0
+      // `steps(1, end)` rather than a crossfade: a caret sliding through the
+      // colour wheel reads as a rendering fault, while hard changes read as a
+      // deliberate cycle.
+      ? `t-caret-cycle ${spec.interaction.caretCycleSeconds}s steps(1, end) infinite`
+      : 'none',
+    't-caret-cycle-1': caretStop(0),
+    't-caret-cycle-2': caretStop(1),
+    't-caret-cycle-3': caretStop(2),
+    't-caret-cycle-4': caretStop(3),
     't-selection-fill': resolve(spec.interaction.selectionFill, formatColor(colors.primary, 0.28)),
     't-selection-ink': resolve(spec.interaction.selectionInk, 'currentColor'),
     // `replace` reaches the page through the token that already exists rather
@@ -871,6 +941,15 @@ function buildInteractionTokens(
     // fades only (a ribbon). One number instead of two shapes, so the falloff
     // is a single formula in the renderer and a bindable control here.
     't-trail-taper': pointer.trail.kind === 'comet' ? '1' : '0',
+
+    // Click feedback is independent of the drawn cursor: a look can want a
+    // ripple without wanting to replace the pointer, which is why this is not
+    // gated on `drawn`.
+    't-click-image': pointer.click.kind === 'ripple'
+      ? readClickPaint(resolve(pointer.click.color, pointerColor))
+      : 'none',
+    't-click-size': `${pointer.click.size}px`,
+    't-click-duration': `${pointer.click.seconds}s`,
   };
 }
 
@@ -928,7 +1007,7 @@ export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
 
   const buildOne = (mode: 'light' | 'dark') => {
     const ramp = buildRamp(spec, mode);
-    const colors = buildColors(spec, ramp);
+    const colors = buildColors(ramp);
     const solved = solveContrast(colors, spec.surface.contrastTarget);
 
     const adjusted = [...solved.adjusted];
@@ -937,6 +1016,7 @@ export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
     }
 
     const surfaces: Record<string, Record<string, string>> = {};
+    const effectiveFills: Record<string, Hsl> = { page: colors.background };
     let minRatio = solved.minRatio;
 
     const base = mergeRecipe(BASELINE_RECIPE, spec.surfaces.default);
@@ -944,6 +1024,7 @@ export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
       const recipe = part === 'default' ? base : mergeRecipe(base, spec.surfaces[part]);
       const built = buildSurfaceTokens(recipe, ramp, part);
       surfaces[part] = built.tokens;
+      effectiveFills[part] = built.effective;
       adjusted.push(...built.adjusted);
       minRatio = Math.min(minRatio, built.ratio);
     }
@@ -955,6 +1036,7 @@ export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
         surfaces,
         tones: buildToneTokens(ramp, colors),
         interaction: buildInteractionTokens(spec, ramp, colors),
+        effectiveFills,
       } as ThemeTokens,
       adjusted,
       minRatio,

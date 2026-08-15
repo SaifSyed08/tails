@@ -205,13 +205,40 @@
     --t-selection-ink: currentColor;
     --t-cursor: auto;
 
-    /* The app-drawn cursor and its trail, off at the floor. `--t-trail-length`
-       is 1 rather than 0 because it divides the per-segment falloff, and a zero
-       divisor makes the declaration invalid at computed-value time instead of
-       merely invisible. */
-    --t-pointer-image: none;
-    --t-pointer-size: 0px;
-    --t-pointer-opacity: 0;
+    --t-caret-animation: none;
+    --t-caret-cycle-1: inherit;
+    --t-caret-cycle-2: inherit;
+    --t-caret-cycle-3: inherit;
+    --t-caret-cycle-4: inherit;
+    --t-click-image: none;
+    --t-click-size: 0px;
+    --t-click-duration: 0.45s;
+
+    /**
+     * The default look's cursor glow.
+     *
+     * This is the one place the floor stops being purely the absence of a
+     * design, and it was asked for directly, so it is here rather than argued
+     * about. Kept to roughly 7% effective alpha over a 160px circle: at that
+     * strength it reads as the screen being faintly aware of where you are
+     * rather than as an effect, which is the only version of this worth having
+     * behind text you are trying to read.
+     *
+     * A theme with `pointer.kind: "system"` emits `--t-pointer-image: none` and
+     * takes it away, which is correct — a theme replaces the built-in look, it
+     * does not inherit pieces of it.
+     *
+     * It does mean the pointer writer now runs by default. That is affordable
+     * because of the gating in `pointerTokens.ts`: four custom-property writes
+     * on one animation frame, only while the mouse is actually moving.
+     *
+     * `--t-trail-length` is 1 rather than 0 because it divides the per-segment
+     * falloff, and a zero divisor makes the declaration invalid at
+     * computed-value time instead of merely invisible.
+     */
+    --t-pointer-image: radial-gradient(circle closest-side, hsl(var(--primary) / 0.16), transparent 72%);
+    --t-pointer-size: 160px;
+    --t-pointer-opacity: 0.45;
     --t-pointer-blend: normal;
     --t-trail-image: none;
     --t-trail-size: 0px;
@@ -323,6 +350,26 @@
     /* Chromium 139+; a bar everywhere else, which is the correct degradation. */
     caret-shape: var(--t-caret-shape);
     cursor: var(--t-cursor);
+    /* The caret colour cycle, when a theme asks for one. `none` otherwise, so
+       body carries no animation at all in the ordinary case. */
+    animation: var(--t-caret-animation);
+  }
+
+  /**
+   * The caret cycle.
+   *
+   * App-owned keyframes reading theme tokens, rather than keyframes generated
+   * per theme. The generated version needs a per-ramp name — two `@keyframes`
+   * blocks with one name means the dark ramp's colours silently win in light
+   * mode — and this needs neither, because custom properties inside keyframes
+   * are substituted from the animated element and the `.dark` block has already
+   * given them different values.
+   */
+  @keyframes t-caret-cycle {
+    0% { caret-color: var(--t-caret-cycle-1); }
+    25% { caret-color: var(--t-caret-cycle-2); }
+    50% { caret-color: var(--t-caret-cycle-3); }
+    75% { caret-color: var(--t-caret-cycle-4); }
   }
 
   ::selection {
@@ -627,13 +674,51 @@
   }
 
   /**
-   * A trail is motion in the sense the preference means: it moves on its own
-   * after the pointer has passed. The drawn cursor is not — it tracks the
-   * user's own hand and stopping it would be like disabling the real pointer —
-   * so it stays.
+   * Click feedback.
+   *
+   * A ring rather than a filled disc, expanding and fading from where the
+   * pointer went down. The element is spawned per click and removes itself on
+   * `animationend`, so nothing is in the DOM between clicks.
+   *
+   * `translate` carries the click position (written inline) while `transform`
+   * carries the centring and the scale, because the two properties compose in a
+   * fixed order and neither has to know about the other.
+   */
+  .t-click-ripple {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 51;
+    pointer-events: none;
+    width: var(--t-click-size);
+    height: var(--t-click-size);
+    background-image: var(--t-click-image);
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    animation: t-click-ripple var(--t-click-duration) var(--ease-exit) forwards;
+  }
+
+  @keyframes t-click-ripple {
+    from {
+      transform: translate(-50%, -50%) scale(0.3);
+      opacity: 0.85;
+    }
+
+    to {
+      transform: translate(-50%, -50%) scale(1);
+      opacity: 0;
+    }
+  }
+
+  /**
+   * A trail and a click ripple are motion in the sense the preference means:
+   * they move on their own after the user's own movement has stopped. The drawn
+   * cursor is not — it tracks the user's hand, and stopping it would be like
+   * disabling the real pointer — so it stays.
    */
   @media (prefers-reduced-motion: reduce) {
-    .t-trail-segment {
+    .t-trail-segment,
+    .t-click-ripple {
       display: none;
     }
   }
@@ -749,6 +834,45 @@
    */
   .app-drag { -webkit-app-region: drag; }
   .app-no-drag { -webkit-app-region: no-drag; }
+
+  /**
+   * Anything floating above the chrome escapes the drag region.
+   *
+   * `-webkit-app-region` is resolved by the compositor as a set of rectangles,
+   * and those rectangles are **not** governed by z-index the way ordinary hit
+   * testing is. So a dialog rendered over the header does not automatically get
+   * out of the header's drag rect: the part of the dialog overlapping the
+   * header band stops receiving clicks, and the part below it works normally.
+   *
+   * That produced a genuinely baffling bug report — the Settings close button
+   * could only be clicked on its bottom half, because its top half sat inside
+   * the header strip. Nothing about it is visible to typecheck, to lint, or to
+   * reading either file alone.
+   *
+   * This is the third variant of the same trap, and they are worth listing
+   * together because the shape recurs: surface tokens at (0,2,0) beating
+   * Tailwind utilities, `position: relative` beating `.fixed`, and now drag
+   * regions beating anything layered above them. In every case the app chrome
+   * silently wins a fight nobody knew was happening.
+   *
+   * Two things this rule has to get right. The descendant half is doubled to
+   * (0,2,0) so it outranks a `.app-drag` on a child — an overlay that contains
+   * its own draggable strip would otherwise punch a hole straight back through.
+   * And it is scoped to overlays rather than applied globally, because
+   * `no-drag` everywhere means a window with no way to move it.
+   */
+  [data-tails-part='scrim'][data-tails-part],
+  [data-tails-part='scrim'][data-tails-part] *,
+  [data-tails-part='popover'][data-tails-part],
+  [data-tails-part='popover'][data-tails-part] *,
+  [role='dialog'],
+  [role='dialog'] *,
+  [role='menu'],
+  [role='menu'] *,
+  .t-overlay,
+  .t-overlay * {
+    -webkit-app-region: no-drag;
+  }
 }
 
 @layer utilities {

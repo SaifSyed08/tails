@@ -9,6 +9,8 @@ export type SessionListItem = {
   external: boolean;
   pinned: boolean;
   archived: boolean;
+  /** Null for external chats, which have no row here to carry an assignment. */
+  petId: string | null;
 };
 
 export type ChatSession = {
@@ -74,6 +76,12 @@ export const api = {
   listCommands: (sessionId: string) =>
     request<SlashCommand[]>(`/sessions/${encodeURIComponent(sessionId)}/commands`),
 
+  /** Null when the model genuinely cannot be read; callers show nothing then. */
+  getSessionModel: (sessionId: string) =>
+    request<{ id: string; displayName: string } | null>(
+      `/sessions/${encodeURIComponent(sessionId)}/model`,
+    ),
+
   renameSession: (sessionId: string, title: string) =>
     request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'PATCH',
@@ -115,7 +123,20 @@ export const api = {
    * `InstalledPet` — that shape belongs to the pets module and is still moving.
    */
   listPets: () => request<{
-    pets: { definition: { id: string; name: string }; spriteUrl: string; active: boolean }[];
+    pets: {
+      definition: {
+        id: string;
+        name: string;
+        /**
+         * Lines this pet says while the agent is working, mixed into the
+         * thinking indicator's rotation. Optional: the pets module owns
+         * authoring them, and a pet without any changes nothing.
+         */
+        thinkingPhrases?: string[];
+      };
+      spriteUrl: string;
+      active: boolean;
+    }[];
     activePetId: string | null;
   }>('/pets'),
 

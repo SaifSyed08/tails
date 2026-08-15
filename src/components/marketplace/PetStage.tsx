@@ -1,6 +1,8 @@
 import { cn } from '@/lib/utils';
+import { useReducedMotion } from '@/shared/ui/Motion';
 
-import type { FrameRange, InstalledPet } from './marketplace-api';
+import type { FrameRange, InstalledPet, PetStateName } from './marketplace-api';
+import { PetSprite } from './PetSprite';
 import { SpritePreview } from './SpritePreview';
 
 /**
@@ -20,12 +22,22 @@ type PetStageProps = {
   pet: InstalledPet;
   /** Rendered cell height in CSS pixels. The width follows the cell's aspect ratio. */
   height: number;
-  /** Which frames to play. Defaults to the pet's idle loop. */
+  /** Which animation to play. Falls back to `idle` when the pet has no such state. */
+  state?: PetStateName;
+  /** An explicit frame range, for a caller that is not thinking in states. */
   range?: FrameRange;
+  /** Lights the pet from behind — the card's hover response. */
+  glow?: boolean;
+  /** `right` is the sheet as drawn; `left` mirrors it. */
+  facing?: 'right' | 'left';
   className?: string;
 };
 
-export function PetStage({ pet, height, range, className }: PetStageProps) {
+export function PetStage({
+  pet, height, state = 'idle', range, glow = false, facing, className,
+}: PetStageProps) {
+  const reduced = useReducedMotion();
+
   return (
     <div
       className={cn(
@@ -33,14 +45,37 @@ export function PetStage({ pet, height, range, className }: PetStageProps) {
         className,
       )}
     >
-      <div className="absolute inset-x-6 bottom-4 h-px bg-border" aria-hidden="true" />
-      <SpritePreview
-        spriteUrl={pet.spriteUrl}
-        grid={pet.definition.frame}
-        range={range ?? pet.definition.states.idle}
-        height={height}
-        className="relative mb-4"
+      {/* Behind the pet, not on it: a radial wash of the accent colour reads as
+          stage lighting, where an outline or a filter on the sprite itself
+          would just look like a selection. Opacity rather than mounting and
+          unmounting, so it fades instead of appearing. */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute inset-0 bg-[radial-gradient(60%_55%_at_50%_65%,hsl(var(--primary)/0.28),transparent_70%)]',
+          !reduced && 'transition-opacity duration-settle ease-standard',
+          glow ? 'opacity-100' : 'opacity-0',
+        )}
       />
+      <div className="absolute inset-x-6 bottom-4 h-px bg-border" aria-hidden="true" />
+      {range ? (
+        <SpritePreview
+          spriteUrl={pet.spriteUrl}
+          grid={pet.definition.frame}
+          range={range}
+          height={height}
+          facing={facing}
+          className="relative mb-4"
+        />
+      ) : (
+        <PetSprite
+          pet={pet}
+          size={height}
+          state={state}
+          facing={facing}
+          className="relative mb-4"
+        />
+      )}
     </div>
   );
 }

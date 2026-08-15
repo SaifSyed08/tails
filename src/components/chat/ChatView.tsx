@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { CommandToken, readStyledCommand } from '@/components/chat/commandStyle';
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
 import { EmptyState } from '@/components/chat/EmptyState';
 import { PetPicker } from '@/components/chat/PetPicker';
@@ -69,6 +70,37 @@ function SentAttachments({ attachments }: { attachments: MessageAttachment[] }) 
   );
 }
 
+/**
+ * The user's own words, with a styled command kept styled.
+ *
+ * The transcript stores what was typed, so the look has to be re-derived on
+ * render rather than carried along with the message — which is also what makes
+ * it survive a reload and a re-theme.
+ */
+function UserText({ content }: { content: string }) {
+  const command = readStyledCommand(content);
+  if (!command) return <>{content}</>;
+
+  const token = `/${command}`;
+  const rest = content.trimStart().slice(token.length);
+
+  return (
+    <>
+      {/*
+        The chip is a separate element because it has to be: `bg-clip-text`
+        clips every background on the token to the glyphs, so the token cannot
+        carry its own backing. It earns its place here — a saturated gradient
+        on the accent-filled bubble is a contrast gamble that changes with the
+        theme, and this gives the colour a consistent ground to sit on.
+      */}
+      <span className="rounded bg-primary-foreground/90 px-1.5 py-0.5">
+        <CommandToken name={command} />
+      </span>
+      {rest}
+    </>
+  );
+}
+
 function Row({ row }: { row: ChatRow }) {
   switch (row.type) {
     case 'user':
@@ -83,7 +115,7 @@ function Row({ row }: { row: ChatRow }) {
             className="max-w-[80%] whitespace-pre-wrap px-5 py-3 text-primary-foreground"
           >
             {row.attachments?.length ? <SentAttachments attachments={row.attachments} /> : null}
-            {row.content}
+            <UserText content={row.content} />
           </div>
         </div>
       );
@@ -150,7 +182,8 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const pinnedToBottomRef = useRef(true);
   const composerRef = useRef<ComposerHandle>(null);
   const [petPickerOpen, setPetPickerOpen] = useState(false);
-  const [pet, setPet] = useState<{ id: string; name: string } | null>(null);
+  const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);
+  const [model, setModel] = useState<string | null>(null);
 
   // Follow the stream only while the user is already at the bottom; yanking
   // them down while they're reading earlier output is the classic chat-UI sin.
@@ -172,14 +205,22 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     let cancelled = false;
 
     void (async () => {
-      let resolved: { id: string; name: string } | null = null;
+      let resolved: { id: string; name: string; phrases: string[] } | null = null;
       try {
         if (sessionId) {
           const session = await api.getSession(sessionId);
           if (session.petId) {
             const library = await api.listPets();
             const match = library.pets.find((entry) => entry.definition.id === session.petId);
-            if (match) resolved = { id: match.definition.id, name: match.definition.name };
+            if (match) {
+              resolved = {
+                id: match.definition.id,
+                name: match.definition.name,
+                // Optional on the pets module's side, so a pet that has never
+                // been given lines simply contributes none.
+                phrases: match.definition.thinkingPhrases ?? [],
+              };
+            }
           }
         }
       } catch {
@@ -187,6 +228,31 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
         // menu simply shows no assignment.
       }
       if (!cancelled) setPet(resolved);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  /**
+   * Reads the model this conversation runs on.
+   *
+   * Per conversation rather than per app, because the folder a chat runs in
+   * can carry its own model override. Failure is silent by design: the badge
+   * that shows this is absent rather than approximate.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      let name: string | null = null;
+      try {
+        if (sessionId) name = (await api.getSessionModel(sessionId))?.displayName ?? null;
+      } catch {
+        // Nothing to say, so nothing is said.
+      }
+      if (!cancelled) setModel(name);
     })();
 
     return () => {
@@ -209,30 +275,67 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="min-h-0 flex-1 overflow-y-auto px-10 py-6"
-      >
-        <div className="mx-auto flex max-w-2xl flex-col gap-4">
-          {rows.length === 0 && !busy ? (
-            <EmptyState cwd={cwd} onPick={(prompt) => composerRef.current?.fill(prompt)} />
-          ) : null}
+      {/*
+        The stage: everything above the composer, and the frame an overlay
+        measures itself against. It is a positioning context that ends exactly
+        where the composer begins, so an absolutely-positioned layer inside it
+        spans the chat and nothing else — its bottom edge is the floor.
+      */}
+      <div data-tails-chat-stage className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto px-10 py-6"
+        >
+          <div data-tails-chat-column className="mx-auto flex max-w-2xl flex-col gap-4">
+            {rows.length === 0 && !busy ? (
+              <EmptyState
+                cwd={cwd}
+                model={model}
+                onPick={(prompt) => composerRef.current?.fill(prompt)}
+              />
+            ) : null}
 
-          {rows.map((row) => (
-            <Row key={row.id} row={row} />
-          ))}
+            {rows.map((row) => (
+              <Row key={row.id} row={row} />
+            ))}
 
-          {/* Only while nothing is streaming — once tokens are arriving the
-              text itself is the progress indicator. */}
-          {busy && rows[rows.length - 1]?.type !== 'assistant' ? <ThinkingIndicator /> : null}
+            {/* Only while nothing is streaming — once tokens are arriving the
+                text itself is the progress indicator. */}
+            {busy && rows[rows.length - 1]?.type !== 'assistant' ? (
+              <ThinkingIndicator petPhrases={pet?.phrases} />
+            ) : null}
 
-          {error ? (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          ) : null}
+            {error ? (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {error}
+              </div>
+            ) : null}
+          </div>
         </div>
+
+        {/*
+          The overlay layer, and the only one: anything that lives *over* the
+          chat rather than *in* it mounts here. It does not scroll with the
+          transcript, it never takes a click, and it is inert to assistive
+          tech, so whatever occupies it stays decorative.
+
+          A component inside it can measure three things from the DOM, which is
+          everything it needs and nothing it has to be handed as a prop:
+            - `[data-tails-chat-stage]` — the world. Its box is the walkable
+              area; the bottom edge is the floor, since the stage stops where
+              the composer starts.
+            - `[data-tails-chat-column]` — the output column. Its box is the
+              region to keep out of; the gaps to its left and right, in stage
+              coordinates, are the free bands. It scrolls, so it is worth
+              re-reading rather than caching.
+            - this element — the layer's own box, to convert between the two.
+        */}
+        <div
+          data-tails-chat-overlay
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 overflow-hidden"
+        />
       </div>
 
       {/* No rule above the composer: the input already reads as its own surface,

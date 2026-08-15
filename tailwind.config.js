@@ -110,6 +110,26 @@ export default {
           '0%': { backgroundPosition: '200% 0' },
           '100%': { backgroundPosition: '-200% 0' },
         },
+        // One character's hop. Transform-only, so a word of these animates on
+        // the compositor; the wave across the word comes from per-character
+        // `animation-delay` rather than from anything re-rendering.
+        //
+        // A ripple, not a bounce: the travel is small, and the character is at
+        // rest for most of the cycle. That resting majority is also what makes
+        // this safe to stop on hover-out — most of the time there is nothing
+        // to settle from.
+        'letter-jump': {
+          '0%, 30%, 100%': { transform: 'translateY(0)' },
+          '15%': { transform: 'translateY(-0.08em)' },
+        },
+        // The ambient half: colour only, so it composes with the hop instead
+        // of competing for the same property. Opens and closes on the same
+        // token, so the loop has no seam.
+        'hue-cycle': {
+          '0%, 100%': { color: 'hsl(var(--primary))' },
+          '33%': { color: 'hsl(var(--positive))' },
+          '66%': { color: 'hsl(var(--warning))' },
+        },
       },
       animation: {
         'rise-in': 'rise-in var(--duration-settle) var(--ease-enter) both',
@@ -119,6 +139,13 @@ export default {
         'grow-x': 'grow-x var(--duration-reflow) var(--ease-enter) both',
         'attention-pulse': 'attention-pulse 520ms var(--ease-emphasis) 2',
         shimmer: 'shimmer 2s linear infinite',
+        // Long enough that the wave crosses the word and then rests before it
+        // starts again, which is what makes it read as a loop rather than as
+        // continuous jitter.
+        'letter-jump': 'letter-jump 1.9s var(--ease-emphasis) infinite',
+        // Slower than the hop: this one is always running, and ambient colour
+        // that changes quickly stops being ambient.
+        'hue-cycle': 'hue-cycle 6s var(--ease-standard) infinite',
       },
     },
   },

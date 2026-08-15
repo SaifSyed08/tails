@@ -231,6 +231,18 @@ export function readPointerPaint(kind: PointerKind, color: string): string {
   }
 }
 
+/**
+ * The click ripple.
+ *
+ * A ring rather than a filled disc. A disc expanding from the click point
+ * covers whatever was just clicked at exactly the moment the user is looking at
+ * it to see what happened; a ring leaves the middle alone and still reads as
+ * "that registered".
+ */
+export function readClickPaint(color: string): string {
+  return `radial-gradient(circle closest-side, transparent 0%, transparent 52%, ${color} 66%, transparent 78%)`;
+}
+
 /** One trail segment. Always a soft dot: a hard edge repeated eight times reads as beads. */
 export function readTrailPaint(kind: TrailKind, color: string): string {
   return kind === 'none'
