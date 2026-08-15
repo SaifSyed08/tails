@@ -17,6 +17,8 @@ export type MessageKind =
   | 'error'
   | 'permission_request'
   | 'permission_cancelled'
+  | 'question_request'
+  | 'plan_request'
   | 'chat_subscribed'
   | 'session_created'
   | 'appearance_changed'
@@ -37,11 +39,26 @@ export type NormalizedMessage = {
   requestId?: string;
   permissionTitle?: string;
   permissionDescription?: string;
+  questions?: AskUserQuestion[];
+  plan?: string;
   exitCode?: number;
   statusCode?: string;
   appearance?: unknown;
   errorCode?: string;
 };
+
+/** One question from the model's `AskUserQuestion` tool. */
+export type AskUserQuestion = {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: { label: string; description: string; preview?: string }[];
+};
+
+/** A question or plan currently waiting on the user. */
+export type PendingPrompt =
+  | { kind: 'question'; requestId: string; questions: AskUserQuestion[] }
+  | { kind: 'plan'; requestId: string; plan: string };
 
 export type PendingPermission = {
   requestId: string;

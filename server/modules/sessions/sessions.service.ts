@@ -140,7 +140,12 @@ export const sessionsService = {
    * doubles as the app id here, which is safe because it is already unique and
    * means the transcript stays reachable under the same URL.
    */
-  adoptExternalSession(providerSessionId: string, cwd: string, title: string): ChatSession {
+  adoptExternalSession(
+    providerSessionId: string,
+    cwd: string,
+    title: string,
+    lastActivityAt?: string,
+  ): ChatSession {
     const existing = sessionsRepository.findByProviderSessionId(providerSessionId)
       ?? sessionsRepository.getSession(providerSessionId);
     if (existing) return existing;
@@ -150,6 +155,10 @@ export const sessionsService = {
       providerSessionId,
       title: deriveTitle(title),
       cwd,
+      // Carry the transcript's real last-activity time across. Stamping "now"
+      // here is what made merely opening an old chat jump it to the top of the
+      // sidebar — the list orders by last message, not last viewed.
+      lastActivityAt,
     });
   },
 

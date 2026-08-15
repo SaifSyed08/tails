@@ -23,6 +23,8 @@ export type MessageKind =
   // Interaction
   | 'permission_request'
   | 'permission_cancelled'
+  | 'question_request'
+  | 'plan_request'
   // Gateway
   | 'chat_subscribed'
   | 'session_created'
@@ -52,8 +54,12 @@ export type NormalizedMessage = {
   toolId?: string;
   toolResult?: { content?: string; isError?: boolean };
 
-  /** `permission_request` correlation id, echoed back in the response. */
+  /** Correlation id for any prompt awaiting the user, echoed back in the response. */
   requestId?: string;
+  /** `question_request` payload — the questions the model is asking. */
+  questions?: AskUserQuestion[];
+  /** `plan_request` payload — the plan awaiting approval, as markdown. */
+  plan?: string;
   /** Human-readable prompt text supplied by the SDK for a permission ask. */
   permissionTitle?: string;
   permissionDescription?: string;
@@ -121,6 +127,21 @@ export type ClientMessage =
     allow: boolean;
     message?: string;
     remember?: boolean;
+  }
+  | {
+    type: 'chat.question-response';
+    requestId: string;
+    answers: Record<string, string>;
+    response?: string;
+  }
+  | {
+    type: 'chat.plan-response';
+    requestId: string;
+    approve: boolean;
+    /** Feedback when rejecting; the model keeps planning with it in hand. */
+    message?: string;
+    /** Approving with auto-accept leaves plan mode straight into acceptEdits. */
+    autoAcceptEdits?: boolean;
   };
 
 // ---------------------------
@@ -148,4 +169,33 @@ export type PermissionDecision = {
   message?: string;
   /** Adds the tool to the run's allow-list for the remainder of the session. */
   remember?: boolean;
+  /**
+   * Answers to an `AskUserQuestion`, keyed by the question's exact text and
+   * valued by the chosen option's label.
+   *
+   * This shape is not ours to choose — it is what the tool reads back out of
+   * `PermissionResult.updatedInput`. Returning the input unchanged instead
+   * makes the tool report "The user did not answer the questions."
+   */
+  answers?: Record<string, string>;
+  /** Free-text the user typed instead of picking one of the offered options. */
+  response?: string;
+  /** Approving a plan also leaves plan mode; this carries the mode to switch to. */
+  planMode?: 'acceptEdits' | 'default';
+};
+
+// ---------------------------
+//----------------- INTERACTIVE TOOL PAYLOADS ------------
+
+/**
+ * One question from the `AskUserQuestion` tool.
+ *
+ * Mirrors the tool's own input schema: 1-4 questions, each with 2-4 options,
+ * a short `header` used as a chip label, and a `multiSelect` flag.
+ */
+export type AskUserQuestion = {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: { label: string; description: string; preview?: string }[];
 };

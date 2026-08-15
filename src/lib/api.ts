@@ -46,7 +46,7 @@ export const api = {
   getMessages: (sessionId: string) =>
     request<NormalizedMessage[]>(`/sessions/${encodeURIComponent(sessionId)}/messages`),
 
-  adoptSession: (sessionId: string, input: { cwd: string; title: string }) =>
+  adoptSession: (sessionId: string, input: { cwd: string; title: string; lastActivityAt?: string }) =>
     request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}/adopt`, {
       method: 'POST',
       body: JSON.stringify(input),

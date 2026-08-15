@@ -5,7 +5,7 @@ import { sessionsRepository } from '@/db/sessions.repository.js';
 import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appearance/appearance.tools.js';
 import { normalizeSdkMessage } from '@/modules/chat/normalize.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
-import type { NormalizedMessage, PermissionDecision } from '@/shared/types.js';
+import type { AskUserQuestion, NormalizedMessage, PermissionDecision } from '@/shared/types.js';
 import { createCompleteMessage, createMessage, readRecord } from '@/shared/utils.js';
 
 /**
@@ -24,6 +24,44 @@ const PERMISSION_TIMEOUT_MS = Number(process.env.TAILS_PERMISSION_TIMEOUT_MS || 
  * proceeds on an answer the user never gave.
  */
 const INTERACTIVE_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
+/**
+ * Reads the questions out of an `AskUserQuestion` call.
+ *
+ * Defensive because this is the tool's own schema rather than ours: a shape
+ * change should degrade to a plain permission prompt, not throw mid-run.
+ */
+function readQuestions(input: unknown): AskUserQuestion[] {
+  const record = readRecord(input);
+  if (!Array.isArray(record?.questions)) return [];
+
+  return record.questions.flatMap((entry): AskUserQuestion[] => {
+    const question = readRecord(entry);
+    const text = typeof question?.question === 'string' ? question.question : null;
+    if (!text || !Array.isArray(question?.options)) return [];
+
+    const options = question.options.flatMap((rawOption) => {
+      const option = readRecord(rawOption);
+      const label = typeof option?.label === 'string' ? option.label : null;
+      return label
+        ? [{
+          label,
+          description: typeof option?.description === 'string' ? option.description : '',
+          ...(typeof option?.preview === 'string' ? { preview: option.preview } : {}),
+        }]
+        : [];
+    });
+
+    return options.length > 0
+      ? [{
+        question: text,
+        header: typeof question.header === 'string' ? question.header : '',
+        multiSelect: question.multiSelect === true,
+        options,
+      }]
+      : [];
+  });
+}
 
 type ParkedPermission = {
   resolve: (decision: PermissionDecision) => void;
@@ -196,6 +234,20 @@ function createPermissionGate(sessionId: string): CanUseTool {
     const requestId = randomUUID();
     const isInteractive = INTERACTIVE_TOOLS.has(toolName);
 
+    // The two interactive tools carry their own payload and deserve their own
+    // UI. Sending them through the generic Allow/Deny banner is why the user
+    // could approve a question without ever seeing it — the tool supplies no
+    // `title`/`description`, so the banner rendered "Allow AskUserQuestion?"
+    // with the actual question nowhere on screen.
+    const questions = toolName === 'AskUserQuestion' ? readQuestions(toolInput) : [];
+    const planText = toolName === 'ExitPlanMode'
+      ? (typeof readRecord(toolInput)?.plan === 'string' ? String(readRecord(toolInput)?.plan) : null)
+      : null;
+
+    const promptKind = questions.length > 0
+      ? 'question_request'
+      : planText !== null ? 'plan_request' : 'permission_request';
+
     const decision = await new Promise<PermissionDecision>((resolve) => {
       const timer = isInteractive
         ? null
@@ -217,12 +269,14 @@ function createPermissionGate(sessionId: string): CanUseTool {
         receivedAt: new Date().toISOString(),
       });
 
-      runRegistry.record(sessionId, createMessage('permission_request', sessionId, {
+      runRegistry.record(sessionId, createMessage(promptKind, sessionId, {
         requestId,
         toolName,
         toolInput,
         permissionTitle: context.title,
         permissionDescription: context.description,
+        ...(questions.length > 0 ? { questions } : {}),
+        ...(planText !== null ? { plan: planText } : {}),
       }));
 
       // The SDK aborts the request if the run is cancelled underneath us.
@@ -241,8 +295,43 @@ function createPermissionGate(sessionId: string): CanUseTool {
       rememberedTools.set(sessionId, set);
     }
 
-    return decision.allow
-      ? ({ behavior: 'allow', updatedInput: toolInput } satisfies PermissionResult)
-      : ({ behavior: 'deny', message: decision.message ?? 'Denied by the user.' } satisfies PermissionResult);
+    if (!decision.allow) {
+      // A denial on ExitPlanMode is not a refusal, it is "keep planning" — the
+      // message is delivered to the model verbatim as feedback.
+      return {
+        behavior: 'deny',
+        message: decision.message ?? 'Denied by the user.',
+      } satisfies PermissionResult;
+    }
+
+    // The answer to a question travels back inside `updatedInput`, keyed by
+    // the question's exact text. Returning the input unmodified is what makes
+    // the tool report that the user did not answer.
+    if (decision.answers && Object.keys(decision.answers).length > 0) {
+      return {
+        behavior: 'allow',
+        updatedInput: {
+          ...(readRecord(toolInput) ?? {}),
+          answers: decision.answers,
+          ...(decision.response ? { response: decision.response } : {}),
+        },
+      } satisfies PermissionResult;
+    }
+
+    // Approving a plan has to leave plan mode as well, or every edit the plan
+    // describes is immediately blocked by the mode that produced it.
+    if (decision.planMode) {
+      return {
+        behavior: 'allow',
+        updatedInput: toolInput,
+        updatedPermissions: [{
+          type: 'setMode',
+          mode: decision.planMode,
+          destination: 'session',
+        }],
+      } satisfies PermissionResult;
+    }
+
+    return { behavior: 'allow', updatedInput: toolInput } satisfies PermissionResult;
   };
 }

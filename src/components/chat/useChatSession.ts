@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { api } from '@/lib/api';
-import type { ChatRow, NormalizedMessage, PendingPermission } from '@/types/chat';
+import type { ChatRow, NormalizedMessage, PendingPermission, PendingPrompt } from '@/types/chat';
 
 /**
  * How often accumulated stream deltas are flushed to React state.
@@ -91,6 +91,8 @@ type ChatSessionState = {
   rows: ChatRow[];
   busy: boolean;
   pendingPermissions: PendingPermission[];
+  /** Questions and plans awaiting an answer, rendered as their own cards. */
+  pendingPrompts: PendingPrompt[];
   error: string | null;
 };
 
@@ -104,7 +106,7 @@ export function useChatSession(sessionId: string | null) {
   const [realtime, setRealtime] = useState<NormalizedMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [state, setState] = useState<ChatSessionState>({
-    rows: [], busy: false, pendingPermissions: [], error: null,
+    rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], error: null,
   });
 
   // Deltas land here and are flushed on a timer; writing them to state per
@@ -138,7 +140,7 @@ export function useChatSession(sessionId: string | null) {
     setHistory([]);
     setRealtime([]);
     resetStream();
-    setState({ rows: [], busy: false, pendingPermissions: [], error: null });
+    setState({ rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], error: null });
 
     if (sessionId) void loadHistory(sessionId);
   }, [sessionId, loadHistory, resetStream]);
@@ -200,18 +202,45 @@ export function useChatSession(sessionId: string | null) {
           }));
           return;
 
+        case 'question_request':
+          setState((current) => ({
+            ...current,
+            pendingPrompts: [...current.pendingPrompts, {
+              kind: 'question',
+              requestId: message.requestId ?? '',
+              questions: message.questions ?? [],
+            }],
+          }));
+          return;
+
+        case 'plan_request':
+          setState((current) => ({
+            ...current,
+            pendingPrompts: [...current.pendingPrompts, {
+              kind: 'plan',
+              requestId: message.requestId ?? '',
+              plan: message.plan ?? '',
+            }],
+          }));
+          return;
+
         case 'permission_cancelled':
           setState((current) => ({
             ...current,
             pendingPermissions: current.pendingPermissions.filter(
               (permission) => permission.requestId !== message.requestId,
             ),
+            pendingPrompts: current.pendingPrompts.filter(
+              (prompt) => prompt.requestId !== message.requestId,
+            ),
           }));
           return;
 
         case 'complete':
           resetStream();
-          setState((current) => ({ ...current, busy: false, pendingPermissions: [] }));
+          setState((current) => ({
+            ...current, busy: false, pendingPermissions: [], pendingPrompts: [],
+          }));
           // Re-read from the transcript so what's on screen matches what was
           // actually persisted, then drop the optimistic realtime rows.
           void loadHistory(sessionId).then(() => setRealtime([]));
@@ -262,5 +291,36 @@ export function useChatSession(sessionId: string | null) {
     send({ type: 'chat.permission-response', requestId, allow, remember });
   }, [send]);
 
-  return { ...state, sendMessage, abort, answerPermission };
+  /**
+   * Sends the answer to an `AskUserQuestion`.
+   *
+   * The prompt is cleared optimistically: the model has what it needs the
+   * moment the frame leaves, and leaving the card on screen would invite a
+   * second submission the tool would ignore.
+   */
+  const answerQuestion = useCallback((
+    requestId: string,
+    answers: Record<string, string>,
+    response?: string,
+  ) => {
+    setState((current) => ({
+      ...current,
+      pendingPrompts: current.pendingPrompts.filter((prompt) => prompt.requestId !== requestId),
+    }));
+    send({ type: 'chat.question-response', requestId, answers, response });
+  }, [send]);
+
+  const answerPlan = useCallback((
+    requestId: string,
+    approve: boolean,
+    options: { autoAcceptEdits?: boolean; message?: string } = {},
+  ) => {
+    setState((current) => ({
+      ...current,
+      pendingPrompts: current.pendingPrompts.filter((prompt) => prompt.requestId !== requestId),
+    }));
+    send({ type: 'chat.plan-response', requestId, approve, ...options });
+  }, [send]);
+
+  return { ...state, sendMessage, abort, answerPermission, answerQuestion, answerPlan };
 }

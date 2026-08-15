@@ -79,6 +79,9 @@ export default function App() {
         const adopted = await api.adoptSession(session.id, {
           cwd: session.cwd,
           title: session.title,
+          // Preserve when the conversation last actually had a message, so
+          // opening it does not reorder the sidebar.
+          lastActivityAt: session.updatedAt,
         });
         setSessionId(adopted.id);
         setCwd(adopted.cwd);

@@ -39,6 +39,7 @@ export function createSessionsRouter(): express.Router {
     String(req.params.sessionId),
     readString(req.body?.cwd) ?? process.cwd(),
     readString(req.body?.title) ?? 'Imported chat',
+    readString(req.body?.lastActivityAt) ?? undefined,
   )));
 
   router.patch('/:sessionId', respond((req) => sessionsService.renameSession(

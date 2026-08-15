@@ -51,10 +51,34 @@ export const sessionsRepository = {
     return row ? toChatSession(row) : null;
   },
 
-  createSession(session: { id: string; title: string; cwd: string; providerSessionId?: string | null }): ChatSession {
+  /**
+   * Inserts a conversation row.
+   *
+   * `lastActivityAt` exists for adoption: a conversation Claude Code created
+   * last week must keep last week's timestamp, or opening it would sort it to
+   * the top of the sidebar as though it were new. Ordering is by last message,
+   * not last viewed.
+   */
+  createSession(session: {
+    id: string;
+    title: string;
+    cwd: string;
+    providerSessionId?: string | null;
+    lastActivityAt?: string | null;
+  }): ChatSession {
     getConnection()
-      .prepare('INSERT INTO sessions (id, provider_session_id, title, cwd) VALUES (?, ?, ?, ?)')
-      .run(session.id, session.providerSessionId ?? null, session.title, session.cwd);
+      .prepare(`
+        INSERT INTO sessions (id, provider_session_id, title, cwd, created_at, updated_at)
+        VALUES (?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
+      `)
+      .run(
+        session.id,
+        session.providerSessionId ?? null,
+        session.title,
+        session.cwd,
+        session.lastActivityAt ?? null,
+        session.lastActivityAt ?? null,
+      );
     return this.getSession(session.id) as ChatSession;
   },
 

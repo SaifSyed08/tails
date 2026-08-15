@@ -59,6 +59,38 @@ function parseClientMessage(raw: string): ClientMessage | null {
         remember: message.remember === true,
       };
     }
+    case 'chat.question-response': {
+      const requestId = readString(message.requestId);
+      const answers = readRecord(message.answers);
+      if (!requestId || !answers) return null;
+
+      // Values are option labels; anything non-string is dropped rather than
+      // stringified, so the tool never receives a key it cannot match.
+      const cleaned: Record<string, string> = {};
+      for (const [question, answer] of Object.entries(answers)) {
+        if (typeof answer === 'string' && answer.trim()) cleaned[question] = answer;
+      }
+
+      return {
+        type: 'chat.question-response',
+        requestId,
+        answers: cleaned,
+        response: readString(message.response) ?? undefined,
+      };
+    }
+
+    case 'chat.plan-response': {
+      const requestId = readString(message.requestId);
+      if (!requestId) return null;
+      return {
+        type: 'chat.plan-response',
+        requestId,
+        approve: message.approve === true,
+        message: readString(message.message) ?? undefined,
+        autoAcceptEdits: message.autoAcceptEdits === true,
+      };
+    }
+
     default:
       return null;
   }
@@ -135,6 +167,22 @@ export function attachChatGateway(server: Server): WebSocketServer {
             message: message.message,
             remember: message.remember,
           });
+          return;
+
+        case 'chat.question-response':
+          resolvePermission(message.requestId, {
+            allow: true,
+            answers: message.answers,
+            response: message.response,
+          });
+          return;
+
+        case 'chat.plan-response':
+          resolvePermission(message.requestId, message.approve
+            ? { allow: true, planMode: message.autoAcceptEdits ? 'acceptEdits' : 'default' }
+            // Rejecting a plan is feedback, not refusal: the model stays in
+            // plan mode and revises with this message in hand.
+            : { allow: false, message: message.message ?? 'Keep planning — revise the approach.' });
           return;
       }
     });

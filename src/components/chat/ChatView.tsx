@@ -4,6 +4,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
+import { PlanCard } from '@/components/chat/PlanCard';
+import { QuestionCard } from '@/components/chat/QuestionCard';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
 import { cn } from '@/lib/utils';
@@ -79,8 +81,10 @@ type ChatViewProps = {
 };
 
 export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
-  const { rows, busy, pendingPermissions, error, sendMessage, abort, answerPermission } =
-    useChatSession(sessionId);
+  const {
+    rows, busy, pendingPermissions, pendingPrompts, error,
+    sendMessage, abort, answerPermission, answerQuestion, answerPlan,
+  } = useChatSession(sessionId);
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true);
@@ -142,6 +146,24 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
 
       <div className="border-t border-border px-6 py-4">
         <div className="mx-auto max-w-3xl space-y-3">
+          {pendingPrompts.map((prompt) => (
+            prompt.kind === 'question' ? (
+              <QuestionCard
+                key={prompt.requestId}
+                requestId={prompt.requestId}
+                questions={prompt.questions}
+                onAnswer={answerQuestion}
+              />
+            ) : (
+              <PlanCard
+                key={prompt.requestId}
+                requestId={prompt.requestId}
+                plan={prompt.plan}
+                onAnswer={answerPlan}
+              />
+            )
+          ))}
+
           {pendingPermissions.map((permission) => (
             <PermissionBanner
               key={permission.requestId}
