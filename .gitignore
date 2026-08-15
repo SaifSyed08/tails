@@ -1,0 +1,24 @@
+node_modules/
+dist/
+dist-server/
+release/
+*.local
+.env
+.env.*
+!.env.example
+
+# SQLite database created at runtime
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*

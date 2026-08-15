@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>T.A.I.L.S.</title>
+    <script>
+      // Pre-paint theme restore. The bundle loads after first paint, so a theme
+      // applied only from React would flash the built-in ramp on every launch.
+      // This reads the last resolved default and injects it before anything
+      // renders. Kept tiny and dependency-free on purpose.
+      (function () {
+        try {
+          var mode = localStorage.getItem('tails.colorMode');
+          if (mode === 'light') document.documentElement.classList.remove('dark');
+          else document.documentElement.classList.add('dark');
+
+          var css = localStorage.getItem('tails.themeCss');
+          if (css) {
+            var style = document.createElement('style');
+            style.id = 'tails-theme-preboot';
+            style.textContent = css;
+            document.head.appendChild(style);
+          }
+        } catch (error) {
+          // A blocked or full localStorage must never stop the app booting;
+          // the built-in ramp is a correct fallback.
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
