@@ -63,7 +63,23 @@ async function ensureServer() {
   }
 
   const entry = path.join(APP_ROOT, 'dist-server', 'server', 'index.js');
-  serverProcess = spawn(process.execPath, [entry], {
+
+  // Deliberately NOT `process.execPath`: inside Electron that is the Electron
+  // binary, so spawning it re-enters Electron and loads better-sqlite3 and
+  // node-pty against Electron's ABI (NODE_MODULE_VERSION), which fails with a
+  // module-version mismatch. The server is a plain Node service and wants a
+  // plain Node runtime. Packaging will need `@electron/rebuild` (or a bundled
+  // Node) instead of relying on one being installed.
+  const nodeBinary = process.env.TAILS_NODE_PATH || 'node';
+
+  // Windows needs a shell to resolve a bare `node` off PATH, but a shell also
+  // word-splits arguments — and this project's path contains a space. Quote
+  // the entry explicitly rather than letting the shell tear it in half.
+  const useShell = process.platform === 'win32';
+  const entryArgument = useShell ? `"${entry}"` : entry;
+
+  serverProcess = spawn(nodeBinary, [entryArgument], {
+    shell: useShell,
     cwd: APP_ROOT,
     // Spread rather than replace: a bare env would strip PATH and the Claude
     // Code subprocess the server spawns would fail to launch.
