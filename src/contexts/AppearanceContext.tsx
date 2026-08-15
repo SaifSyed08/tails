@@ -54,6 +54,11 @@ export function AppearanceProvider({ sessionId, children }: AppearanceProviderPr
       setPhase('applying');
       await applyTheme(payload);
 
+      // Canvas-based surfaces cannot read CSS custom properties — xterm
+      // measures and paints its own glyphs — so they need telling explicitly
+      // that the tokens moved.
+      window.dispatchEvent(new CustomEvent('tails:appearance-changed'));
+
       setPhase('idle');
       setIncomingName(null);
       applyingRef.current = false;

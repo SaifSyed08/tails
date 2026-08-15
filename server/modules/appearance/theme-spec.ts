@@ -116,7 +116,9 @@ export const themeSpecV2Schema = z.object({
       .describe('Lightness points between the page and the first tier above it, 2-14. Small values give a flat, layered look where separation comes from borders and shadows; large values give strongly stacked planes. This sets the near-page spacing only — the ladder always reaches full contrast at tier 12.'),
     contrastTarget: z.enum(CONTRAST_TARGET_NAMES).default('aa')
       .describe('The contrast floor every text pair is solved to. "aa" is the legal minimum and the right default, "aaa" is the enhanced level, "max" pushes everything apart and suits terminal and high-glare looks. A target the anchor cannot reach moves the anchor rather than failing the theme, and the move is reported back to you.'),
-  }).strict().default({})
+  }).strict().default({
+    lightAnchor: 'paper', darkAnchor: 'near-black', step: 6, contrastTarget: 'aa',
+  })
     .describe('Where the surfaces sit and how hard they separate. This replaced the fixed lightness table: it is the field that decides whether a dark theme is OLED-black or soft charcoal.'),
 
   type: z.object({

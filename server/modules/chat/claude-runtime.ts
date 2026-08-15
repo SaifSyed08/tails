@@ -104,12 +104,69 @@ export function resolvePermission(requestId: string, decision: PermissionDecisio
 export const SELECTABLE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan'] as const;
 export type SelectablePermissionMode = typeof SELECTABLE_PERMISSION_MODES[number];
 
+/** One file the user attached to a message. */
+export type ChatAttachment = {
+  name: string;
+  /** e.g. `image/png`. Non-image types are inlined as text. */
+  mediaType: string;
+  /** Base64 payload, without a data-URL prefix. */
+  data: string;
+};
+
+/** Attachment types the model can actually look at as images. */
+const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
 type RunChatTurnInput = {
   sessionId: string;
   prompt: string;
   cwd: string;
   permissionMode?: SelectablePermissionMode;
+  attachments?: ChatAttachment[];
 };
+
+/**
+ * Builds the prompt the SDK receives.
+ *
+ * A plain string cannot carry anything but text, so any attachment forces the
+ * async-iterable form. One message is yielded and the iterable completes,
+ * which keeps the existing one-run-per-turn lifecycle intact — a long-lived
+ * streaming session would also allow queued input, but that is a larger change
+ * than attachments need.
+ */
+function buildPrompt(text: string, attachments: ChatAttachment[]) {
+  if (attachments.length === 0) return text;
+
+  const blocks: Record<string, unknown>[] = [];
+
+  for (const attachment of attachments) {
+    if (SUPPORTED_IMAGE_TYPES.has(attachment.mediaType)) {
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data },
+      });
+      continue;
+    }
+
+    // Anything else is inlined as labelled text. Silently dropping a file the
+    // user visibly attached is worse than showing the model its contents.
+    const decoded = Buffer.from(attachment.data, 'base64').toString('utf8');
+    blocks.push({
+      type: 'text',
+      text: `Attached file ${attachment.name}:\n\n${decoded.slice(0, 200_000)}`,
+    });
+  }
+
+  blocks.push({ type: 'text', text });
+
+  return (async function* prompt() {
+    yield {
+      type: 'user' as const,
+      message: { role: 'user' as const, content: blocks },
+      parent_tool_use_id: null,
+      session_id: '',
+    };
+  })();
+}
 
 /**
  * Runs one conversational turn against Claude Code.
@@ -120,7 +177,7 @@ type RunChatTurnInput = {
  * the run terminates with a `complete` no matter how it ends.
  */
 export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
-  const { sessionId, prompt, cwd, permissionMode } = input;
+  const { sessionId, prompt, cwd, permissionMode, attachments = [] } = input;
 
   const session = sessionsRepository.getSession(sessionId);
   if (!session) {
@@ -146,7 +203,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   // `/personalize` turn into a paragraph of instructions in your own
   // transcript is disorienting.
   send(createMessage('text', sessionId, { role: 'user', content: prompt }));
-  const modelPrompt = expandLocalCommand(prompt);
+  const modelPrompt = buildPrompt(expandLocalCommand(prompt), attachments);
 
   try {
     const options: Options = {
@@ -190,7 +247,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         : {}),
     };
 
-    const instance = query({ prompt: modelPrompt, options });
+    const instance = query({ prompt: modelPrompt as never, options });
 
     for await (const message of instance) {
       const event = readRecord(message);

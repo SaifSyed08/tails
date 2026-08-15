@@ -5,6 +5,7 @@ import {
   resolvePermission,
   runChatTurn,
   SELECTABLE_PERMISSION_MODES,
+  type ChatAttachment,
 } from '@/modules/chat/claude-runtime.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
@@ -40,6 +41,7 @@ function parseClientMessage(raw: string): ClientMessage | null {
         content,
         cwd: readString(message.cwd) ?? undefined,
         permissionMode: readString(message.permissionMode) ?? undefined,
+        attachments: readAttachments(message.attachments),
       };
     }
     case 'chat.abort': {
@@ -104,6 +106,25 @@ function parseClientMessage(raw: string): ClientMessage | null {
     default:
       return null;
   }
+}
+
+/**
+ * Narrows the untrusted attachment array.
+ *
+ * Anything malformed is dropped rather than failing the send: losing one
+ * attachment is recoverable, losing the message the user typed is not.
+ */
+function readAttachments(value: unknown): ChatAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const record = readRecord(entry);
+    const name = readString(record?.name);
+    const mediaType = readString(record?.mediaType);
+    const data = typeof record?.data === 'string' ? record.data : null;
+    // ~15MB of base64; past that the request body itself becomes the problem.
+    if (!name || !mediaType || !data || data.length > 20_000_000) return [];
+    return [{ name, mediaType, data }];
+  }).slice(0, 8);
 }
 
 /**
@@ -225,6 +246,7 @@ async function handleSend(
       prompt: message.content,
       cwd: session.cwd,
       permissionMode: mode,
+      attachments: message.attachments,
     });
   } catch (error) {
     send(createMessage('error', message.sessionId, {

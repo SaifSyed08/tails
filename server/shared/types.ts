@@ -125,6 +125,8 @@ export type ClientMessage =
     cwd?: string;
     /** 'default' | 'acceptEdits' | 'plan'; validated by the runtime. */
     permissionMode?: string;
+    /** Files and images attached to this message. */
+    attachments?: { name: string; mediaType: string; data: string }[];
   }
   | { type: 'chat.abort'; sessionId: string }
   | { type: 'chat.subscribe'; sessions: { sessionId: string; lastSeq?: number }[] }

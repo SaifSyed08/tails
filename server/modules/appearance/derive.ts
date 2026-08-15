@@ -1,12 +1,47 @@
-import { FONT_FAMILIES, type ThemeSpec } from '@/modules/appearance/theme-spec.js';
+import {
+  buildLadder,
+  clamp,
+  compositeOver,
+  contrastRatio,
+  CONTRAST_TARGETS,
+  inkLadderFor,
+  LADDER_TIERS,
+  solveTier,
+  wrapHue,
+  type ContrastTarget,
+  type Hsl,
+  type Ladder,
+} from '@/modules/appearance/palette.js';
+import {
+  BASELINE_RECIPE,
+  mergeRecipe,
+  SURFACE_PARTS,
+  type ColorRef,
+  type ResolvedFillLayer,
+  type ResolvedShadow,
+  type ResolvedSurfaceRecipe,
+  type SurfacePart,
+} from '@/modules/appearance/surface-recipe.js';
+import { readOverlayPaint, readTexturePaint } from '@/modules/appearance/textures.js';
+import {
+  FONT_FAMILIES,
+  upgradeSpec,
+  type ThemeSpec,
+  type ThemeSpecV2,
+} from '@/modules/appearance/theme-spec.js';
 
 /**
- * A colour in the `H S% L%` grammar the stylesheet uses.
+ * Turns an authored spec into the complete set of tokens the renderer reads.
  *
- * Kept as components rather than a formatted string so the contrast solver can
- * walk lightness without reparsing.
+ * The rule this module is built around, and the one v1 broke: **nothing is
+ * validated and then dropped**. If a field exists in the schema it reaches the
+ * stylesheet, and if it reaches the stylesheet it is named in
+ * RENDERER-CONTRACT.md. A knob the model can turn that changes nothing is worse
+ * than no knob at all — it teaches the model that the spec is decorative.
  */
-export type Hsl = { h: number; s: number; l: number };
+
+export type { Hsl } from '@/modules/appearance/palette.js';
+export { contrastRatio, relativeLuminance } from '@/modules/appearance/palette.js';
 
 export type ThemeTokens = {
   colors: Record<string, Hsl>;
@@ -14,77 +49,51 @@ export type ThemeTokens = {
   fonts: Record<string, string>;
   durations: Record<string, string>;
   easings: Record<string, string>;
+  /** Per-part custom properties, keyed by `data-tails-part` value. */
+  surfaces: Record<string, Record<string, string>>;
+  /** Per-tone custom properties, keyed by `data-tails-surface` value. */
+  tones: Record<string, Record<string, string>>;
 };
 
 export type DerivedTheme = {
   light: ThemeTokens;
   dark: ThemeTokens | null;
-  /** Tokens the solver had to adjust to reach the contrast floor. */
+  /** Tokens and anchors the solver had to move to reach the contrast target. */
   adjusted: string[];
   /** The worst text contrast ratio in the result, for reporting. */
   minRatio: number;
 };
 
-/** A pair that must clear a contrast floor, and the floor it must clear. */
-type ContrastPair = { foreground: string; background: string; minimum: number };
+/** A pair that must clear a contrast floor, and which floor applies to it. */
+type ContrastPair = { foreground: string; background: string; kind: 'text' | 'nonText' };
 
 /**
  * Every pair the solver enforces.
  *
- * Text pairs use the WCAG AA 4.5:1 floor; borders and rings are non-text and
- * use 3:1. This list is the contract — a token pair absent from here is a pair
- * nobody is checking, so adding a colour token means adding its pair.
+ * The floor is looked up from the theme's contrast target rather than hard-coded
+ * here, so raising a theme to AAA raises this whole manifest with it. This list
+ * is the contract — a token pair absent from here is a pair nobody is checking,
+ * so adding a colour token means adding its pair.
  */
 const CONTRAST_PAIRS: ContrastPair[] = [
-  { foreground: 'foreground', background: 'background', minimum: 4.5 },
-  { foreground: 'card-foreground', background: 'card', minimum: 4.5 },
-  { foreground: 'popover-foreground', background: 'popover', minimum: 4.5 },
-  { foreground: 'primary-foreground', background: 'primary', minimum: 4.5 },
-  { foreground: 'secondary-foreground', background: 'secondary', minimum: 4.5 },
-  { foreground: 'accent-foreground', background: 'accent', minimum: 4.5 },
-  { foreground: 'destructive-foreground', background: 'destructive', minimum: 4.5 },
-  { foreground: 'positive-foreground', background: 'positive', minimum: 4.5 },
-  { foreground: 'warning-foreground', background: 'warning', minimum: 4.5 },
-  { foreground: 'muted-foreground', background: 'background', minimum: 4.5 },
-  { foreground: 'muted-foreground', background: 'card', minimum: 4.5 },
-  { foreground: 'border', background: 'background', minimum: 3 },
-  { foreground: 'ring', background: 'background', minimum: 3 },
+  { foreground: 'foreground', background: 'background', kind: 'text' },
+  { foreground: 'card-foreground', background: 'card', kind: 'text' },
+  { foreground: 'popover-foreground', background: 'popover', kind: 'text' },
+  { foreground: 'primary-foreground', background: 'primary', kind: 'text' },
+  { foreground: 'secondary-foreground', background: 'secondary', kind: 'text' },
+  { foreground: 'accent-foreground', background: 'accent', kind: 'text' },
+  { foreground: 'destructive-foreground', background: 'destructive', kind: 'text' },
+  { foreground: 'positive-foreground', background: 'positive', kind: 'text' },
+  { foreground: 'warning-foreground', background: 'warning', kind: 'text' },
+  { foreground: 'muted-foreground', background: 'background', kind: 'text' },
+  { foreground: 'muted-foreground', background: 'card', kind: 'text' },
+  { foreground: 'border', background: 'background', kind: 'nonText' },
+  { foreground: 'ring', background: 'background', kind: 'nonText' },
 ];
 
-/**
- * Fixed lightness per role, per mode.
- *
- * This table is the reason generated themes are legible. The model influences
- * hue and saturation; these numbers are not negotiable.
- */
-const LIGHTNESS = {
-  light: {
-    background: 98, foreground: 10,
-    card: 100, 'card-foreground': 10,
-    popover: 100, 'popover-foreground': 10,
-    primary: 45, 'primary-foreground': 100,
-    secondary: 94, 'secondary-foreground': 15,
-    muted: 94, 'muted-foreground': 38,
-    accent: 93, 'accent-foreground': 15,
-    destructive: 42, 'destructive-foreground': 100,
-    positive: 30, 'positive-foreground': 100,
-    warning: 32, 'warning-foreground': 100,
-    border: 86, input: 86, ring: 45,
-  },
-  dark: {
-    background: 6, foreground: 95,
-    card: 9, 'card-foreground': 95,
-    popover: 9, 'popover-foreground': 95,
-    primary: 62, 'primary-foreground': 8,
-    secondary: 16, 'secondary-foreground': 95,
-    muted: 16, 'muted-foreground': 66,
-    accent: 18, 'accent-foreground': 95,
-    destructive: 58, 'destructive-foreground': 8,
-    positive: 52, 'positive-foreground': 8,
-    warning: 58, 'warning-foreground': 8,
-    border: 22, input: 22, ring: 62,
-  },
-} as const;
+/** The floor a pair must clear under a given contrast target. */
+export const pairMinimum = (pair: ContrastPair, target: ContrastTarget): number =>
+  CONTRAST_TARGETS[target][pair.kind];
 
 /** Saturation for surface roles, by authored chroma bucket. */
 const SURFACE_SATURATION = { neutral: 5, tinted: 14, rich: 26 } as const;
@@ -93,15 +102,15 @@ const ACCENT_SATURATION = { muted: 45, vivid: 74, electric: 92 } as const;
 /** Status saturation tracks the accent one bucket down, so danger stays legible as danger. */
 const STATUS_SATURATION = { muted: 40, vivid: 58, electric: 70 } as const;
 
-/** Hue anchors for semantic colour. Shiftable by at most ±15°. */
+/** Hue anchors for semantic colour. Shiftable by at most +/-15deg. */
 const STATUS_HUES = { positive: 145, warning: 38, destructive: 8 } as const;
 
-const RADIUS = { sharp: '0.125rem', soft: '0.5rem', round: '1rem', pill: '1.75rem' } as const;
-const BORDER_WIDTH = { hairline: '1px', normal: '1.5px', bold: '2.5px' } as const;
 const SPACE_UNIT = { tight: '0.2rem', default: '0.25rem', airy: '0.32rem' } as const;
 const FONT_SIZE = { compact: '14px', default: '15px', spacious: '16.5px' } as const;
 const TRACKING = { tight: '-0.015em', normal: '0em', wide: '0.06em' } as const;
 const DISPLAY_WEIGHT = { regular: '400', medium: '500', bold: '700', black: '900' } as const;
+const LINE_HEIGHT = { tight: '1.35', default: '1.55', loose: '1.75' } as const;
+const MEASURE = { narrow: '58ch', default: '72ch', wide: '88ch', full: 'none' } as const;
 
 /**
  * Motion feel, the single source for both CSS variables and the TS constants
@@ -114,10 +123,8 @@ const MOTION_FEEL = {
   playful: { instant: 100, quick: 180, settle: 280, reflow: 420, emphasis: 'cubic-bezier(0.34, 1.7, 0.64, 1)' },
 } as const;
 
-const wrapHue = (hue: number): number => ((hue % 360) + 360) % 360;
-
 /** Secondary hue, derived from the accent by the authored scheme. */
-function readSecondaryHue(spec: ThemeSpec): number {
+function readSupportHue(spec: ThemeSpecV2): number {
   const { accentHue, scheme } = spec.palette;
   switch (scheme) {
     case 'mono': return accentHue;
@@ -127,92 +134,252 @@ function readSecondaryHue(spec: ThemeSpec): number {
   }
 }
 
-/** WCAG relative luminance for an HSL colour. */
-export function relativeLuminance({ h, s, l }: Hsl): number {
-  const saturation = s / 100;
-  const lightness = l / 100;
-  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
-  const secondary = chroma * (1 - Math.abs(((h / 60) % 2) - 1));
-  const match = lightness - chroma / 2;
+/**
+ * Everything one ramp needs to resolve a colour reference.
+ *
+ * Assembled once per mode and threaded through surface derivation so a
+ * `{ role: 'shadow' }` in a recipe means the same thing everywhere in that
+ * ramp, and something appropriately different in the other one.
+ */
+type Ramp = {
+  ladder: Ladder;
+  surfaceHue: number;
+  surfaceSaturation: number;
+  accentHue: number;
+  supportHue: number;
+  accentSaturation: number;
+  accentLightness: number;
+  target: { text: number; nonText: number };
+  /** Solved tiers for the roles a recipe can reference without a tier. */
+  roleTiers: { foreground: number; border: number };
+};
 
-  const sector = Math.floor(h / 60) % 6;
-  const [r, g, b] = (
-    sector === 0 ? [chroma, secondary, 0]
-      : sector === 1 ? [secondary, chroma, 0]
-        : sector === 2 ? [0, chroma, secondary]
-          : sector === 3 ? [0, secondary, chroma]
-            : sector === 4 ? [secondary, 0, chroma]
-              : [chroma, 0, secondary]
-  ).map((channel) => channel + match);
+const round = (value: number): number => Math.round(value * 10) / 10;
 
-  const linearize = (channel: number) =>
-    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+/** Formats a resolved colour as a complete CSS colour value. */
+export const formatColor = (color: Hsl, alpha = 1): string => {
+  const body = `${round(wrapHue(color.h))} ${round(clamp(color.s, 0, 100))}% ${round(clamp(color.l, 0, 100))}%`;
+  return alpha >= 1 ? `hsl(${body})` : `hsl(${body} / ${Math.round(alpha * 1000) / 1000})`;
+};
 
-  return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b);
+const tierOf = (values: number[], tier: number): number =>
+  values[clamp(Math.round(tier), 0, LADDER_TIERS - 1)];
+
+/**
+ * Turns a role reference into an actual colour.
+ *
+ * The whole point of forcing recipes through roles: a shadow authored as
+ * `{ role: 'shadow' }` is a dark grey on paper and pure black on OLED, and the
+ * theme author never had to think about which ramp they were in. A recipe
+ * holding literal colours would need to be authored twice and would be wrong
+ * the first time the user toggled dark mode.
+ */
+export function resolveColorRef(ref: ColorRef, ramp: Ramp): { color: Hsl; alpha: number } {
+  const { ladder, surfaceHue, surfaceSaturation: saturation } = ramp;
+  const alpha = ref.alpha ?? 1;
+
+  const surfaceTone = (lightness: number, scale: number): Hsl =>
+    ({ h: surfaceHue, s: saturation * scale, l: lightness });
+
+  switch (ref.role) {
+    case 'surface':
+      return { color: surfaceTone(tierOf(ladder.toward, ref.tier ?? 0), 0.7), alpha };
+    case 'foreground':
+      return { color: surfaceTone(tierOf(ladder.toward, ref.tier ?? ramp.roleTiers.foreground), 0.5), alpha };
+    case 'ink':
+      return { color: surfaceTone(tierOf(ladder.toward, ref.tier ?? LADDER_TIERS - 1), 0.35), alpha };
+    case 'border':
+      return { color: surfaceTone(tierOf(ladder.toward, ref.tier ?? ramp.roleTiers.border), 1), alpha };
+    case 'light':
+      return { color: surfaceTone(tierOf(ladder.lighter, ref.tier ?? 4), 0.4), alpha };
+    case 'shadow':
+      return { color: surfaceTone(tierOf(ladder.darker, ref.tier ?? 6), 0.6), alpha };
+    case 'accent':
+      return {
+        color: {
+          h: ramp.accentHue,
+          s: ramp.accentSaturation,
+          l: ref.tier === undefined ? ramp.accentLightness : tierOf(ladder.toward, ref.tier),
+        },
+        alpha,
+      };
+    case 'support':
+      return {
+        color: {
+          h: ramp.supportHue,
+          s: ramp.accentSaturation * 0.8,
+          l: ref.tier === undefined ? ramp.accentLightness : tierOf(ladder.toward, ref.tier),
+        },
+        alpha,
+      };
+  }
 }
 
-/** WCAG contrast ratio between two colours. */
-export function contrastRatio(a: Hsl, b: Hsl): number {
-  const luminanceA = relativeLuminance(a);
-  const luminanceB = relativeLuminance(b);
-  const lighter = Math.max(luminanceA, luminanceB);
-  const darker = Math.min(luminanceA, luminanceB);
-  return (lighter + 0.05) / (darker + 0.05);
+function buildRamp(spec: ThemeSpecV2, mode: 'light' | 'dark'): Ramp {
+  const { surfaceHue, accentHue, surfaceChroma, accentChroma } = spec.palette;
+  const target = CONTRAST_TARGETS[spec.surface.contrastTarget];
+  const surfaceSaturation = SURFACE_SATURATION[surfaceChroma];
+
+  const ladder = buildLadder({
+    anchor: mode === 'light' ? spec.surface.lightAnchor : spec.surface.darkAnchor,
+    mode,
+    step: spec.surface.step,
+    textTarget: target.text,
+    hue: surfaceHue,
+    saturation: surfaceSaturation * 0.7,
+  });
+
+  const background: Hsl = { h: surfaceHue, s: surfaceSaturation * 0.7, l: ladder.toward[0] };
+  const skeleton: Ramp = {
+    ladder,
+    surfaceHue,
+    surfaceSaturation,
+    accentHue,
+    supportHue: readSupportHue(spec),
+    accentSaturation: ACCENT_SATURATION[accentChroma],
+    // Provisional: the accent has to clear the non-text floor against the page,
+    // and where it lands depends on which way the ladder runs.
+    accentLightness: ladder.direction > 0 ? 62 : 45,
+    target,
+    roleTiers: { foreground: LADDER_TIERS - 1, border: LADDER_TIERS - 1 },
+  };
+
+  const surfaceTone = (scale: number) => (lightness: number): Hsl =>
+    ({ h: surfaceHue, s: surfaceSaturation * scale, l: lightness });
+
+  skeleton.roleTiers = {
+    foreground: solveTier(ladder.toward, surfaceTone(0.5), background, target.text),
+    border: solveTier(ladder.toward, surfaceTone(1), background, target.nonText),
+  };
+
+  // Walk the accent until it separates from the page. An electric accent on a
+  // near-black page already clears it; a muted one on paper does not, and an
+  // invisible primary button is a functional bug, not a style.
+  const accentTone = (lightness: number): Hsl =>
+    ({ h: accentHue, s: skeleton.accentSaturation, l: lightness });
+  let steps = 0;
+  while (
+    contrastRatio(accentTone(skeleton.accentLightness), background) < target.nonText
+    && steps < 60
+  ) {
+    const next = skeleton.accentLightness - ladder.direction * 2;
+    if (next < 0 || next > 100) break;
+    skeleton.accentLightness = next;
+    steps += 1;
+  }
+
+  return skeleton;
 }
 
-function buildColors(spec: ThemeSpec, mode: 'light' | 'dark'): Record<string, Hsl> {
-  const bands = LIGHTNESS[mode];
-  const { surfaceHue, accentHue, surfaceChroma, accentChroma, statusHueShift } = spec.palette;
+function buildColors(spec: ThemeSpecV2, ramp: Ramp): Record<string, Hsl> {
+  const { ladder, surfaceHue, surfaceSaturation, target } = ramp;
+  const { statusHueShift } = spec.palette;
+  const statusSaturation = STATUS_SATURATION[spec.palette.accentChroma];
 
-  const surfaceS = SURFACE_SATURATION[surfaceChroma];
-  const accentS = ACCENT_SATURATION[accentChroma];
-  const statusS = STATUS_SATURATION[accentChroma];
-  const secondaryHue = readSecondaryHue(spec);
+  const surface = (tier: number, scale = 1): Hsl =>
+    ({ h: surfaceHue, s: surfaceSaturation * scale, l: tierOf(ladder.toward, tier) });
 
-  const surface = (role: keyof typeof bands, saturationScale = 1): Hsl =>
-    ({ h: surfaceHue, s: surfaceS * saturationScale, l: bands[role] });
+  const background = surface(0, 0.7);
+  const card = { h: surfaceHue, s: surfaceSaturation * 0.4, l: tierOf(ladder.lighter, 1) };
+  const popover = { h: surfaceHue, s: surfaceSaturation * 0.4, l: tierOf(ladder.lighter, 2) };
+  const muted = surface(2);
+  const accentSurface = surface(2, 0.9);
+  const secondary = { h: ramp.supportHue, s: surfaceSaturation, l: tierOf(ladder.toward, 2) };
+
+  const tone = (scale: number) => (lightness: number): Hsl =>
+    ({ h: surfaceHue, s: surfaceSaturation * scale, l: lightness });
+
+  const readable = (background_: Hsl, minimum: number, scale = 0.5): Hsl => {
+    const values = inkLadderFor(ladder, tone(scale), background_);
+    return tone(scale)(tierOf(values, solveTier(values, tone(scale), background_, minimum)));
+  };
+
+  // A foreground that must sit on more than one surface is solved against the
+  // harder of them, not against whichever one was written first.
+  const mutedFloor = target.text;
+  const mutedForeground = tierOf(ladder.toward, Math.max(
+    solveTier(ladder.toward, tone(0.6), background, mutedFloor),
+    solveTier(ladder.toward, tone(0.6), card, mutedFloor),
+  ));
+
+  const primary: Hsl = { h: ramp.accentHue, s: ramp.accentSaturation, l: ramp.accentLightness };
+  // The pole that can actually reach the floor, rather than assuming light text
+  // on a dark button: a mid-lightness accent is only readable from one side.
+  const primaryForeground: Hsl = contrastRatio({ h: ramp.accentHue, s: 10, l: 100 }, primary)
+    >= contrastRatio({ h: ramp.accentHue, s: 10, l: 0 }, primary)
+    ? { h: ramp.accentHue, s: 10, l: 100 }
+    : { h: ramp.accentHue, s: 10, l: 0 };
+
+  const status = (hue: number): Hsl => {
+    const shifted = wrapHue(hue + statusHueShift);
+    let lightness = ladder.direction > 0 ? 58 : 38;
+    let steps = 0;
+    while (
+      contrastRatio({ h: shifted, s: statusSaturation, l: lightness }, background) < target.nonText
+      && steps < 60
+    ) {
+      const next = lightness - ladder.direction * 2;
+      if (next < 0 || next > 100) break;
+      lightness = next;
+      steps += 1;
+    }
+    return { h: shifted, s: statusSaturation, l: lightness };
+  };
+
+  const statusForeground = (color: Hsl): Hsl =>
+    (contrastRatio({ h: 0, s: 0, l: 100 }, color) >= contrastRatio({ h: 0, s: 0, l: 0 }, color)
+      ? { h: 0, s: 0, l: 100 }
+      : { h: 0, s: 0, l: 0 });
+
+  const destructive = status(STATUS_HUES.destructive);
+  const positive = status(STATUS_HUES.positive);
+  const warning = status(STATUS_HUES.warning);
 
   return {
-    // Surfaces carry only a fraction of the surface saturation so a "rich"
-    // theme tints the page without turning the text background into a colour
-    // field.
-    background: surface('background', 0.7),
-    foreground: surface('foreground', 0.5),
-    card: surface('card', 0.5),
-    'card-foreground': surface('card-foreground', 0.5),
-    popover: surface('popover', 0.5),
-    'popover-foreground': surface('popover-foreground', 0.5),
-    secondary: { h: secondaryHue, s: surfaceS, l: bands.secondary },
-    'secondary-foreground': surface('secondary-foreground', 0.6),
-    muted: surface('muted'),
-    'muted-foreground': surface('muted-foreground', 0.6),
-    accent: surface('accent'),
-    'accent-foreground': surface('accent-foreground', 0.6),
-    border: surface('border'),
-    input: surface('input'),
+    background,
+    foreground: readable(background, target.text),
+    card,
+    'card-foreground': readable(card, target.text),
+    popover,
+    'popover-foreground': readable(popover, target.text),
+    secondary,
+    'secondary-foreground': readable(secondary, target.text, 0.6),
+    muted,
+    'muted-foreground': tone(0.6)(mutedForeground),
+    accent: accentSurface,
+    'accent-foreground': readable(accentSurface, target.text, 0.6),
+    border: readable(background, target.nonText, 1),
+    input: readable(background, target.nonText, 1),
 
-    primary: { h: accentHue, s: accentS, l: bands.primary },
-    'primary-foreground': { h: accentHue, s: 12, l: bands['primary-foreground'] },
-    ring: { h: accentHue, s: accentS, l: bands.ring },
+    primary,
+    'primary-foreground': primaryForeground,
+    // A copy, not the same object. `ring` and `primary` sharing one Hsl means
+    // the ring/background pair walks the primary the foreground pair just
+    // finished solving, and the earlier pair silently comes undone — a bug that
+    // only shows up at the tighter targets, where there is no slack to absorb it.
+    ring: { ...primary },
 
-    destructive: { h: wrapHue(STATUS_HUES.destructive + statusHueShift), s: statusS, l: bands.destructive },
-    'destructive-foreground': { h: 0, s: 0, l: bands['destructive-foreground'] },
-    positive: { h: wrapHue(STATUS_HUES.positive + statusHueShift), s: statusS, l: bands.positive },
-    'positive-foreground': { h: 0, s: 0, l: bands['positive-foreground'] },
-    warning: { h: wrapHue(STATUS_HUES.warning + statusHueShift), s: statusS, l: bands.warning },
-    'warning-foreground': { h: 0, s: 0, l: bands['warning-foreground'] },
+    destructive,
+    'destructive-foreground': statusForeground(destructive),
+    positive,
+    'positive-foreground': statusForeground(positive),
+    warning,
+    'warning-foreground': statusForeground(warning),
   };
 }
 
 /**
  * Walks foregrounds toward their pole until every pair clears its floor.
  *
- * The schema makes gross failures impossible; this exists for the residual few
- * points a saturated hue can cost. Adjusting the foreground rather than the
- * background keeps the authored look intact — the user asked for that pink,
- * not for the text on it.
+ * The tier solver above already targets the floor directly, so this almost
+ * never fires. It stays because "almost never" is not "never": saturation
+ * shifts luminance in ways the ladder does not model, and the guarantee this
+ * system sells is not allowed to depend on a model being approximately right.
  */
-function solveContrast(colors: Record<string, Hsl>): { adjusted: string[]; minRatio: number } {
+function solveContrast(
+  colors: Record<string, Hsl>,
+  target: ContrastTarget,
+): { adjusted: string[]; minRatio: number } {
   const adjusted = new Set<string>();
   let minRatio = Number.POSITIVE_INFINITY;
 
@@ -221,22 +388,18 @@ function solveContrast(colors: Record<string, Hsl>): { adjusted: string[]; minRa
     const foreground = colors[pair.foreground];
     if (!background || !foreground) continue;
 
-    if (contrastRatio(foreground, background) >= pair.minimum) {
+    const minimum = pairMinimum(pair, target);
+    if (contrastRatio(foreground, background) >= minimum) {
       minRatio = Math.min(minRatio, contrastRatio(foreground, background));
       continue;
     }
 
-    // Pick the pole that can actually reach the floor rather than assuming
-    // "dark background means light text". A mid-lightness surface — which is
-    // exactly what a saturated `primary` is — is often reachable only from the
-    // opposite side, and walking the wrong way just pins the foreground at an
-    // extreme that still fails.
     const towardWhite = contrastRatio({ ...foreground, l: 100 }, background);
     const towardBlack = contrastRatio({ ...foreground, l: 0 }, background);
     const direction = towardWhite >= towardBlack ? 1 : -1;
 
     let steps = 0;
-    while (contrastRatio(foreground, background) < pair.minimum && steps < 60) {
+    while (contrastRatio(foreground, background) < minimum && steps < 60) {
       const next = foreground.l + direction * 2;
       if (next < 0 || next > 100) break;
       foreground.l = next;
@@ -248,7 +411,7 @@ function solveContrast(colors: Record<string, Hsl>): { adjusted: string[]; minRa
     // itself sits at mid-luminance. Move it away too; black against white is
     // 21:1, so widening from both sides always converges.
     let backgroundSteps = 0;
-    while (contrastRatio(foreground, background) < pair.minimum && backgroundSteps < 60) {
+    while (contrastRatio(foreground, background) < minimum && backgroundSteps < 60) {
       const next = background.l - direction * 2;
       if (next < 0 || next > 100) break;
       background.l = next;
@@ -262,17 +425,311 @@ function solveContrast(colors: Record<string, Hsl>): { adjusted: string[]; minRa
   return { adjusted: [...adjusted], minRatio: Number.isFinite(minRatio) ? minRatio : 21 };
 }
 
-function buildNonColorTokens(spec: ThemeSpec): Omit<ThemeTokens, 'colors'> {
+/** CSS position keywords for a gradient origin. */
+const ORIGIN_POSITIONS: Record<string, string> = {
+  center: 'center',
+  top: 'top',
+  bottom: 'bottom',
+  left: 'left',
+  right: 'right',
+  'top-left': 'left top',
+  'top-right': 'right top',
+  'bottom-left': 'left bottom',
+  'bottom-right': 'right bottom',
+};
+
+/** Renders one fill layer as a CSS `<image>`. */
+function formatFillLayer(layer: ResolvedFillLayer, ramp: Ramp): string {
+  const paint = layer.stops.map((stop) => {
+    const { color, alpha } = resolveColorRef(stop.color, ramp);
+    return { value: formatColor(color, alpha), position: stop.position };
+  });
+
+  if (layer.kind === 'solid') {
+    return `linear-gradient(${paint[0].value}, ${paint[0].value})`;
+  }
+
+  if (layer.kind === 'repeating-linear') {
+    // Bands are emitted as explicit pixel runs rather than percentages so the
+    // stripe period is the authored `band` regardless of how big the element
+    // is — a stripe that rescales with its container is not a stripe.
+    const runs = paint.map((stop, index) =>
+      `${stop.value} ${index * layer.band}px ${(index + 1) * layer.band}px`);
+    return `repeating-linear-gradient(${layer.angle}deg, ${runs.join(', ')})`;
+  }
+
+  const stops = paint
+    .map((stop) => (stop.position === null ? stop.value : `${stop.value} ${stop.position}%`))
+    .join(', ');
+
+  if (layer.kind === 'linear') return `linear-gradient(${layer.angle}deg, ${stops})`;
+  if (layer.kind === 'radial') {
+    return `radial-gradient(${layer.shape} at ${ORIGIN_POSITIONS[layer.origin]}, ${stops})`;
+  }
+  return `conic-gradient(from ${layer.angle}deg at ${ORIGIN_POSITIONS[layer.origin]}, ${stops})`;
+}
+
+/** Renders the shadow stack, or `none`. */
+function formatShadows(shadows: ResolvedShadow[], ramp: Ramp): string {
+  if (shadows.length === 0) return 'none';
+
+  return shadows.map((shadow) => {
+    const { color, alpha } = resolveColorRef(shadow.color, ramp);
+    const value = formatColor(color, shadow.alpha ?? alpha);
+    const geometry = `${shadow.x}px ${shadow.y}px ${shadow.blur}px ${shadow.spread}px`;
+    return `${shadow.inset ? 'inset ' : ''}${geometry} ${value}`;
+  }).join(', ');
+}
+
+/**
+ * The colour a surface actually presents to the eye.
+ *
+ * Fill layers are composited bottom-up over the page background, and a gradient
+ * contributes the average of its stops. Approximate on purpose — the exact
+ * luminance under a diagonal gradient varies across the surface — but
+ * approximating and then solving is the only way translucent and gradient
+ * surfaces get the same legibility guarantee flat ones have always had.
+ */
+function flattenFill(recipe: ResolvedSurfaceRecipe, ramp: Ramp): Hsl {
+  let result: Hsl = { h: ramp.surfaceHue, s: ramp.surfaceSaturation * 0.7, l: ramp.ladder.toward[0] };
+
+  for (const layer of [...recipe.fill].reverse()) {
+    const resolved = layer.stops.map((stop) => resolveColorRef(stop.color, ramp));
+    const average: Hsl = {
+      h: resolved[0].color.h,
+      s: resolved.reduce((total, stop) => total + stop.color.s, 0) / resolved.length,
+      l: resolved.reduce((total, stop) => total + stop.color.l, 0) / resolved.length,
+    };
+    const alpha = resolved.reduce((total, stop) => total + stop.alpha, 0) / resolved.length;
+    result = compositeOver(average, alpha, result);
+  }
+
+  return result;
+}
+
+/** The per-part token block, plus the worst contrast ratio it contains. */
+function buildSurfaceTokens(
+  recipe: ResolvedSurfaceRecipe,
+  ramp: Ramp,
+  part: SurfacePart,
+): { tokens: Record<string, string>; ratio: number; adjusted: string[] } {
+  const adjusted: string[] = [];
+  const effective = flattenFill(recipe, ramp);
+
+  const inkTone = (scale: number) => (lightness: number): Hsl =>
+    ({ h: ramp.surfaceHue, s: ramp.surfaceSaturation * scale, l: lightness });
+
+  // Ink is held well above the floor and muted sits at it, so the two are
+  // visibly different weights of text rather than the same colour twice.
+  const inkFloor = Math.min(ramp.target.text * 1.6, 15);
+  const values = inkLadderFor(ramp.ladder, inkTone(0.35), effective);
+  const mutedTier = solveTier(
+    values, inkTone(0.5), effective, ramp.target.text, recipe.ink.mutedTier ?? 1,
+  );
+  const inkTier = solveTier(
+    values, inkTone(0.35), effective, inkFloor, Math.max(mutedTier, recipe.ink.tier ?? 1),
+  );
+
+  if (recipe.ink.tier !== null && inkTier !== recipe.ink.tier) {
+    adjusted.push(`surfaces.${part}.ink.tier`);
+  }
+  if (recipe.ink.mutedTier !== null && mutedTier !== recipe.ink.mutedTier) {
+    adjusted.push(`surfaces.${part}.ink.mutedTier`);
+  }
+
+  const ink = inkTone(0.35)(tierOf(values, inkTier));
+  const inkMuted = inkTone(0.5)(tierOf(values, mutedTier));
+  // A surface whose fill leaves no legible option at all is reported rather
+  // than shipped quietly. It should be unreachable — the ladder can always find
+  // one pole that works — but "should be" is not a guarantee, and the model can
+  // only fix what it is told about.
+  if (contrastRatio(ink, effective) < ramp.target.text) {
+    adjusted.push(`surfaces.${part}.fill`);
+  }
+
+  // A link on a glass popover has to clear the floor against the popover, not
+  // against the page — this is the token that makes accent-coloured text safe
+  // on any surface a theme invents.
+  const accentTone = (lightness: number): Hsl =>
+    ({ h: ramp.accentHue, s: ramp.accentSaturation, l: lightness });
+  const accentDirection = contrastRatio(accentTone(100), effective)
+    >= contrastRatio(accentTone(0), effective) ? 1 : -1;
+  let accentOn: Hsl = accentTone(ramp.accentLightness);
+  let accentSteps = 0;
+  while (contrastRatio(accentOn, effective) < ramp.target.text && accentSteps < 60) {
+    const next = accentOn.l + accentDirection * 2;
+    if (next < 0 || next > 100) break;
+    accentOn = { ...accentOn, l: next };
+    accentSteps += 1;
+  }
+
+  const fills = recipe.fill.map((layer) => ({ layer, image: formatFillLayer(layer, ramp) }));
+  const bottom = recipe.fill[recipe.fill.length - 1];
+  const bottomIsOpaqueSolid = bottom?.kind === 'solid' && (bottom.stops[0].color.alpha ?? 1) >= 1;
+  const painted = bottomIsOpaqueSolid ? fills.slice(0, -1) : fills;
+
+  const fillColor = bottomIsOpaqueSolid
+    ? (() => {
+      const { color, alpha } = resolveColorRef(bottom.stops[0].color, ramp);
+      return formatColor(color, alpha);
+    })()
+    : 'transparent';
+
+  const sideWidth = (side: 'top' | 'right' | 'bottom' | 'left'): string =>
+    `${recipe.border.style === 'none' ? 0 : recipe.border.sides.includes(side) ? recipe.border.width : 0}px`;
+
+  const borderColor = recipe.border.variant === 'gradient-ring'
+    ? 'transparent'
+    : (() => {
+      const { color, alpha } = resolveColorRef(recipe.border.color, ramp);
+      return formatColor(color, alpha);
+    })();
+
+  const ringImage = recipe.border.ring
+    ? `linear-gradient(${recipe.border.ring.angle}deg, ${recipe.border.ring.stops.map((stop) => {
+      const { color, alpha } = resolveColorRef(stop.color, ramp);
+      return stop.position === null
+        ? formatColor(color, alpha)
+        : `${formatColor(color, alpha)} ${stop.position}%`;
+    }).join(', ')})`
+    : 'none';
+
+  const texture = readTexturePaint(recipe.texture.kind, recipe.texture.scale);
+  const lightColor = (() => {
+    const { color, alpha } = resolveColorRef({ role: 'light', tier: 8 }, ramp);
+    return formatColor(color, alpha);
+  })();
+  const shadowColor = (() => {
+    const { color, alpha } = resolveColorRef({ role: 'shadow', tier: 8 }, ramp);
+    return formatColor(color, alpha);
+  })();
+  const overlay = readOverlayPaint(
+    recipe.overlay.kind, recipe.overlay.angle, lightColor, shadowColor,
+  );
+
+  const backdrop = recipe.backdrop
+    ? [
+      `blur(${recipe.backdrop.blur}px)`,
+      `saturate(${recipe.backdrop.saturate})`,
+      `brightness(${recipe.backdrop.brightness})`,
+      // Refraction has no CSS primitive in Chromium 140. Half of it lands as a
+      // contrast lift in the filter chain and half as `--t-refraction`, which
+      // the renderer turns into an inner edge highlight; between them the edge
+      // reads as bending light rather than as a blur with a line on it.
+      ...(recipe.backdrop.refraction > 0
+        ? [`contrast(${round(1 + recipe.backdrop.refraction * 0.2)})`]
+        : []),
+    ].join(' ')
+    : 'none';
+
+  // `square` is emitted as a zero radius rather than as `corner-shape: square`
+  // so it is square on every engine, not only on those with corner-shape.
+  const cornerShape = recipe.corner.shape === 'squircle'
+    ? 'superellipse(4)'
+    : recipe.corner.shape === 'square'
+      ? 'round'
+      : recipe.corner.shape;
+
+  return {
+    ratio: contrastRatio(ink, effective),
+    adjusted,
+    tokens: {
+      't-fill-color': fillColor,
+      't-fill-image': painted.length > 0 ? painted.map((entry) => entry.image).join(', ') : 'none',
+      't-fill-blend': painted.length > 0
+        ? painted.map((entry) => entry.layer.blend).join(', ')
+        : 'normal',
+      't-border-width': `${sideWidth('top')} ${sideWidth('right')} ${sideWidth('bottom')} ${sideWidth('left')}`,
+      't-border-style': recipe.border.style,
+      't-border-color': borderColor,
+      't-ring-image': ringImage,
+      't-radius': `${recipe.corner.shape === 'square' ? 0 : recipe.corner.radius}px`,
+      't-corner-shape': cornerShape,
+      't-shadow': formatShadows(recipe.shadows, ramp),
+      't-backdrop': backdrop,
+      't-refraction': String(recipe.backdrop?.refraction ?? 0),
+      't-texture-image': texture?.image ?? 'none',
+      't-texture-size': texture?.size ?? 'auto',
+      't-texture-opacity': String(texture ? recipe.texture.opacity : 0),
+      't-texture-blend': recipe.texture.blend,
+      't-overlay-image': overlay?.image ?? 'none',
+      't-overlay-opacity': String(overlay ? recipe.overlay.strength : 0),
+      't-overlay-blend': overlay?.blend ?? 'normal',
+      't-ink': formatColor(ink),
+      't-ink-muted': formatColor(inkMuted),
+      't-ink-shadow': recipe.ink.glow > 0
+        ? `0 0 ${round(2 + recipe.ink.glow * 10)}px ${formatColor(ink, clamp(recipe.ink.glow, 0, 1) * 0.8)}`
+        : 'none',
+      't-accent-on': formatColor(accentOn),
+    },
+  };
+}
+
+/**
+ * The tone variants, keyed by `data-tails-surface`.
+ *
+ * A second axis to `data-tails-part`: a card is a card, but a *selected* card is
+ * raised and a *disabled* one is flush. Without this the renderer would have to
+ * hard-code `bg-muted` for those states, which is exactly the kind of literal
+ * that stops following the theme.
+ */
+function buildToneTokens(ramp: Ramp, colors: Record<string, Hsl>): Record<string, Record<string, string>> {
+  const surfaceTone = (lightness: number): Hsl =>
+    ({ h: ramp.surfaceHue, s: ramp.surfaceSaturation * 0.6, l: lightness });
+
+  const inkFor = (background: Hsl): string => {
+    const tone = (lightness: number): Hsl =>
+      ({ h: ramp.surfaceHue, s: ramp.surfaceSaturation * 0.35, l: lightness });
+    const values = inkLadderFor(ramp.ladder, tone, background);
+    return formatColor(tone(tierOf(values, solveTier(values, tone, background, ramp.target.text))));
+  };
+
+  const raised = surfaceTone(tierOf(ramp.ladder.lighter, 2));
+  const sunken = surfaceTone(tierOf(ramp.ladder.darker, 2));
+  const inverted = { h: ramp.surfaceHue, s: ramp.surfaceSaturation * 0.35, l: tierOf(ramp.ladder.toward, LADDER_TIERS - 1) };
+  const accent = colors.primary;
+
+  return {
+    flush: {
+      't-fill-color': formatColor(colors.background),
+      't-ink': inkFor(colors.background),
+    },
+    raised: {
+      't-fill-color': formatColor(raised),
+      't-ink': inkFor(raised),
+    },
+    sunken: {
+      't-fill-color': formatColor(sunken),
+      't-ink': inkFor(sunken),
+    },
+    inverted: {
+      't-fill-color': formatColor(inverted),
+      't-ink': formatColor(colors.background),
+    },
+    accent: {
+      't-fill-color': formatColor(accent),
+      't-ink': formatColor(colors['primary-foreground']),
+    },
+  };
+}
+
+function buildNonColorTokens(spec: ThemeSpecV2): Pick<ThemeTokens, 'lengths' | 'fonts' | 'durations' | 'easings'> {
   const feel = MOTION_FEEL[spec.motion];
+  const defaultRecipe = mergeRecipe(BASELINE_RECIPE, spec.surfaces.default);
 
   return {
     lengths: {
-      radius: RADIUS[spec.shape.radius],
-      'border-width': BORDER_WIDTH[spec.shape.borderWeight],
+      // `--radius` and `--border-width` mirror the default recipe so Tailwind's
+      // `rounded-lg` and the global `border-color` rule follow the theme even on
+      // elements that carry no `data-tails-part`.
+      radius: `${defaultRecipe.corner.shape === 'square' ? 0 : defaultRecipe.corner.radius}px`,
+      'border-width': `${defaultRecipe.border.style === 'none' ? 0 : defaultRecipe.border.width}px`,
       'space-unit': SPACE_UNIT[spec.density],
       'font-size-base': FONT_SIZE[spec.type.scale],
       'letter-spacing-base': TRACKING[spec.type.letterSpacing],
       'display-weight': DISPLAY_WEIGHT[spec.type.displayWeight],
+      'line-height-base': LINE_HEIGHT[spec.type.lineHeight],
+      measure: MEASURE[spec.type.measure],
     },
     fonts: {
       'font-sans': FONT_FAMILIES[spec.type.sansFamily],
@@ -300,29 +757,55 @@ function buildNonColorTokens(spec: ThemeSpec): Omit<ThemeTokens, 'colors'> {
  *
  * Pure and deterministic: the same spec always produces the same tokens, which
  * is what lets the derived output be cached alongside the spec and replayed
- * unchanged after a schema version bump.
+ * unchanged after a schema version bump. v1 specs are upgraded on the way in
+ * rather than handled separately, so there is exactly one derivation to keep
+ * correct.
  */
-export function deriveTokens(spec: ThemeSpec): DerivedTheme {
+export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
+  const spec = upgradeSpec(rawSpec);
   const shared = buildNonColorTokens(spec);
 
-  const buildRamp = (mode: 'light' | 'dark') => {
-    const colors = buildColors(spec, mode);
-    const solved = solveContrast(colors);
-    return { tokens: { colors, ...shared } as ThemeTokens, ...solved };
+  const buildOne = (mode: 'light' | 'dark') => {
+    const ramp = buildRamp(spec, mode);
+    const colors = buildColors(spec, ramp);
+    const solved = solveContrast(colors, spec.surface.contrastTarget);
+
+    const adjusted = [...solved.adjusted];
+    if (ramp.ladder.anchorMoved) {
+      adjusted.push(`surface.${mode}Anchor`);
+    }
+
+    const surfaces: Record<string, Record<string, string>> = {};
+    let minRatio = solved.minRatio;
+
+    const base = mergeRecipe(BASELINE_RECIPE, spec.surfaces.default);
+    for (const part of SURFACE_PARTS) {
+      const recipe = part === 'default' ? base : mergeRecipe(base, spec.surfaces[part]);
+      const built = buildSurfaceTokens(recipe, ramp, part);
+      surfaces[part] = built.tokens;
+      adjusted.push(...built.adjusted);
+      minRatio = Math.min(minRatio, built.ratio);
+    }
+
+    return {
+      tokens: { colors, ...shared, surfaces, tones: buildToneTokens(ramp, colors) } as ThemeTokens,
+      adjusted,
+      minRatio,
+    };
   };
 
   // A single-mode theme still needs its one ramp built for the mode it pins.
-  if (spec.mode === 'dark') {
-    const dark = buildRamp('dark');
+  if (rawSpec.mode === 'dark') {
+    const dark = buildOne('dark');
     return { light: dark.tokens, dark: dark.tokens, adjusted: dark.adjusted, minRatio: dark.minRatio };
   }
-  if (spec.mode === 'light') {
-    const light = buildRamp('light');
+  if (rawSpec.mode === 'light') {
+    const light = buildOne('light');
     return { light: light.tokens, dark: null, adjusted: light.adjusted, minRatio: light.minRatio };
   }
 
-  const light = buildRamp('light');
-  const dark = buildRamp('dark');
+  const light = buildOne('light');
+  const dark = buildOne('dark');
   return {
     light: light.tokens,
     dark: dark.tokens,
@@ -333,3 +816,4 @@ export function deriveTokens(spec: ThemeSpec): DerivedTheme {
 
 /** The contrast pairs, exported so tests can assert the shipped default ramp too. */
 export { CONTRAST_PAIRS };
+export type { ContrastPair };

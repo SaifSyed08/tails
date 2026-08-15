@@ -1,4 +1,4 @@
-import { ArrowUp, Paperclip, Square } from 'lucide-react';
+import { ArrowUp, Paperclip, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { api, type SlashCommand } from '@/lib/api';
@@ -19,12 +19,49 @@ export const PERMISSION_MODES = [
 
 export type PermissionMode = typeof PERMISSION_MODES[number]['value'];
 
+/** A file staged for the next message. */
+export type Attachment = {
+  name: string;
+  mediaType: string;
+  /** Base64 without the data-URL prefix, which is what the SDK expects. */
+  data: string;
+};
+
+/** 15MB before base64; past that the websocket frame becomes the problem. */
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Reads a File into the base64 shape the wire protocol carries.
+ *
+ * The data-URL prefix is stripped here rather than server-side so the field
+ * means exactly one thing everywhere it appears.
+ */
+async function readAttachment(file: File): Promise<Attachment | null> {
+  if (file.size > MAX_ATTACHMENT_BYTES) return null;
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0) return null;
+
+  return {
+    name: file.name || 'pasted',
+    mediaType: file.type || 'application/octet-stream',
+    data: dataUrl.slice(comma + 1),
+  };
+}
+
 type ComposerProps = {
   sessionId: string | null;
   busy: boolean;
   mode: PermissionMode;
   onModeChange: (mode: PermissionMode) => void;
-  onSend: (content: string) => void;
+  onSend: (content: string, attachments: Attachment[]) => void;
   onAbort: () => void;
 };
 
@@ -34,7 +71,10 @@ export function Composer({
   const [draft, setDraft] = useState('');
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [paletteIndex, setPaletteIndex] = useState(0);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Commands are fetched once per conversation rather than per keystroke:
   // enumerating them spawns a CLI subprocess.
@@ -76,11 +116,18 @@ export function Composer({
   // state would re-render the palette an extra time on every keystroke.
   const selectedIndex = Math.min(paletteIndex, Math.max(0, matches.length - 1));
 
+  const addFiles = async (files: FileList | File[]) => {
+    const read = await Promise.all([...files].map(readAttachment));
+    // Cap at eight; a caller dropping a folder should not silently send fifty.
+    setAttachments((current) => [...current, ...read.filter((entry): entry is Attachment => entry !== null)].slice(0, 8));
+  };
+
   const submit = () => {
     const content = draft.trim();
-    if (!content || busy) return;
+    if ((!content && attachments.length === 0) || busy) return;
     setDraft('');
-    onSend(content);
+    setAttachments([]);
+    onSend(content || 'Have a look at this.', attachments);
   };
 
   const acceptCommand = (command: SlashCommand) => {
@@ -166,25 +213,76 @@ export function Composer({
         </div>
       ) : null}
 
+      {attachments.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {attachments.map((attachment, index) => (
+            <span
+              key={`${attachment.name}-${index}`}
+              className="animate-scale-in flex items-center gap-1.5 rounded-md border border-border bg-muted/60 px-2 py-1 text-xs"
+            >
+              <Paperclip className="size-3 text-muted-foreground" aria-hidden="true" />
+              <span className="max-w-[14rem] truncate">{attachment.name}</span>
+              <button
+                type="button"
+                onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))}
+                aria-label={`Remove ${attachment.name}`}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
       <div
         data-tails-part="composer"
-        className="flex items-end gap-2 rounded-2xl border border-border bg-card p-2 transition-shadow duration-quick ease-standard focus-within:ring-2 focus-within:ring-ring"
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          if (event.dataTransfer.files.length > 0) void addFiles(event.dataTransfer.files);
+        }}
+        className={cn(
+          'flex items-end gap-2 rounded-2xl border bg-card p-2 transition-shadow duration-quick ease-standard focus-within:ring-2 focus-within:ring-ring',
+          dragging ? 'border-primary ring-2 ring-primary/40' : 'border-border',
+        )}
       >
         <button
           type="button"
-          disabled
-          title="Attachments are not wired up yet"
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach files or images"
           aria-label="Add attachment"
-          className="rounded-lg p-2 text-muted-foreground opacity-40"
+          className="rounded-lg p-2 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
         >
           <Paperclip className="size-4" />
         </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            if (event.target.files) void addFiles(event.target.files);
+            event.target.value = '';
+          }}
+        />
 
         <textarea
           ref={textareaRef}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={(event) => {
+            const files = [...event.clipboardData.files];
+            if (files.length === 0) return;
+            event.preventDefault();
+            void addFiles(files);
+          }}
           rows={1}
           placeholder="Ask T.A.I.L.S. anything — / for commands"
           aria-label="Message"

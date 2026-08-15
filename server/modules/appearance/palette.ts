@@ -189,76 +189,122 @@ export type Ladder = {
  */
 export function buildLadder(options: {
   anchor: SurfaceAnchor;
+  mode: 'light' | 'dark';
   step: number;
   textTarget: number;
   hue: number;
   saturation: number;
 }): Ladder {
   const { step, textTarget, hue, saturation } = options;
-  const start = SURFACE_ANCHORS[options.anchor];
-  const direction: 1 | -1 = start < 50 ? 1 : -1;
-  const pole = direction > 0 ? 100 : 0;
+  const start: number = SURFACE_ANCHORS[options.anchor];
 
-  // Walk the anchor away from the ink pole until maximum-contrast text can
-  // actually clear the target. A mid-grey anchor asking for AAA is the case
-  // that needs this: no foreground colour exists that reads at 7:1 on 46% grey,
-  // so the surface has to give ground. Moving the surface rather than failing
-  // the theme keeps "unreadable is impossible" true without a fixed table.
+  // Around the middle of the scale both poles are roughly as legible, so the
+  // anchor alone cannot say which way the ink runs. The ramp breaks the tie:
+  // mid-grey in the light ramp is newsprint and takes dark ink; mid-grey in the
+  // dark ramp is a lifted charcoal and takes light ink. Outside that band the
+  // anchor decides, because there is only ever one workable answer.
+  const direction: 1 | -1 = start >= 34 && start <= 66
+    ? (options.mode === 'light' ? -1 : 1)
+    : (start < 50 ? 1 : -1);
+  const pole = direction > 0 ? 100 : 0;
+  const inkColor = { h: hue, s: 0, l: pole };
+
+  const roundTo = (value: number) => Math.round(clamp(value, 0, 100) * 10) / 10;
+  const unit = (distance: number) => Math.max(1.5, Math.min(step, distance / 6));
+
+  const shape = (anchor: number): Omit<Ladder, 'anchorMoved'> => {
+    const span = Math.abs(pole - anchor);
+    // Fitting the curve to land exactly on the pole, rather than accumulating a
+    // fixed step, is what keeps the top of the ladder usable: an accumulating
+    // ladder with a large step runs off the scale and clamps, collapsing the
+    // last four tiers into one colour and destroying the headroom the solver
+    // needs.
+    const fraction = clamp(step / Math.max(span, 1), 0.02, 0.95);
+    const gamma = clamp(Math.log(fraction) / Math.log(1 / (LADDER_TIERS - 1)), 0.35, 3);
+
+    return {
+      toward: Array.from({ length: LADDER_TIERS }, (_, tier) =>
+        roundTo(anchor + direction * span * (tier / (LADDER_TIERS - 1)) ** gamma)),
+      // The pole-relative ladders keep a floor under their step so a paper
+      // anchor, which has four points of headroom to white, still separates its
+      // tiers visibly instead of emitting twelve copies of the same colour.
+      lighter: Array.from({ length: LADDER_TIERS }, (_, tier) =>
+        roundTo(anchor + tier * unit(100 - anchor))),
+      darker: Array.from({ length: LADDER_TIERS }, (_, tier) =>
+        roundTo(anchor - tier * unit(anchor))),
+      direction,
+      anchor,
+    };
+  };
+
+  // Walk the anchor away from the ink pole until the *hardest* surface on the
+  // ladder — not just the page — can still carry text at the target. Checking
+  // only the page is the subtle version of the bug this rebuild is fixing: a
+  // mid-grey page passes on its own and then its raised card, two rungs closer
+  // to the ink pole, quietly does not.
   let anchor = start;
   let anchorMoved = false;
-  const inkColor = { h: hue, s: 0, l: pole };
-  while (
-    contrastRatio(inkColor, { h: hue, s: saturation, l: anchor }) < textTarget
-    && anchor - direction >= 0
-    && anchor - direction <= 100
-  ) {
-    anchor -= direction;
+  for (let guard = 0; guard < 120; guard += 1) {
+    const candidate = shape(anchor);
+    const hardest = direction > 0
+      ? Math.max(candidate.toward[2], candidate.lighter[2])
+      : Math.min(candidate.toward[2], candidate.darker[2]);
+
+    if (contrastRatio(inkColor, { h: hue, s: saturation, l: hardest }) >= textTarget) {
+      return { ...candidate, anchorMoved };
+    }
+
+    const next = anchor - direction;
+    if (next < 0 || next > 100) return { ...candidate, anchorMoved };
+    anchor = next;
     anchorMoved = true;
   }
 
-  const span = Math.abs(pole - anchor);
-  // `span` is non-zero by construction: an anchor sitting on the pole has 1:1
-  // contrast against the ink and the loop above always moves it off.
-  const fraction = clamp(step / Math.max(span, 1), 0.02, 0.95);
-  const gamma = clamp(Math.log(fraction) / Math.log(1 / (LADDER_TIERS - 1)), 0.35, 3);
-
-  const round = (value: number) => Math.round(clamp(value, 0, 100) * 10) / 10;
-  const toward = Array.from({ length: LADDER_TIERS }, (_, tier) =>
-    round(anchor + direction * span * (tier / (LADDER_TIERS - 1)) ** gamma));
-
-  // The pole-relative ladders keep a floor under their step so a paper anchor,
-  // which has four points of headroom to white, still separates its tiers
-  // visibly instead of emitting twelve copies of the same colour.
-  const unit = (distance: number) => Math.max(1.5, Math.min(step, distance / 6));
-  const upUnit = unit(100 - anchor);
-  const downUnit = unit(anchor);
-
-  return {
-    toward,
-    lighter: Array.from({ length: LADDER_TIERS }, (_, tier) => round(anchor + tier * upUnit)),
-    darker: Array.from({ length: LADDER_TIERS }, (_, tier) => round(anchor - tier * downUnit)),
-    direction,
-    anchor,
-    anchorMoved,
-  };
+  return { ...shape(anchor), anchorMoved };
 }
 
 /**
- * The lowest rung of `toward` that clears a contrast floor against a background.
+ * The lowest rung of a ladder that clears a contrast floor against a background.
  *
  * Lowest rather than highest so text stays as close to its surface as
  * legibility allows: jumping straight to the pole would make every theme's body
  * copy pure white, which is the look of a system that does not trust itself.
  */
 export function solveTier(
-  ladder: Ladder,
+  values: number[],
   tone: (lightness: number) => Hsl,
   background: Hsl,
   minimum: number,
   from = 1,
 ): number {
-  for (let tier = Math.max(0, from); tier < LADDER_TIERS; tier += 1) {
-    if (contrastRatio(tone(ladder.toward[tier]), background) >= minimum) return tier;
+  for (let tier = clamp(from, 0, LADDER_TIERS - 1); tier < LADDER_TIERS; tier += 1) {
+    if (contrastRatio(tone(values[tier]), background) >= minimum) return tier;
   }
   return LADDER_TIERS - 1;
+}
+
+/**
+ * The lightness ladder text on an arbitrary surface should search.
+ *
+ * Normally that is the ramp's own `toward` ladder, which is what makes `tier`
+ * mean the same thing everywhere. But a surface filled with the accent colour —
+ * a primary button, a user's chat bubble — inverts the problem: in a dark theme
+ * `toward` runs to white, and white on a bright accent is 2:1. When the far
+ * pole is the wrong pole, this returns a ladder running from the surface's own
+ * lightness to the *other* pole, so an inverted surface gets legible text
+ * instead of the least-bad rung of a ladder pointing the wrong way.
+ */
+export function inkLadderFor(
+  ladder: Ladder,
+  tone: (lightness: number) => Hsl,
+  surface: Hsl,
+): number[] {
+  const pole = ladder.toward[LADDER_TIERS - 1];
+  const opposite = pole >= 50 ? 0 : 100;
+  if (contrastRatio(tone(pole), surface) >= contrastRatio(tone(opposite), surface)) {
+    return ladder.toward;
+  }
+
+  return Array.from({ length: LADDER_TIERS }, (_, tier) =>
+    Math.round((surface.l + (opposite - surface.l) * (tier / (LADDER_TIERS - 1))) * 10) / 10);
 }

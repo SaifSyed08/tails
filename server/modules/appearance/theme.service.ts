@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { themesRepository, type StoredTheme, type ThemeScope } from '@/db/themes.repository.js';
 import { deriveTokens } from '@/modules/appearance/derive.js';
 import { serializeStylesheet } from '@/modules/appearance/serialize.js';
-import { THEME_PRESETS, themeSpecSchema, type ThemeSpec } from '@/modules/appearance/theme-spec.js';
+import { THEME_PRESETS } from '@/modules/appearance/presets.js';
+import { themeSpecSchema, type ThemeSpec } from '@/modules/appearance/theme-spec.js';
 import { appBroadcast } from '@/shared/broadcast.js';
 import { AppError, createMessage } from '@/shared/utils.js';
 
