@@ -1,4 +1,4 @@
-import { ArrowUp, ImagePlus, Paperclip, Plus, Square, X } from 'lucide-react';
+import { ArrowUp, ImagePlus, Mic, Paperclip, PawPrint, Plus, Sparkles, Square, Wand2, X } from 'lucide-react';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { api, type SlashCommand } from '@/lib/api';
@@ -69,9 +69,37 @@ async function readAttachment(file: File): Promise<AttachmentPayload | null> {
   };
 }
 
-type AttachMenuProps = {
+type ComposerMenuProps = {
   onPickFiles: () => void;
   onPickImages: () => void;
+  onPersonalize: () => void;
+  onAssignPet: () => void;
+  /** The pet this conversation already has, shown so the entry reads as state. */
+  petName: string | null;
+};
+
+/**
+ * An entry that exists but does not work yet, and says so.
+ *
+ * Shipped as its own shape rather than as a disabled row: a greyed-out item
+ * tells the user nothing about why, and these two both have a real reason.
+ * Clicking gives the reason instead of silence.
+ */
+type NotYetEntry = { title: string; detail: string };
+
+const NOT_YET: Record<'generate' | 'voice', NotYetEntry> = {
+  generate: {
+    title: 'Generate',
+    detail: 'The entry point is here, but nothing is wired behind it yet — no generators have been defined. Ask for one and it lands here.',
+  },
+  voice: {
+    // The ask was explicitly local-only. Chromium's speech recognition ships
+    // the audio to a cloud service, so wiring it up would quietly break the
+    // one requirement the feature had; on-device recognition needs a model
+    // this app does not carry. Saying so beats a button that leaks audio.
+    title: 'Voice mode',
+    detail: 'Not built. Speaking to T.A.I.L.S. should never send your audio anywhere, and the browser’s built-in speech recognition uploads it — so this waits for on-device recognition rather than shipping something that leaks.',
+  },
 };
 
 /**
@@ -83,31 +111,41 @@ type AttachMenuProps = {
  * button, so crossing the gap between the button and the menu does not
  * dismiss it mid-reach.
  */
-function AttachMenu({ onPickFiles, onPickImages }: AttachMenuProps) {
+function ComposerMenu({
+  onPickFiles, onPickImages, onPersonalize, onAssignPet, petName,
+}: ComposerMenuProps) {
   const [open, setOpen] = useState(false);
-  const groupRef = useRef<HTMLDivElement>(null);
+  const [notYet, setNotYet] = useState<NotYetEntry | null>(null);
+
+  const close = () => {
+    setOpen(false);
+    setNotYet(null);
+  };
 
   const choose = (pick: () => void) => {
-    setOpen(false);
+    close();
     pick();
   };
 
+  // `whitespace-nowrap`: the trailing state labels ("Blue Slime", "soon")
+  // otherwise squeeze the two-word entries onto a second line.
+  const itemClass = 'flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-sm transition-colors duration-instant hover:bg-accent focus-visible:bg-accent focus-visible:outline-none';
+
   return (
     <div
-      ref={groupRef}
       className="relative"
       onPointerEnter={() => setOpen(true)}
-      onPointerLeave={() => setOpen(false)}
+      onPointerLeave={close}
       onFocus={() => setOpen(true)}
       onBlur={(event) => {
         // Only when focus actually left the group; moving between the button
         // and a menu item fires blur too.
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) close();
       }}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && open) {
           event.stopPropagation();
-          setOpen(false);
+          close();
         }
       }}
     >
@@ -116,8 +154,8 @@ function AttachMenu({ onPickFiles, onPickImages }: AttachMenuProps) {
         onClick={() => setOpen((current) => !current)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Add attachment"
-        title="Add attachment"
+        aria-label="More"
+        title="Attach, personalize, and more"
         className={cn(
           'rounded-full p-2 text-muted-foreground transition-all duration-quick ease-standard',
           'hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none',
@@ -135,26 +173,67 @@ function AttachMenu({ onPickFiles, onPickImages }: AttachMenuProps) {
           // properties inherit — without this the menu would take the
           // composer's pill corners.
           style={{ '--t-radius': 'var(--radius)' } as React.CSSProperties}
-          className="animate-scale-in absolute bottom-full left-0 z-30 mb-2 w-48 overflow-hidden py-1 shadow-lg"
+          className="animate-scale-in absolute bottom-full left-0 z-30 mb-2 w-60 overflow-hidden py-1 shadow-lg"
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => choose(onPickFiles)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-instant hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-          >
-            <Paperclip className="size-4 text-muted-foreground" aria-hidden="true" />
-            Attach files
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => choose(onPickImages)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-instant hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-          >
-            <ImagePlus className="size-4 text-muted-foreground" aria-hidden="true" />
-            Attach images
-          </button>
+          {notYet ? (
+            <div className="px-3 py-2">
+              <p className="text-sm font-medium">{notYet.title}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{notYet.detail}</p>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setNotYet(null)}
+                className="mt-2 rounded-md border border-border px-2 py-1 text-xs transition-colors duration-quick hover:bg-accent"
+              >
+                Back
+              </button>
+            </div>
+          ) : (
+            <>
+              <button type="button" role="menuitem" onClick={() => choose(onPickFiles)} className={itemClass}>
+                <Paperclip className="size-4 text-muted-foreground" aria-hidden="true" />
+                Attach files
+              </button>
+              <button type="button" role="menuitem" onClick={() => choose(onPickImages)} className={itemClass}>
+                <ImagePlus className="size-4 text-muted-foreground" aria-hidden="true" />
+                Attach images
+              </button>
+
+              <div className="my-1 h-px bg-border" role="separator" />
+
+              <button type="button" role="menuitem" onClick={() => choose(onPersonalize)} className={itemClass}>
+                <Wand2 className="size-4 text-muted-foreground" aria-hidden="true" />
+                Personalize
+              </button>
+              <button type="button" role="menuitem" onClick={() => choose(onAssignPet)} className={itemClass}>
+                <PawPrint className="size-4 text-muted-foreground" aria-hidden="true" />
+                Assign pet
+                {petName ? (
+                  <span className="ml-auto max-w-[7rem] truncate text-xs text-muted-foreground">{petName}</span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setNotYet(NOT_YET.generate)}
+                className={itemClass}
+              >
+                <Sparkles className="size-4 text-muted-foreground" aria-hidden="true" />
+                Generate
+                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">soon</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setNotYet(NOT_YET.voice)}
+                className={itemClass}
+              >
+                <Mic className="size-4 text-muted-foreground" aria-hidden="true" />
+                Voice mode
+                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">soon</span>
+              </button>
+            </>
+          )}
         </div>
       ) : null}
     </div>
@@ -177,6 +256,10 @@ type ComposerProps = {
   suggestion?: string | null;
   /** Called once the suggestion has been accepted or typed over. */
   onSuggestionDismiss?: () => void;
+  /** Opens the pet picker. Owned above so the dialog is not trapped in here. */
+  onAssignPet: () => void;
+  /** The conversation's assigned pet, shown against the menu entry. */
+  petName?: string | null;
 };
 
 /**
@@ -193,6 +276,7 @@ export type ComposerHandle = {
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer({
   sessionId, busy, mode, onModeChange, onSend, onAbort, suggestion, onSuggestionDismiss,
+  onAssignPet, petName,
 }, ref) {
   const [draft, setDraft] = useState('');
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -265,6 +349,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     setDraft('');
     setAttachments([]);
     onSend(content || 'Have a look at this.', attachments);
+  };
+
+  /**
+   * Starts a `/personalize`.
+   *
+   * Filled rather than sent, and with the trailing space the palette leaves,
+   * so the look can be described in the same breath — sending it bare is a
+   * valid move (the command asks what you want), but it should be the user's
+   * move, not the menu's.
+   */
+  const personalize = () => {
+    setDraft('/personalize ');
+    onSuggestionDismiss?.();
+    textareaRef.current?.focus();
   };
 
   const acceptCommand = (command: SlashCommand) => {
@@ -439,9 +537,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           'focus-within:[--t-shadow:0_0_0_1px_hsl(var(--ring)/0.45),0_12px_36px_-12px_hsl(var(--ring)/0.55),0_0_0_6px_hsl(var(--ring)/0.1)]',
         )}
       >
-        <AttachMenu
+        <ComposerMenu
           onPickFiles={() => fileInputRef.current?.click()}
           onPickImages={() => imageInputRef.current?.click()}
+          onPersonalize={personalize}
+          onAssignPet={onAssignPet}
+          petName={petName ?? null}
         />
         <input
           ref={fileInputRef}

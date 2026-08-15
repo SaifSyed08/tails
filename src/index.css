@@ -204,6 +204,20 @@
     --t-selection-fill: hsl(var(--primary) / 0.28);
     --t-selection-ink: currentColor;
     --t-cursor: auto;
+
+    /* The app-drawn cursor and its trail, off at the floor. `--t-trail-length`
+       is 1 rather than 0 because it divides the per-segment falloff, and a zero
+       divisor makes the declaration invalid at computed-value time instead of
+       merely invisible. */
+    --t-pointer-image: none;
+    --t-pointer-size: 0px;
+    --t-pointer-opacity: 0;
+    --t-pointer-blend: normal;
+    --t-trail-image: none;
+    --t-trail-size: 0px;
+    --t-trail-opacity: 0;
+    --t-trail-length: 1;
+    --t-trail-taper: 1;
   }
 
   /* Per-part floor values, mirroring what each part looked like when it was
@@ -314,6 +328,31 @@
   ::selection {
     background-color: var(--t-selection-fill);
     color: var(--t-selection-ink);
+  }
+
+  /**
+   * Where the native cursor always comes back.
+   *
+   * A theme may set `--t-cursor: none` and stand its own drawn shape in for the
+   * pointer. It may not do so here. Over a text field the caret position is
+   * carried by the I-beam, over a resize handle the direction is carried by the
+   * arrows, and over a permission prompt the pointer is how the user knows
+   * which button they are about to press — the same reasoning as the
+   * `[data-tails-critical]` selector ban, one property along.
+   *
+   * These sit in the base layer, so a Tailwind `cursor-*` utility still wins.
+   * That is the point: `cursor-col-resize` on a splitter keeps working without
+   * being listed here, because a utility is an explicit choice and inheritance
+   * from `body` is not.
+   */
+  input,
+  textarea,
+  select,
+  [contenteditable],
+  [contenteditable] *,
+  [data-tails-critical],
+  [data-tails-critical] * {
+    cursor: auto;
   }
 
   /**
@@ -517,6 +556,86 @@
     background-repeat: no-repeat;
     mix-blend-mode: var(--t-ambient-blend);
     animation: var(--t-ambient-animation);
+  }
+
+  /**
+   * The app-drawn cursor.
+   *
+   * Positioned entirely from the pointer tokens, with no per-element JavaScript
+   * at all: the rAF that writes `--pointer-px` moves this in the same frame it
+   * writes them. That matters for exactly one reason — an app-drawn cursor is
+   * painted by the page while the real one is composited by the OS, so it is
+   * already a frame behind, and adding a JS write per frame on top of the token
+   * write would make it two.
+   *
+   * `transform` and `translate` are separate properties and compose in a fixed
+   * order — translate, rotate, scale, then transform — so the centring offset
+   * can live in `transform` while the position lives in `translate`, and
+   * neither has to know about the other.
+   */
+  .t-pointer {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 50;
+    pointer-events: none;
+    width: var(--t-pointer-size);
+    height: var(--t-pointer-size);
+    background-image: var(--t-pointer-image);
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    opacity: var(--t-pointer-opacity);
+    mix-blend-mode: var(--t-pointer-blend);
+    translate: var(--pointer-px) var(--pointer-py);
+    transform: translate(-50%, -50%);
+    will-change: translate;
+  }
+
+  /**
+   * One trail segment.
+   *
+   * The falloff is CSS rather than JavaScript, which is what keeps the frame
+   * loop down to one write per segment: the script sets `translate` and nothing
+   * else, and every question of how big and how faint this segment is gets
+   * answered from `--seg-index` — written once at mount — against the theme's
+   * own tokens. It also means `--t-trail-length`, `--t-trail-opacity` and
+   * `--t-trail-taper` are all live controls for free: bind one, drag it, and
+   * the whole trail re-shapes without the script being told.
+   */
+  .t-trail-segment {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 49;
+    pointer-events: none;
+    background-image: var(--t-trail-image);
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    mix-blend-mode: var(--t-pointer-blend);
+    transform: translate(-50%, -50%);
+    will-change: translate;
+
+    /* 1 at the head of the trail, falling to 0 at its tail. */
+    --seg-fade: max(0, 1 - var(--seg-index) / var(--t-trail-length));
+    /* Taper 1 shrinks each segment toward nothing (a comet); taper 0 keeps the
+       width and lets opacity do all the work (a ribbon). */
+    --seg-scale: calc(1 - var(--t-trail-taper) * (1 - var(--seg-fade)));
+
+    width: calc(var(--t-trail-size) * var(--seg-scale));
+    height: calc(var(--t-trail-size) * var(--seg-scale));
+    opacity: calc(var(--t-trail-opacity) * var(--seg-fade));
+  }
+
+  /**
+   * A trail is motion in the sense the preference means: it moves on its own
+   * after the pointer has passed. The drawn cursor is not — it tracks the
+   * user's own hand and stopping it would be like disabling the real pointer —
+   * so it stays.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .t-trail-segment {
+      display: none;
+    }
   }
 
   /**

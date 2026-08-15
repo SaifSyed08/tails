@@ -120,6 +120,13 @@ export type ChatSession = {
   updatedAt: string;
   pinnedAt: string | null;
   archivedAt: string | null;
+  /**
+   * The companion assigned to this conversation, by pet id.
+   *
+   * Null means "no pet of its own". Whether that falls back to the globally
+   * active pet is the pets module's decision, not this table's.
+   */
+  petId: string | null;
 };
 
 /** A row in the sidebar's conversation list. */

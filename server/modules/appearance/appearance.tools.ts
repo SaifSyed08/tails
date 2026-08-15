@@ -142,6 +142,11 @@ const themeApplyTool = tool(
         themeId,
         args.scope === 'conversation' ? 'session' : 'global',
         args.scope === 'conversation' ? args.sessionId ?? '' : '',
+        // The agent is mid-composition: a `theme_css` layer it wrote a moment
+        // ago is part of the look it is now applying, not a leftover from a
+        // previous one. The user switching theme in Settings means the opposite,
+        // which is why that path (the /apply route) does not pass this.
+        { keepFreeformLayer: true },
       );
 
       return textResult({

@@ -68,9 +68,19 @@ export type InstalledPet = {
   spriteUrl: string;
   spriteSize: { width: number; height: number } | null;
   gridBasis: PetGridBasis;
+  /**
+   * The frame that represents this pet, decided by the server.
+   *
+   * Use it — via `<PetThumbnail>` — instead of working a frame out from the
+   * grid and the idle range. It is always inside the sheet, so a consumer needs
+   * no fallback for a range that points past the end.
+   */
+  preview: { frame: number; column: number; row: number };
   /** ISO timestamp of when this pet entered the library, not when it was made. */
   installedAt: string | null;
   removable: boolean;
+  /** Hidden pets stay on disk and out of the library until the user brings them back. */
+  hidden: boolean;
   active: boolean;
   warnings: string[];
 };
@@ -79,24 +89,46 @@ export type PetProblem = { directory: string; message: string };
 
 export type PetLibrary = {
   pets: InstalledPet[];
+  /** On disk but kept out of the library by the user; returned so hiding is reversible. */
+  hidden: InstalledPet[];
   problems: PetProblem[];
   activePetId: string | null;
   sources: { codex: string; tails: string };
+};
+
+/** What the publisher's validator measured about a sheet. */
+export type CatalogueValidation = {
+  cellSize: string | null;
+  atlasSize: string | null;
+  statesDetected: number | null;
 };
 
 export type CatalogueEntry = {
   id: string;
   displayName: string;
   description: string;
-  previewUrl: string | null;
-  downloadUrl: string | null;
+  kind: string | null;
+  ownerHandle: string | null;
+  uploadedAt: string | null;
   views: number | null;
+  downloads: number | null;
+  likes: number | null;
+  tags: string[];
+  /** A URL on our own server: the renderer never requests anything from codex-pets.net. */
+  previewUrl: string | null;
+  validation: CatalogueValidation | null;
 };
 
-export type CatalogueResult = {
+export type CataloguePage = {
   configured: boolean;
   baseUrl: string | null;
   entries: CatalogueEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  sort: string;
+  query: string;
   error: string | null;
 };
 
@@ -142,8 +174,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Which pet a surface should put on screen.
+ *
+ * `source` says why: a pet assigned to the conversation, the global active pet,
+ * or nothing. A dangling or hidden assignment resolves to the next option down
+ * rather than to an error.
+ */
+export type DisplayPet = {
+  pet: InstalledPet | null;
+  source: 'session' | 'global' | 'none';
+};
+
 export const petsApi = {
   listPets: () => request<PetLibrary>(''),
+
+  /** Resolves `session.petId ?? activePetId` server-side, tolerating both being stale. */
+  resolveDisplayPet: (sessionPetId?: string | null) =>
+    request<DisplayPet>(`/display${sessionPetId ? `?sessionPetId=${encodeURIComponent(sessionPetId)}` : ''}`),
 
   /** Copies a pet folder from anywhere on disk into `~/.tails/pets`. */
   importFromPath: (folderPath: string) =>
@@ -175,5 +223,29 @@ export const petsApi = {
   removePet: (id: string) =>
     request<{ id: string }>(`/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  listCatalogue: () => request<CatalogueResult>('/catalogue'),
+  /**
+   * Hides a pet from the library, or brings it back.
+   *
+   * The only "remove" available for a pet in `~/.codex/pets`: those files
+   * belong to Codex, so the listing is the only thing we may change.
+   */
+  setHidden: (id: string, hidden: boolean) =>
+    request<InstalledPet>(`/${encodeURIComponent(id)}/hidden`, {
+      method: 'POST',
+      body: JSON.stringify({ hidden }),
+    }),
+
+  /** One page of codex-pets.net, sorted by views, proxied through our server. */
+  listCatalogue: (options: { page?: number; pageSize?: number; query?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (options.page) params.set('page', String(options.page));
+    if (options.pageSize) params.set('pageSize', String(options.pageSize));
+    if (options.query?.trim()) params.set('q', options.query.trim());
+    const suffix = params.toString();
+    return request<CataloguePage>(`/catalogue${suffix ? `?${suffix}` : ''}`);
+  },
+
+  /** Downloads and installs one catalogue pet. The id is all the server accepts. */
+  installFromCatalogue: (id: string) =>
+    request<InstalledPet>(`/catalogue/${encodeURIComponent(id)}/install`, { method: 'POST' }),
 };

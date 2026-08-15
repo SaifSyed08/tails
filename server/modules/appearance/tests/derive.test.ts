@@ -201,6 +201,62 @@ test('an ambient recipe emits a moving layer and the keyframes it references', (
   assert.doesNotMatch(serializeStylesheet(deriveTokens(THEME_PRESETS.paper)), /@keyframes/);
 });
 
+test('an app-drawn cursor and trail are emitted as paint, never as a resource', () => {
+  // The constraint that shapes this whole feature: `cursor: url(...)` is
+  // refused, so a custom cursor cannot be an imported image. It is a gradient
+  // the app draws and moves with the pointer.
+  const spec = baseSpec({
+    interaction: {
+      caretShape: 'auto',
+      cursor: 'auto',
+      pointer: {
+        kind: 'halo',
+        size: 64,
+        opacity: 0.5,
+        blend: 'screen',
+        replace: true,
+        trail: { kind: 'comet', length: 10, size: 14, opacity: 0.4 },
+      },
+    },
+  });
+  const tokens = deriveTokens(spec).light.interaction ?? {};
+
+  assert.match(tokens['t-pointer-image'], /^radial-gradient\(/);
+  assert.doesNotMatch(tokens['t-pointer-image'], /url\(/);
+  assert.match(tokens['t-trail-image'], /^radial-gradient\(/);
+
+  // Strength stays on the element rather than being baked into the pixels, the
+  // opposite of the rule textures follow — a cursor is its own element with one
+  // layer, so its opacity is free, and leaving it free is what makes "how
+  // strong" a control that binds a token directly.
+  assert.equal(tokens['t-pointer-opacity'], '0.5');
+  assert.equal(tokens['t-trail-opacity'], '0.4');
+
+  // Size rides a live-knob multiplier, undeclared so it resolves to 1.
+  assert.match(tokens['t-pointer-size'], /var\(--t-pointer-scale, 1\)/);
+
+  // `replace` reaches the page through the token that already exists, so there
+  // is no second place for "is the native cursor hidden" to disagree.
+  assert.equal(tokens['t-cursor'], 'none');
+
+  // Comet tapers, ribbon does not; one number rather than two shapes.
+  assert.equal(tokens['t-trail-taper'], '1');
+  assert.equal(tokens['t-trail-length'], '10');
+});
+
+test('a theme that asks for nothing draws no cursor and divides by no zero', () => {
+  const tokens = deriveTokens(THEME_PRESETS.paper).light.interaction ?? {};
+
+  assert.equal(tokens['t-pointer-image'], 'none');
+  assert.equal(tokens['t-trail-image'], 'none');
+  assert.equal(tokens['t-pointer-opacity'], '0');
+  assert.equal(tokens['t-cursor'], 'auto', 'a theme with no drawn cursor must leave the native one alone');
+
+  // The trail length divides the per-segment falloff in CSS, and a zero there
+  // invalidates the whole declaration rather than merely hiding the segment.
+  assert.equal(tokens['t-trail-length'], '1');
+});
+
 test('caret, selection and pointer are themed rather than left to the browser', () => {
   const spec = baseSpec({
     interaction: {

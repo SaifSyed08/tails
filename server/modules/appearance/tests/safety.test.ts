@@ -58,6 +58,71 @@ test('ENFORCED: the ephemeral layers never touch the database', () => {
   }
 });
 
+test('an ephemeral layer cannot outlive the look it was written for', () => {
+  // A real leak, found from a user report: "one of the styles gave me a cursor
+  // glow but I'm not sure if that was supposed to be permanent". It was not.
+  // The freeform CSS layer is adopted as its own stylesheet, and neither
+  // `unbind` nor `applyTheme` ever dropped it — so an effect written into it
+  // survived switching to a different theme *and* survived "reset appearance",
+  // and the only things that cleared it were a reload and the panic key. To the
+  // user that is indistinguishable from a permanent app feature with no switch.
+  //
+  // Asserted against the source for the same reason as the tests around it: the
+  // bug was the *absence* of a call, and absences do not show up in a unit test
+  // that only checks what a function returns.
+  const unbind = methodBody(themeService, 'unbind');
+  assert.match(unbind, /this\.clearFreeformCss\(/, 'unbind must drop the freeform layer: "reset appearance" has to mean every layer.');
+  assert.match(unbind, /this\.clearControls\(/, 'unbind must drop the published controls too — a knob wired to a theme that is gone is a knob that does nothing.');
+
+  const apply = methodBody(themeService, 'applyTheme');
+  assert.match(apply, /keepFreeformLayer/, 'switching theme must retire the freeform layer unless the caller opts out.');
+
+  // The opt-out belongs to the agent and only to the agent: it is
+  // mid-composition and the CSS it wrote a moment ago is part of the look it is
+  // applying. The user picking a theme in Settings means the opposite, so the
+  // HTTP route must not pass it.
+  const tools = read('server', 'modules', 'appearance', 'appearance.tools.ts');
+  assert.match(tools, /keepFreeformLayer: true/);
+  const routes = read('server', 'modules', 'appearance', 'appearance.routes.ts');
+  assert.doesNotMatch(routes, /keepFreeformLayer/, 'the Settings apply path must start from a clean slate.');
+});
+
+test('the pointer writer does not run when nothing reads it', () => {
+  // An always-on rAF loop writing four custom properties on :root invalidates
+  // computed style across the document on every frame the mouse moves. For a
+  // feature no bound theme uses, that is a battery cost with no benefit — and
+  // it was shipping that way.
+  const pointer = read('src', 'components', 'appearance', 'pointerTokens.ts');
+  assert.match(pointer, /if \(!needed\(\)\) return;/, 'the move handler must bail before scheduling a frame when nothing consumes the tokens.');
+  assert.match(pointer, /adoptedStyleSheets/, 'the check must look at what the theme and freeform layers actually reference.');
+  assert.match(pointer, /export function refreshPointerTracking/, 'the answer has to be re-derivable when the appearance changes.');
+
+  // And the trail's own loop is mounted only when there is a trail.
+  const layer = read('src', 'components', 'appearance', 'PointerLayer.tsx');
+  assert.match(layer, /if \(drawn\.segments === 0\) return undefined;/);
+  assert.match(layer, /prefers-reduced-motion: reduce/, 'a trail is autonomous motion and must honour the preference.');
+});
+
+test('an app-drawn cursor never takes the native one away where it is load-bearing', () => {
+  // `--t-cursor: none` is how a theme hides the real pointer. Over a text
+  // field, a resize handle or a permission prompt, the pointer's shape and
+  // exact position are carrying information — the same reasoning as the
+  // [data-tails-critical] selector ban, one property along.
+  const css = read('src', 'index.css');
+  const start = css.indexOf('Where the native cursor always comes back');
+  assert.notEqual(start, -1, 'index.css has lost the native-cursor safety rule');
+
+  // The selector list and its declaration, taken as one block so the assertion
+  // cannot pass on a selector list that has drifted away from its rule.
+  const rule = css.slice(start, css.indexOf('cursor: auto;', start) + 'cursor: auto;'.length);
+  for (const selector of ['input', 'textarea', '[contenteditable]', '[data-tails-critical]']) {
+    assert.ok(
+      rule.includes(selector),
+      `${selector} must keep the native cursor when a theme sets --t-cursor: none.`,
+    );
+  }
+});
+
 test('ENFORCED: nothing ephemeral is served from /resolve either', () => {
   // The other half of non-persistence. Even without a database write, an
   // ephemeral layer replayed on boot from `resolveAppearance` would survive a

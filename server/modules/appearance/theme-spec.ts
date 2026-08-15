@@ -4,7 +4,11 @@ import {
   CONTRAST_TARGET_NAMES,
   SURFACE_ANCHOR_NAMES,
 } from '@/modules/appearance/palette.js';
-import { colorRefSchema, surfacesMapSchema } from '@/modules/appearance/surface-recipe.js';
+import {
+  BLEND_MODES,
+  colorRefSchema,
+  surfacesMapSchema,
+} from '@/modules/appearance/surface-recipe.js';
 
 /**
  * The authored theme surface — everything a model may decide about how the app
@@ -117,6 +121,80 @@ export const themeSpecV1Schema = z.object({
 
 export type ThemeSpecV1 = z.infer<typeof themeSpecV1Schema>;
 
+export const POINTER_KINDS = ['system', 'halo', 'ring', 'dot'] as const;
+
+export type PointerKind = (typeof POINTER_KINDS)[number];
+
+export const TRAIL_KINDS = ['none', 'comet', 'ribbon'] as const;
+
+export type TrailKind = (typeof TRAIL_KINDS)[number];
+
+/**
+ * An app-drawn cursor, and the trail behind it.
+ *
+ * `cursor: url(...)` is refused by the validator and always will be — a
+ * stylesheet that can name a remote image can report where the user is
+ * pointing, at the resolution of every hover. So a custom cursor here is not an
+ * imported picture. It is either one of the shapes the operating system already
+ * draws (the `cursor` field above) or a themed element that follows
+ * `--pointer-px` / `--pointer-py`, which is what this group describes.
+ *
+ * The thing to understand before using `replace`: an app-drawn cursor is
+ * painted by the page and therefore lands one frame after the pointer event,
+ * while the real cursor is composited by the OS and never lags. On a large soft
+ * `halo` a frame of offset is invisible. On a small hard `dot` standing in for
+ * the actual pointer it is immediately obvious and feels broken. So the default
+ * is a *companion* — the drawn shape rides along with the real cursor still
+ * visible — and `replace` is the deliberate opt-in for authors who want the
+ * native one gone and have chosen a shape that survives the lag.
+ *
+ * Even with `replace`, the native cursor comes back over text fields,
+ * contenteditable regions and anything marked `[data-tails-critical]`. Those
+ * are the places where the pointer's exact position or its shape is carrying
+ * information the user needs, and taking it away there is not a style choice.
+ */
+const trailRecipeSchema = z.object({
+  kind: z.enum(TRAIL_KINDS).default('none')
+    .describe('The decaying trail behind the pointer. "comet" tapers to nothing; "ribbon" keeps its width and only fades. Both retract to nothing when the mouse stops, because a trail that pools into a blob under a stationary cursor is the failure mode of every implementation of this.'),
+  length: z.number().int().min(2).max(16).default(8)
+    .describe('How many segments, 2-16, which is also how far back the trail reaches. The segments are spaced by distance travelled rather than by time, so a fast flick draws a long trail and a slow drag draws a short one — which is what a trail is supposed to mean.'),
+  size: z.number().min(2).max(80).default(12)
+    .describe('Diameter of the widest segment in pixels. Usually smaller than the cursor.'),
+  opacity: z.number().min(0).max(1).default(0.35)
+    .describe('Opacity of the nearest segment, 0-1; the rest fall off from there. The single best knob to publish as a control.'),
+  color: colorRefSchema.optional()
+    .describe('Trail colour. Omit to follow the cursor colour.'),
+}).strict().default({ kind: 'none', length: 8, size: 12, opacity: 0.35 })
+  .describe('Motion, so it is switched off entirely for anyone who asked for reduced motion, and it never runs an animation frame loop while the pointer is still.');
+
+const pointerRecipeSchema = z.object({
+  kind: z.enum(POINTER_KINDS).default('system')
+    .describe('The drawn shape that follows the mouse. "system" draws nothing and leaves the native cursor alone. "halo" is a soft glow — the safest and the one that reads as atmosphere rather than as a replacement pointer. "ring" is a hollow circle. "dot" is a filled disc.'),
+  size: z.number().min(4).max(160).default(28)
+    .describe('Diameter in pixels, 4-160. A halo wants 40-120 and works because it is soft and large; a dot or ring standing in for the pointer wants 10-20. Rides a live-control multiplier, so this is the value the panel opens showing.'),
+  color: colorRefSchema.optional()
+    .describe('Colour of the drawn shape. Omit for the accent. Alpha here is fine but `opacity` is the better knob, because a control can bind it directly.'),
+  opacity: z.number().min(0).max(1).default(0.45)
+    .describe('How present the shape is, 0-1. Default 0.45. A halo above about 0.6 stops being atmosphere and starts obscuring what is under it.'),
+  blend: z.enum(BLEND_MODES).default('screen')
+    .describe('How the shape blends with the page. "screen" is right on dark grounds, "multiply" on light ones, "normal" if the shape should read as an object rather than as light.'),
+  replace: z.boolean().default(false)
+    .describe('Hide the native cursor and let the drawn shape stand in for it. Read the note on lag before setting this: it is correct for a large soft shape and a mistake for a small hard one. The native cursor returns over text fields and critical controls regardless.'),
+  trail: trailRecipeSchema,
+// Zod's `.default()` wants a complete output object, so a group whose own
+// fields are all defaulted still has to be spelled out at the group level. The
+// nested one is read back off its schema rather than written twice, because two
+// copies of a default is one copy that eventually stops matching.
+}).strict().default(() => ({
+  kind: 'system' as const,
+  size: 28,
+  opacity: 0.45,
+  blend: 'screen' as const,
+  replace: false,
+  trail: trailRecipeSchema.parse(undefined),
+}))
+  .describe('An app-drawn cursor and its trail. Off by default; "system" means the native pointer and nothing else.');
+
 export const themeSpecV2Schema = z.object({
   specVersion: z.literal(2),
 
@@ -172,8 +250,13 @@ export const themeSpecV2Schema = z.object({
       .describe('Colour of selected text itself. Omit to leave the text its own colour, which is usually right when the fill is translucent.'),
     cursor: z.enum(['auto', 'default', 'crosshair', 'cell', 'copy', 'progress', 'help'])
       .default('auto')
-      .describe('The mouse pointer over the application body. "auto" is almost always correct. `cursor` inherits, so anything else here changes the pointer over every surface that has not set its own — a crosshair is a strong, committed choice and a slightly hostile one.'),
-  }).strict().default({ caretShape: 'auto', cursor: 'auto' })
+      .describe('The native mouse pointer over the application body, chosen from the shapes the operating system already draws. "auto" is almost always correct. `cursor` inherits, so anything else here changes the pointer over every surface that has not set its own — a crosshair is a strong, committed choice and a slightly hostile one.'),
+    pointer: pointerRecipeSchema,
+  }).strict().default(() => ({
+    caretShape: 'auto' as const,
+    cursor: 'auto' as const,
+    pointer: pointerRecipeSchema.parse(undefined),
+  }))
     .describe('Caret, text selection and pointer. Small surface, disproportionate effect: these are the details that separate a themed app from a recoloured one, and none of them were reachable before.'),
 
   surfaces: surfacesMapSchema.default({})

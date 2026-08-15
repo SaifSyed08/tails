@@ -38,6 +38,16 @@ system has failed, and so have you. Build the thing that was asked for.
 If it genuinely cannot be built, name the missing primitive. That is a useful
 answer. "Here is the nearest shipped look" is not.
 
+## The shape of a session
+
+\`theme_list\` (this) to read → compose a spec → \`theme_preview\` to show it
+and get the contrast report → \`theme_propose\` if the change is substantial,
+then ask → \`theme_apply\` to bind it → \`theme_controls\` to publish the knobs.
+\`theme_css\` slots in wherever the spec runs out of vocabulary.
+
+Preview is free and nothing needs undoing, so iterate there rather than
+reasoning in your head about what a spec will look like.
+
 ## Where a look actually lives
 
 Not in the palette. Two themes with the same palette and different \`surfaces\`
@@ -75,13 +85,70 @@ a soft wide ambient shadow so it floats. Add \`refraction\` for the edge.
   \`--pointer-py\`** (pixels) are published on \`:root\` and follow the mouse.
   A spotlight is
   \`radial-gradient(circle at var(--pointer-x) var(--pointer-y), …)\`.
-- **\`ambient\`** on a surface gives slow background motion — \`drift\`,
-  \`clouds\`, \`grid\`, \`pulse\` — with hue, strength, speed and scale. It
-  inherits like texture, so setting it on \`default\` puts it behind the whole
-  app, and a part that should stay still needs \`ambient: { kind: "none" }\`.
-- **\`interaction\`** covers the caret (colour, and \`block\` / \`underscore\`
-  shapes), the text selection, and the mouse cursor. A phosphor-green block
-  caret is most of what sells a terminal.
+- **\`surfaces.<part>.ambient\`** gives slow background motion — \`drift\`,
+  \`clouds\`, \`grid\`, \`pulse\` — with \`hue\`, \`strength\`, \`speed\` and
+  \`scale\`. It inherits like texture, so setting it on \`default\` puts it
+  behind the whole app *including every card*, and a part that should stay still
+  needs \`ambient: { kind: "none" }\` of its own. Keep \`speed\` at 60–120
+  seconds: ambient means the user senses the screen is alive without ever
+  catching it moving.
+- **\`interaction\`** covers the caret — \`caretColor\` and \`caretShape\`,
+  where \`block\` is the fat terminal cursor and \`underscore\` the DOS one —
+  plus \`selectionFill\` / \`selectionInk\` and \`cursor\`, which picks from the
+  shapes the OS already draws. A phosphor-green block caret is most of what
+  sells a terminal.
+
+## The cursor
+
+\`cursor: url(...)\` is refused and always will be, so a custom cursor is never
+an imported image. Two things are available instead, and they compose.
+
+**\`interaction.cursor\`** picks a native shape: \`auto\`, \`default\`,
+\`crosshair\`, \`cell\`, \`copy\`, \`progress\`, \`help\`. It inherits, so
+anything but \`auto\` changes the pointer over every surface that has not set
+its own. A crosshair everywhere is a committed choice and a slightly hostile
+one.
+
+**\`interaction.pointer\`** is a shape the app draws and moves with the mouse:
+
+\`\`\`
+pointer: {
+  kind: 'halo',        // system | halo | ring | dot
+  size: 72,            // px
+  opacity: 0.35,
+  blend: 'screen',     // screen on dark grounds, multiply on light
+  replace: false,
+  trail: { kind: 'comet', length: 10, size: 14, opacity: 0.4 },
+}
+\`\`\`
+
+\`kind\` picks the shape: \`halo\` is a soft glow and the one that reads as
+atmosphere rather than as a replacement pointer; \`ring\` is a hollow circle;
+\`dot\` is a filled disc; \`system\` draws nothing.
+
+Read this before setting \`replace\`. A drawn cursor is painted by the page, so
+it lands **one frame after** the pointer event, while the real cursor is
+composited by the OS and never lags. On a large soft \`halo\` that offset is
+invisible. On a small hard \`dot\` standing in for the actual pointer it is
+immediately obvious and feels broken. The default is a *companion* — the drawn
+shape rides along with the real cursor still visible — and that is the version
+you should reach for. \`replace: true\` is for a large soft shape, deliberately
+chosen.
+
+The native cursor comes back over text fields, contenteditable regions and
+anything marked \`[data-tails-critical]\` no matter what you set. Those are the
+places where the pointer's shape or exact position is carrying information, and
+that is not a style decision. Elements with their own \`cursor\` — resize
+handles and the like — keep it too.
+
+\`trail.kind\` is \`comet\`, which tapers each segment toward nothing, or
+\`ribbon\`, which keeps the width and lets opacity do all the work.
+
+\`trail\` is autonomous motion: it is switched off entirely under
+\`prefers-reduced-motion\`, and it runs no animation frame loop while the
+pointer is still. Segments are spaced by **distance travelled**, not by time, so
+a fast flick draws a long trail and a slow drag a short one, and a stationary
+cursor retracts the trail to nothing instead of pooling it into a blob.
 
 ## Then publish the knobs
 
@@ -91,10 +158,23 @@ thickness; a CRT wants scanline intensity and glow; clouds want speed. Dragging
 one repaints instantly.
 
 A control binds a CSS custom property, so it only works if something reads that
-property through \`var()\`. Two properties the derived theme already reads:
+property through \`var()\`. These the derived theme already reads, so you can
+bind them with no \`theme_css\` layer at all:
 
-- \`--t-backdrop-scale\` — multiplies every backdrop blur in the app.
-- \`--t-ambient-speed\` — multiplies every ambient cycle time.
+| property | what dragging it does |
+|---|---|
+| \`--t-backdrop-scale\` | multiplies every backdrop blur in the app |
+| \`--t-ambient-speed\` | multiplies every ambient cycle time |
+| \`--t-pointer-scale\` | resizes the drawn cursor |
+| \`--t-pointer-opacity\` | how present the drawn cursor is |
+| \`--t-trail-opacity\` | how strong the trail is |
+| \`--t-trail-length\` | how far the trail reaches — re-shapes it live |
+| \`--t-trail-taper\` | 1 tapers to a comet, 0 keeps a ribbon's width |
+| \`--t-selection-fill\`, \`--t-caret-color\` | colour controls that need no setup |
+
+A cursor look almost writes its own panel: *Glow size* on
+\`--t-pointer-scale\`, *Glow strength* on \`--t-pointer-opacity\`, *Trail
+length* on \`--t-trail-length\`.
 
 For anything else, introduce the property yourself in a \`theme_css\` layer —
 write \`blur(var(--glass-blur, 20px))\` rather than \`blur(20px)\` — and then

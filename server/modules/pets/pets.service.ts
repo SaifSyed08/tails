@@ -23,15 +23,18 @@ import {
 import { petsRepository, type PetSource } from '@/modules/pets/pets.repository.js';
 import {
   createRemoteCatalogue,
-  MAX_CATALOGUE_ENTRIES,
-  type CatalogueResult,
+  DEFAULT_PAGE_SIZE,
+  type CataloguePage,
+  type CatalogueValidation,
 } from '@/modules/pets/remote-catalogue.js';
 import {
+  DEFAULT_SPRITE_FPS,
   inferFrameGrid,
   readImageSize,
   spriteContentType,
   type GridBasis,
 } from '@/modules/pets/sprite-metrics.js';
+import { listZipEntries, readZipEntry, ZipError } from '@/modules/pets/zip.js';
 import { AppError, readRecord, readString } from '@/shared/utils.js';
 
 /**
@@ -80,6 +83,21 @@ export type InstalledPet = {
   spriteSize: { width: number; height: number } | null;
   gridBasis: PetGridBasis;
   /**
+   * The one frame that represents this pet.
+   *
+   * Exists because three different surfaces were each working it out from
+   * `frame.columns` and the idle state, defensively, with different fallbacks —
+   * which is three chances to get it wrong and one place to fix it when it is.
+   * This is the answer: the first frame of the idle loop, as an index and as
+   * its column/row in the grid.
+   *
+   * To draw it, put the sheet on an element `frame.width` x `frame.height` and
+   * offset the background by `-column * width, -row * height` (scaled to
+   * taste). `PetThumbnail` in the marketplace does exactly that and is the
+   * component to reuse rather than re-derive.
+   */
+  preview: { frame: number; column: number; row: number };
+  /**
    * When T.A.I.L.S. first recorded this pet, as an ISO timestamp.
    *
    * Null until the first scan has stored it. This is "when it appeared in your
@@ -89,6 +107,8 @@ export type InstalledPet = {
   installedAt: string | null;
   /** True only for pets under `~/.tails/pets`. */
   removable: boolean;
+  /** True when the user has hidden it. Hidden pets are listed separately, never silently dropped. */
+  hidden: boolean;
   active: boolean;
   /** Non-fatal complaints — a mis-sized state range, a sheet we could not measure. */
   warnings: string[];
@@ -99,6 +119,8 @@ export type PetProblem = { directory: string; message: string };
 
 export type PetLibrary = {
   pets: InstalledPet[];
+  /** Pets on disk the user has hidden. Returned so hiding is visibly reversible. */
+  hidden: InstalledPet[];
   problems: PetProblem[];
   activePetId: string | null;
   sources: { codex: string; tails: string };
@@ -176,6 +198,28 @@ function toIsoTimestamp(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const parsed = new Date(`${raw.replace(' ', 'T')}Z`);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
+ * Which frame stands in for the whole pet.
+ *
+ * The first frame of `idle`, clamped into the grid. Clamping is the point: a
+ * range that survived validation can still be pointed at a grid the user then
+ * shrank, and a preview that addresses a cell outside the sheet renders as
+ * nothing — which every caller then has to invent a fallback for. Answering
+ * once, always in range, is what removes those fallbacks.
+ */
+function describePreviewFrame(
+  grid: FrameGrid,
+  states: PetStates,
+): { frame: number; column: number; row: number } {
+  const lastFrame = Math.max(0, grid.columns * grid.rows - 1);
+  const frame = Math.min(Math.max(0, states.idle.start), lastFrame);
+  return {
+    frame,
+    column: frame % grid.columns,
+    row: Math.floor(frame / grid.columns),
+  };
 }
 
 function readHeader(filePath: string): Buffer | null {
@@ -296,8 +340,10 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     spriteUrl: `/api/pets/${encodeURIComponent(definition.data.id)}/sprite`,
     spriteSize: size ? { width: size.width, height: size.height } : null,
     gridBasis,
+    preview: describePreviewFrame(grid, states),
     installedAt: toIsoTimestamp(override?.installedAt),
     removable: source === 'tails',
+    hidden: Boolean(override?.hiddenAt),
     active: false,
     warnings,
   };
@@ -430,6 +476,137 @@ function decodeImagePayload(value: string): Buffer {
   return bytes;
 }
 
+/**
+ * Caps on a pet archive.
+ *
+ * A pet is two files. Thirty-two members is room for a stray README and a
+ * `__MACOSX` folder without being room for a directory bomb, and no single
+ * member may inflate past the sprite limit the local importer already enforces.
+ */
+const ARCHIVE_LIMITS = {
+  maxEntries: 32,
+  maxEntryBytes: MAX_SPRITE_BYTES,
+  maxTotalBytes: MAX_SPRITE_BYTES + 256 * 1024,
+};
+
+/** A manifest is a few hundred bytes; anything near this is not one. */
+const MAX_MANIFEST_BYTES = 64 * 1024;
+
+/**
+ * Pulls the manifest and the spritesheet out of a downloaded archive.
+ *
+ * The archive is third-party content fetched over the network, so nothing in it
+ * is trusted, and — importantly — **no name from the archive is ever used to
+ * build a filesystem path**. Members are matched by basename, the two that
+ * matter are read into memory, and the destination path is computed from the
+ * pet id alone. Zip-slip is therefore not defended against so much as made
+ * unreachable; `zip.ts` still rejects escaping names, because an archive that
+ * contains one is telling us what it is.
+ */
+function readPetArchive(bytes: Buffer): { file: PetFile; spriteBytes: Buffer; spriteName: string } {
+  let entries;
+  try {
+    entries = listZipEntries(bytes, ARCHIVE_LIMITS);
+  } catch (error) {
+    throw new AppError(
+      error instanceof ZipError ? error.message : 'That download is not a readable ZIP archive.',
+      { code: 'PET_ARCHIVE_INVALID', statusCode: 422 },
+    );
+  }
+
+  const manifestEntry = entries.find(
+    (entry) => path.posix.basename(entry.name).toLowerCase() === PET_MANIFEST_NAME,
+  );
+  if (!manifestEntry) {
+    throw new AppError(`That archive has no ${PET_MANIFEST_NAME}.`, {
+      code: 'PET_MANIFEST_NOT_FOUND',
+      statusCode: 422,
+    });
+  }
+  if (manifestEntry.uncompressedSize > MAX_MANIFEST_BYTES) {
+    throw new AppError(`That archive's ${PET_MANIFEST_NAME} is implausibly large.`, {
+      code: 'PET_MANIFEST_TOO_LARGE',
+      statusCode: 422,
+    });
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readZipEntry(bytes, manifestEntry, MAX_MANIFEST_BYTES).toString('utf8'));
+  } catch (error) {
+    throw new AppError(
+      `That archive's ${PET_MANIFEST_NAME} is not valid JSON: ${error instanceof Error ? error.message : 'unknown error'}`,
+      { code: 'PET_MANIFEST_INVALID', statusCode: 422 },
+    );
+  }
+
+  const file = petFileSchema.safeParse(raw);
+  if (!file.success) {
+    throw toValidationError(`That archive's ${PET_MANIFEST_NAME} did not match the schema.`, file.error.issues);
+  }
+
+  const wanted = path.posix.basename(file.data.spritesheetPath ?? DEFAULT_SPRITESHEET_NAME).toLowerCase();
+  const images = entries.filter((entry) => /\.(webp|png|gif|apng)$/i.test(entry.name));
+  const spriteEntry = images.find((entry) => path.posix.basename(entry.name).toLowerCase() === wanted)
+    // A single image and a manifest naming something else is a mislabelled
+    // archive, not an ambiguous one.
+    ?? (images.length === 1 ? images[0] : undefined);
+
+  if (!spriteEntry) {
+    throw new AppError('That archive has no spritesheet matching its manifest.', {
+      code: 'PET_SPRITE_NOT_FOUND',
+      statusCode: 422,
+    });
+  }
+
+  let spriteBytes: Buffer;
+  try {
+    spriteBytes = readZipEntry(bytes, spriteEntry, MAX_SPRITE_BYTES);
+  } catch (error) {
+    throw new AppError(
+      error instanceof ZipError ? error.message : 'That spritesheet could not be read from the archive.',
+      { code: 'PET_ARCHIVE_INVALID', statusCode: 422 },
+    );
+  }
+
+  return { file: file.data, spriteBytes, spriteName: path.posix.basename(spriteEntry.name) };
+}
+
+/**
+ * Turns the catalogue's own validation report into a frame grid.
+ *
+ * This is the one place a grid arrives as a *statement* rather than a guess:
+ * the publisher's validator measured the atlas and the cell, so a pet installed
+ * from the catalogue does not have to go through the inference tiers at all.
+ * Anything that does not parse or divide evenly is dropped rather than
+ * patched — a half-understood report is worth less than an honest inference.
+ */
+function gridFromValidation(validation: CatalogueValidation | null): FrameGrid | undefined {
+  const cell = parseDimensions(validation?.cellSize);
+  const atlas = parseDimensions(validation?.atlasSize);
+  if (!cell || !atlas) return undefined;
+  if (atlas.width % cell.width !== 0 || atlas.height % cell.height !== 0) return undefined;
+
+  const candidate = frameGridSchema.safeParse({
+    width: cell.width,
+    height: cell.height,
+    columns: atlas.width / cell.width,
+    rows: atlas.height / cell.height,
+    fps: DEFAULT_SPRITE_FPS,
+  });
+
+  return candidate.success ? candidate.data : undefined;
+}
+
+/** Parses the `"1536x1872"` shape the catalogue reports sizes in. */
+function parseDimensions(value: string | null | undefined): { width: number; height: number } | null {
+  const match = /^(\d{1,5})x(\d{1,5})$/i.exec(value?.trim() ?? '');
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
 export const petsService = {
   /**
    * Everything installed, from both sources.
@@ -462,29 +639,35 @@ export const petsService = {
       });
     }
 
-    // A pet can be deleted from disk by hand; a dangling activation would then
-    // report an active pet that cannot render.
-    const storedActive = petsRepository.getActivePetId();
-    const activePetId = storedActive && byId.has(storedActive) ? storedActive : null;
-    if (storedActive && !activePetId) petsRepository.setActivePetId(null);
-
     // Read back after the loop above, so a pet discovered for the first time on
     // this very scan still reports the moment it entered the library rather
     // than nothing at all.
-    const firstSeen = new Map(
-      petsRepository.listRecords().map((record) => [record.id, toIsoTimestamp(record.installedAt)]),
-    );
+    const records = new Map(petsRepository.listRecords().map((record) => [record.id, record]));
 
-    const pets = [...byId.values()]
-      .map((pet) => ({
-        ...pet,
-        active: pet.definition.id === activePetId,
-        installedAt: firstSeen.get(pet.definition.id) ?? pet.installedAt,
-      }))
+    const all = [...byId.values()]
+      .map((pet) => {
+        const record = records.get(pet.definition.id);
+        return {
+          ...pet,
+          installedAt: record ? toIsoTimestamp(record.installedAt) : pet.installedAt,
+          hidden: record ? Boolean(record.hiddenAt) : pet.hidden,
+        };
+      })
       .sort((left, right) => left.definition.displayName.localeCompare(right.definition.displayName));
 
+    const visible = all.filter((pet) => !pet.hidden);
+
+    // A pet can be deleted from disk by hand, or hidden; a dangling activation
+    // would then report an active pet that is not in the library.
+    const storedActive = petsRepository.getActivePetId();
+    const activePetId = storedActive && visible.some((pet) => pet.definition.id === storedActive)
+      ? storedActive
+      : null;
+    if (storedActive && !activePetId) petsRepository.setActivePetId(null);
+
     return {
-      pets,
+      pets: visible.map((pet) => ({ ...pet, active: pet.definition.id === activePetId })),
+      hidden: all.filter((pet) => pet.hidden),
       problems,
       activePetId,
       sources: { codex: CODEX_PETS_DIR, tails: TAILS_PETS_DIR },
@@ -493,6 +676,49 @@ export const petsService = {
 
   getPet(id: string): InstalledPet {
     return requirePet(id);
+  },
+
+  /**
+   * The same lookup, for callers where "not installed" is an ordinary answer.
+   *
+   * Pets are folders, and folders get deleted — the Codex ones without us doing
+   * anything at all. So a stored reference to a pet that is no longer there is
+   * a normal state of the world, not an error: anything holding a pet id (a
+   * conversation's assignment, the global active pet) needs to ask "is this
+   * still a pet?" and get `null`, rather than have to catch an exception to
+   * find out. `getPet` keeps throwing because a request for a named pet that
+   * does not exist is genuinely a 404.
+   */
+  findPet(id: string | null | undefined): InstalledPet | null {
+    if (!id) return null;
+    try {
+      return requirePet(id);
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Which pet should be on screen.
+   *
+   * The single answer to that question, so no surface has to reimplement the
+   * precedence: a pet assigned to the conversation wins, the global active pet
+   * is the fallback, and anything dangling or hidden is treated as absent
+   * rather than as a failure. Hidden counts as absent deliberately — a pet the
+   * user removed from their library should not reappear because a conversation
+   * still points at it.
+   */
+  resolveDisplayPet(sessionPetId?: string | null): {
+    pet: InstalledPet | null;
+    source: 'session' | 'global' | 'none';
+  } {
+    const assigned = this.findPet(sessionPetId);
+    if (assigned && !assigned.hidden) return { pet: assigned, source: 'session' };
+
+    const active = this.findPet(petsRepository.getActivePetId());
+    if (active && !active.hidden) return { pet: active, source: 'global' };
+
+    return { pet: null, source: 'none' };
   },
 
   /**
@@ -692,8 +918,115 @@ export const petsService = {
     };
   },
 
-  /** The remote library, or an honest "not configured". See remote-catalogue.ts. */
-  listRemoteCatalogue(limit = MAX_CATALOGUE_ENTRIES): Promise<CatalogueResult> {
-    return catalogue.listTopPets(limit);
+  /**
+   * Hides a pet from the library, or brings it back.
+   *
+   * The answer to "there are two Sonics and I only want one". Both are real
+   * folders in `~/.codex/pets`, which belongs to Codex and is read-only to us,
+   * so the only thing we can honestly change is our own listing — the files
+   * stay exactly where Codex put them.
+   */
+  setPetHidden(id: string, hidden: boolean): InstalledPet {
+    const pet = requirePet(id);
+
+    petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
+    petsRepository.setHidden(pet.definition.id, hidden);
+
+    // A hidden pet must not stay on screen; un-hiding does not put it back,
+    // because that would be a second decision the user did not make.
+    if (hidden && petsRepository.getActivePetId() === pet.definition.id) {
+      petsRepository.setActivePetId(null);
+    }
+
+    return requirePet(id);
+  },
+
+  /** One page of the remote library, or an honest "could not reach it". See remote-catalogue.ts. */
+  listRemoteCatalogue(options: { page?: number; pageSize?: number; query?: string } = {}): Promise<CataloguePage> {
+    return catalogue.listPets({
+      page: options.page,
+      pageSize: options.pageSize ?? DEFAULT_PAGE_SIZE,
+      query: options.query,
+    });
+  },
+
+  /** Proxies a catalogue thumbnail so the renderer never talks to the remote host. */
+  fetchCataloguePreview(id: string): Promise<{ bytes: Buffer; contentType: string }> {
+    const parsed = petIdSchema.safeParse(id);
+    if (!parsed.success) {
+      throw new AppError('That is not a valid pet id.', { code: 'PET_INVALID_ID', statusCode: 400 });
+    }
+    return catalogue.fetchPreview(parsed.data);
+  },
+
+  /**
+   * Downloads one pet from the catalogue and installs it.
+   *
+   * On demand, one pet at a time: the library is 3,040 pets at roughly 1.7MB
+   * each, so "import them all" is five gigabytes of somebody else's artwork and
+   * the wrong shape for this feature entirely.
+   *
+   * The caller supplies an **id, never a URL**. The URL comes from what the
+   * catalogue itself advertised and must sit on the catalogue's own origin, so
+   * this endpoint cannot be talked into fetching anything else. Past that, the
+   * archive is treated as hostile until proven otherwise — see `readPetArchive`
+   * and `zip.ts` — and the bytes end up going through exactly the same
+   * `installPet` funnel as a local import, so a downloaded pet and a
+   * hand-imported one have passed identical checks.
+   */
+  async installFromCatalogue(id: string): Promise<InstalledPet> {
+    const parsed = petIdSchema.safeParse(id);
+    if (!parsed.success) {
+      throw toValidationError('That is not a valid pet id.', parsed.error.issues);
+    }
+
+    const petId = parsed.data;
+
+    // Checked before the download rather than after: refusing 1.7MB later is
+    // rude to a metered connection.
+    if (locatePet(petId)) {
+      throw new AppError(`"${petId}" is already installed.`, {
+        code: 'PET_ALREADY_INSTALLED',
+        statusCode: 409,
+      });
+    }
+
+    let download;
+    try {
+      download = await catalogue.downloadPet(petId);
+    } catch (error) {
+      throw new AppError(
+        error instanceof Error ? error.message : `"${petId}" could not be downloaded.`,
+        { code: 'PET_DOWNLOAD_FAILED', statusCode: 502 },
+      );
+    }
+
+    const archive = readPetArchive(download.bytes);
+
+    // The archive has to be the pet we asked for. A mismatch means the
+    // catalogue served something else, and installing it would write a
+    // directory the user never chose.
+    if (archive.file.id !== petId) {
+      throw new AppError(
+        `The archive for "${petId}" contains a pet called "${archive.file.id}".`,
+        { code: 'PET_ID_MISMATCH', statusCode: 422 },
+      );
+    }
+
+    const installed = installPet(
+      {
+        ...archive.file,
+        description: archive.file.description || download.entry.description || undefined,
+        kind: archive.file.kind ?? download.entry.kind ?? undefined,
+        // The uploader, straight from the catalogue. The only place an author
+        // is ever known — nothing infers one.
+        author: archive.file.author ?? download.entry.ownerHandle ?? undefined,
+        frame: archive.file.frame ?? gridFromValidation(download.validation) ?? undefined,
+      },
+      archive.spriteBytes,
+      archive.spriteName,
+    );
+
+    return installed;
   },
 };

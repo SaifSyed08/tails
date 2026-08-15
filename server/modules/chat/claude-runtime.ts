@@ -69,6 +69,34 @@ function readQuestions(input: unknown): AskUserQuestion[] {
   });
 }
 
+/**
+ * The answers to hand back to `AskUserQuestion`, keyed by question text.
+ *
+ * Free text is a first-class answer in that tool's contract: the value is an
+ * arbitrary string, and its schema says not to offer an "Other" option because
+ * one is provided automatically. A decision carrying only `response` was
+ * therefore an answer, but the runtime read the empty `answers` map as "no
+ * option was picked" and allowed the call with its input untouched — which is
+ * precisely what makes the tool report that the user did not answer.
+ *
+ * Mapping a bare `response` is only unambiguous with a single question on the
+ * card; with several there is no way to know which one it answers, so it is
+ * left for the tool to see as free-text context rather than guessed at.
+ */
+export function resolveQuestionAnswers(
+  decision: Pick<PermissionDecision, 'answers' | 'response'>,
+  questions: AskUserQuestion[],
+): Record<string, string> {
+  const answers = { ...(decision.answers ?? {}) };
+  const response = decision.response?.trim();
+
+  if (Object.keys(answers).length === 0 && response && questions.length === 1) {
+    answers[questions[0].question] = response;
+  }
+
+  return answers;
+}
+
 type ParkedPermission = {
   resolve: (decision: PermissionDecision) => void;
   timer: NodeJS.Timeout | null;
@@ -537,12 +565,14 @@ function createPermissionGate(sessionId: string): CanUseTool {
     // The answer to a question travels back inside `updatedInput`, keyed by
     // the question's exact text. Returning the input unmodified is what makes
     // the tool report that the user did not answer.
-    if (decision.answers && Object.keys(decision.answers).length > 0) {
+    const answers = resolveQuestionAnswers(decision, questions);
+
+    if (Object.keys(answers).length > 0) {
       return {
         behavior: 'allow',
         updatedInput: {
           ...(readRecord(toolInput) ?? {}),
-          answers: decision.answers,
+          answers,
           ...(decision.response ? { response: decision.response } : {}),
         },
       } satisfies PermissionResult;

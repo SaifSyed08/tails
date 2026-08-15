@@ -1,170 +1,462 @@
 import { z } from 'zod';
 
 /**
- * The remote pet library.
+ * The codex-pets.net library.
  *
- * ## Status: the real endpoint is unknown
+ * ## What the API actually is
  *
- * The eventual goal is to browse codex-pet.net's library — or at least its top
- * 100 pets by view count — and install from it. **No public API for that site
- * has been confirmed**, so nothing here is written against a real contract.
+ * Probed against the live host rather than assumed, and every parameter below
+ * was confirmed by response, because the two obvious guesses are both wrong:
  *
- * Rather than hardcode a plausible-looking URL and ship a feature that fails in
- * a way nobody can debug, this module:
+ * | request | behaviour |
+ * | --- | --- |
+ * | `GET /api/pets` | `{ pets, page, pageSize, total, totalPages }`; 3,040 pets |
+ * | `?sort=views` | descending by view count. **`sortBy` and `order` are silently ignored** — they return the unsorted list, which looks like it worked |
+ * | `?q=` | full-text search. **`search` and `query` are silently ignored** the same way |
+ * | `?page=` / `?pageSize=` | both honoured |
+ * | `GET /api/pets/:id` | `{ pet }` — one entry, same shape |
+ * | `GET /api/pets/:id/download` | `application/zip`, ~1.7MB, holding `pet.json` and the spritesheet. The `?v=` in the listing's `downloadUrl` is optional |
  *
- * - takes its base URL from `TAILS_PET_CATALOGUE_URL` and does nothing at all
- *   when that is unset, reporting `configured: false` so the UI can say so;
- * - keeps the entire remote surface behind `PetCatalogue`, so pointing it at
- *   the real API later means editing this one file;
- * - validates every response, because a catalogue is untrusted input and its
- *   `id` values end up as directory names.
+ * ## Why nothing is bulk-imported
  *
- * The request shape below (`GET {base}/pets?sort=views&limit=N`) is a
- * placeholder chosen to be readable, **not** a documented endpoint. Confirm it
- * before relying on it.
+ * 3,040 pets at roughly 1.7MB each is about 5GB. The library is browsed live
+ * and a pet is downloaded when someone asks for that pet.
+ *
+ * ## Why the renderer never talks to this host
+ *
+ * Everything goes through our own server: one place for the timeout, one place
+ * for the failure text, one place a future offline cache would live, and — the
+ * load-bearing one — the client never gets to name a URL. It names an id; the
+ * URL is whatever this module learned from the catalogue itself, and it must be
+ * on the catalogue's own origin or it is refused.
  */
 
-/** One installable pet as advertised by a remote catalogue. */
+/**
+ * The real host.
+ *
+ * `TAILS_PET_CATALOGUE_URL` overrides it, and setting that variable to an
+ * **empty string** switches the remote shelf off entirely — no requests leave
+ * the machine and the UI says the catalogue is turned off. Unset means "use the
+ * default", which is not the same thing, so an air-gapped install has a way to
+ * say so that does not look like a misconfiguration.
+ */
+export const DEFAULT_CATALOGUE_URL = 'https://codex-pets.net';
+
+/** What the publisher's own validator measured. `cellSize` is the frame grid, stated rather than inferred. */
+export type CatalogueValidation = {
+  cellSize: string | null;
+  atlasSize: string | null;
+  statesDetected: number | null;
+};
+
 export type CatalogueEntry = {
   id: string;
   displayName: string;
   description: string;
-  /** Absolute URL of a preview image, if the catalogue offers one. */
-  previewUrl: string | null;
-  /** Absolute URL the importer would fetch. */
-  downloadUrl: string | null;
-  /** View count, when the catalogue reports it — this is what "top 100" sorts by. */
+  kind: string | null;
+  /** The uploader's handle. Shown as-is; the site's display name is not verified by us. */
+  ownerHandle: string | null;
+  uploadedAt: string | null;
   views: number | null;
+  downloads: number | null;
+  likes: number | null;
+  tags: string[];
+  /** Same-origin URL on *our* server, so the renderer makes no third-party requests. */
+  previewUrl: string | null;
+  validation: CatalogueValidation | null;
 };
 
-/**
- * What the UI receives.
- *
- * `configured` is separate from `entries.length` on purpose: "no catalogue is
- * set up" and "the catalogue returned nothing" are different situations and
- * deserve different words on screen.
- */
-export type CatalogueResult = {
+export type CataloguePage = {
   configured: boolean;
   baseUrl: string | null;
   entries: CatalogueEntry[];
-  /** Set when a configured catalogue could not be read. Never thrown — a dead remote must not break the local gallery. */
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  sort: string;
+  query: string;
+  /** Set when the catalogue could not be read. Never thrown — a dead remote must not break the local gallery. */
   error: string | null;
 };
 
-/**
- * The seam a real implementation plugs into.
- *
- * Deliberately one method: everything else the marketplace does — importing,
- * validating, storing — already exists locally and must not be duplicated per
- * catalogue provider.
- */
+/** What a download produced, before anything is written to disk. */
+export type CatalogueDownload = {
+  bytes: Buffer;
+  contentType: string;
+  validation: CatalogueValidation | null;
+  /** The catalogue's own manifest fields, used only to cross-check the archive. */
+  entry: CatalogueEntry;
+};
+
 export interface PetCatalogue {
-  listTopPets(limit: number): Promise<CatalogueResult>;
+  listPets(options: { page?: number; pageSize?: number; query?: string }): Promise<CataloguePage>;
+  /** Fetches one pet's archive. The id is ours to validate; the URL is never the caller's to choose. */
+  downloadPet(id: string): Promise<CatalogueDownload>;
+  /** Streams a preview image the catalogue advertised for this pet. */
+  fetchPreview(id: string): Promise<{ bytes: Buffer; contentType: string }>;
 }
 
-/** How many entries a caller may ask for. "Top 100 by views" is the stated goal. */
-export const MAX_CATALOGUE_ENTRIES = 100;
+/** "Top 50 by views" is the landing shelf, and the API's own page size is 30. */
+export const DEFAULT_PAGE_SIZE = 50;
 
-/** Guards against a hostile or broken catalogue returning a huge body. */
-const CATALOGUE_TIMEOUT_MS = 8000;
+/** The API tops out well below this; it exists so a bad `pageSize` cannot ask for everything. */
+export const MAX_PAGE_SIZE = 100;
+
+const LIST_TIMEOUT_MS = 10_000;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+const PREVIEW_TIMEOUT_MS = 15_000;
 
 /**
- * Lenient about field names because the real ones are unknown.
+ * Hard ceiling on a download.
  *
- * Anything unrecognised is dropped rather than rejected — an entry missing a
- * view count is still browsable, and refusing the whole page because one item
- * lacks a thumbnail would be the wrong trade for a read-only listing.
+ * The largest pet observed is about 1.8MB; 12MB leaves room for a legitimately
+ * big sheet while making an endless response impossible. Enforced while
+ * streaming, not from `Content-Length`, because a header is a claim.
+ */
+export const MAX_ARCHIVE_BYTES = 12 * 1024 * 1024;
+
+const MAX_PREVIEW_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Lenient about optional fields, strict about the two that matter.
+ *
+ * `id` becomes a directory name downstream and `displayName` is rendered, so
+ * those are required and bounded. Everything else is decoration: an entry with
+ * no like count is still browsable, and rejecting a page because one item is
+ * missing a thumbnail would be the wrong trade for a read-only listing.
  */
 const remoteEntrySchema = z.object({
   id: z.string().min(1).max(64),
-  displayName: z.string().min(1).max(80).optional(),
-  name: z.string().min(1).max(80).optional(),
-  description: z.string().max(500).optional(),
-  previewUrl: z.string().url().max(2048).optional(),
-  downloadUrl: z.string().url().max(2048).optional(),
-  views: z.number().int().min(0).optional(),
-});
+  displayName: z.string().min(1).max(120).optional(),
+  name: z.string().min(1).max(120).optional(),
+  description: z.string().max(2000).optional().nullable(),
+  kind: z.string().max(40).optional().nullable(),
+  ownerHandle: z.string().max(80).optional().nullable(),
+  ownerName: z.string().max(80).optional().nullable(),
+  ownerShadowbanned: z.boolean().optional(),
+  uploadedAt: z.string().max(64).optional().nullable(),
+  viewCount: z.number().optional().nullable(),
+  downloadCount: z.number().optional().nullable(),
+  likeCount: z.number().optional().nullable(),
+  tags: z.array(z.string().max(40)).max(20).optional().nullable(),
+  previewUrl: z.string().max(2048).optional().nullable(),
+  posterUrl: z.string().max(2048).optional().nullable(),
+  downloadUrl: z.string().max(2048).optional().nullable(),
+  validationReport: z.object({
+    cellSize: z.string().max(32).optional().nullable(),
+    atlasSize: z.string().max(32).optional().nullable(),
+    statesDetected: z.number().optional().nullable(),
+  }).partial().optional().nullable(),
+}).loose();
 
-const remoteResponseSchema = z.union([
-  z.array(remoteEntrySchema),
-  z.object({ pets: z.array(remoteEntrySchema) }),
-  z.object({ items: z.array(remoteEntrySchema) }),
-]);
+const listResponseSchema = z.object({
+  pets: z.array(remoteEntrySchema),
+  page: z.number().optional(),
+  pageSize: z.number().optional(),
+  total: z.number().optional(),
+  totalPages: z.number().optional(),
+}).loose();
 
-const toEntry = (raw: z.infer<typeof remoteEntrySchema>): CatalogueEntry => ({
-  id: raw.id,
-  displayName: raw.displayName ?? raw.name ?? raw.id,
-  description: raw.description ?? '',
-  previewUrl: raw.previewUrl ?? null,
-  downloadUrl: raw.downloadUrl ?? null,
-  views: raw.views ?? null,
-});
+const singleResponseSchema = z.object({ pet: remoteEntrySchema }).loose();
+
+type RemoteEntry = z.infer<typeof remoteEntrySchema>;
 
 /**
- * An HTTP catalogue reader, or an inert one when no URL is configured.
+ * What the catalogue told us about a pet, kept so the *client* never has to.
  *
- * The unconfigured case is a first-class result rather than an error because it
- * is the normal state today: nobody has a catalogue URL to give it yet.
+ * An install request carries an id and nothing else. Turning that id into a URL
+ * happens here, from URLs this module received from the catalogue — which is
+ * what stops "install this pet" from becoming "make the server fetch this
+ * arbitrary address". Bounded because it is a cache, not a database.
  */
+const MAX_REMEMBERED = 600;
+
+type RememberedUrls = { download: string | null; preview: string | null };
+
 export function createRemoteCatalogue(
   baseUrl: string | undefined = process.env.TAILS_PET_CATALOGUE_URL,
 ): PetCatalogue {
-  const trimmed = baseUrl?.trim().replace(/\/+$/, '') || null;
+  // Unset falls back to the real host; set-but-empty is a deliberate "off".
+  const trimmed = (baseUrl === undefined ? DEFAULT_CATALOGUE_URL : baseUrl.trim())
+    .replace(/\/+$/, '');
+  const configured = trimmed !== '';
+  const base = configured ? new URL(trimmed) : null;
+
+  const remembered = new Map<string, RememberedUrls>();
+  const entries = new Map<string, CatalogueEntry>();
+
+  const remember = (id: string, urls: RememberedUrls, entry: CatalogueEntry) => {
+    if (remembered.size >= MAX_REMEMBERED) {
+      // Oldest first: Map preserves insertion order, and the entry a user is
+      // about to install is the one they just looked at.
+      const oldest = remembered.keys().next().value;
+      if (oldest !== undefined) {
+        remembered.delete(oldest);
+        entries.delete(oldest);
+      }
+    }
+    remembered.set(id, urls);
+    entries.set(id, entry);
+  };
+
+  /**
+   * Resolves a URL the catalogue gave us and proves it stayed on the
+   * catalogue's origin.
+   *
+   * Relative paths are normal here (`downloadUrl` is `/api/pets/x/download`).
+   * Absolute ones are accepted only when they point at the same host, so a
+   * compromised or hostile catalogue cannot use its own response to aim this
+   * server at a cloud metadata endpoint or an internal service.
+   */
+  const resolveOnCatalogue = (value: string | null | undefined): string | null => {
+    if (!value || !base) return null;
+    let resolved: URL;
+    try {
+      resolved = new URL(value, base);
+    } catch {
+      return null;
+    }
+    if (resolved.origin !== base.origin) return null;
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
+    return resolved.toString();
+  };
+
+  const toEntry = (raw: RemoteEntry): CatalogueEntry => ({
+    id: raw.id,
+    displayName: raw.displayName ?? raw.name ?? raw.id,
+    description: raw.description ?? '',
+    kind: raw.kind ?? null,
+    ownerHandle: raw.ownerHandle ?? raw.ownerName ?? null,
+    uploadedAt: raw.uploadedAt ?? null,
+    views: typeof raw.viewCount === 'number' ? raw.viewCount : null,
+    downloads: typeof raw.downloadCount === 'number' ? raw.downloadCount : null,
+    likes: typeof raw.likeCount === 'number' ? raw.likeCount : null,
+    tags: raw.tags ?? [],
+    // Pointed at our own proxy rather than at the host, so the renderer makes
+    // no request to codex-pets.net at all.
+    previewUrl: (raw.previewUrl ?? raw.posterUrl)
+      ? `/api/pets/catalogue/${encodeURIComponent(raw.id)}/preview`
+      : null,
+    validation: raw.validationReport
+      ? {
+        cellSize: raw.validationReport.cellSize ?? null,
+        atlasSize: raw.validationReport.atlasSize ?? null,
+        statesDetected: typeof raw.validationReport.statesDetected === 'number'
+          ? raw.validationReport.statesDetected
+          : null,
+      }
+      : null,
+  });
+
+  /** Records an entry and returns it, dropping anything the site has shadowbanned. */
+  const accept = (raw: RemoteEntry): CatalogueEntry | null => {
+    if (raw.ownerShadowbanned) return null;
+    const entry = toEntry(raw);
+    remember(
+      raw.id,
+      {
+        // A download URL is always constructible from the id, and the listing's
+        // `?v=` is optional, so a missing field is not a reason to refuse.
+        download: resolveOnCatalogue(raw.downloadUrl ?? `/api/pets/${encodeURIComponent(raw.id)}/download`),
+        preview: resolveOnCatalogue(raw.previewUrl ?? raw.posterUrl),
+      },
+      entry,
+    );
+    return entry;
+  };
+
+  const emptyPage = (error: string | null, page: number, pageSize: number, query: string): CataloguePage => ({
+    configured,
+    baseUrl: configured ? trimmed : null,
+    entries: [],
+    page,
+    pageSize,
+    total: 0,
+    totalPages: 0,
+    sort: 'views',
+    query,
+    error,
+  });
+
+  /** Fetches one pet's record straight from the catalogue, for ids we have not listed. */
+  const fetchEntry = async (id: string): Promise<CatalogueEntry> => {
+    const response = await fetch(`${trimmed}/api/pets/${encodeURIComponent(id)}`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      throw new Error(`The catalogue answered ${response.status} for "${id}".`);
+    }
+
+    const parsed = singleResponseSchema.safeParse(await response.json());
+    if (!parsed.success) throw new Error(`The catalogue's record for "${id}" was not readable.`);
+
+    const entry = accept(parsed.data.pet);
+    if (!entry) throw new Error(`"${id}" is not available from the catalogue.`);
+    return entry;
+  };
+
+  /**
+   * Reads a response body with a hard ceiling.
+   *
+   * Streamed and counted rather than `arrayBuffer()` on trust: `Content-Length`
+   * is a claim by the sender, and the point of the cap is the case where the
+   * sender is lying or the connection never ends.
+   */
+  const readCapped = async (response: Response, limit: number, what: string): Promise<Buffer> => {
+    const declared = Number(response.headers.get('content-length') ?? '');
+    if (Number.isFinite(declared) && declared > limit) {
+      throw new Error(`That ${what} is ${(declared / 1024 / 1024).toFixed(1)}MB; the limit is ${limit / 1024 / 1024}MB.`);
+    }
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+
+    const body = response.body;
+    if (!body) throw new Error(`That ${what} came back empty.`);
+
+    for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+      total += chunk.byteLength;
+      if (total > limit) {
+        throw new Error(`That ${what} is larger than the ${limit / 1024 / 1024}MB limit.`);
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+
+    return Buffer.concat(chunks, total);
+  };
 
   return {
-    async listTopPets(limit: number): Promise<CatalogueResult> {
-      if (!trimmed) {
-        return { configured: false, baseUrl: null, entries: [], error: null };
-      }
+    async listPets({ page = 1, pageSize = DEFAULT_PAGE_SIZE, query = '' }): Promise<CataloguePage> {
+      const safePage = Math.max(1, Math.trunc(page) || 1);
+      const safeSize = Math.max(1, Math.min(MAX_PAGE_SIZE, Math.trunc(pageSize) || DEFAULT_PAGE_SIZE));
+      const search = query.trim().slice(0, 80);
 
-      const capped = Math.max(1, Math.min(MAX_CATALOGUE_ENTRIES, Math.trunc(limit) || MAX_CATALOGUE_ENTRIES));
-      const url = `${trimmed}/pets?sort=views&limit=${capped}`;
+      if (!configured) return emptyPage(null, safePage, safeSize, search);
+
+      // `sort=views` is the only spelling the API honours; the others return
+      // the unsorted list without saying so.
+      const url = new URL('/api/pets', trimmed);
+      url.searchParams.set('sort', 'views');
+      url.searchParams.set('page', String(safePage));
+      url.searchParams.set('pageSize', String(safeSize));
+      if (search) url.searchParams.set('q', search);
 
       try {
         const response = await fetch(url, {
           headers: { accept: 'application/json' },
-          signal: AbortSignal.timeout(CATALOGUE_TIMEOUT_MS),
+          signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
         });
 
         if (!response.ok) {
-          return {
-            configured: true,
-            baseUrl: trimmed,
-            entries: [],
-            error: `The catalogue at ${trimmed} answered ${response.status}.`,
-          };
+          return emptyPage(`The catalogue answered ${response.status}.`, safePage, safeSize, search);
         }
 
-        const parsed = remoteResponseSchema.safeParse(await response.json());
+        const parsed = listResponseSchema.safeParse(await response.json());
         if (!parsed.success) {
-          return {
-            configured: true,
-            baseUrl: trimmed,
-            entries: [],
-            error: 'The catalogue responded with a shape this build does not understand. '
-              + 'The real codex-pet.net API has not been confirmed yet.',
-          };
+          return emptyPage(
+            'The catalogue responded in a shape this build does not understand.',
+            safePage,
+            safeSize,
+            search,
+          );
         }
 
-        const raw = Array.isArray(parsed.data)
-          ? parsed.data
-          : 'pets' in parsed.data ? parsed.data.pets : parsed.data.items;
+        const accepted = parsed.data.pets
+          .map(accept)
+          .filter((entry): entry is CatalogueEntry => entry !== null);
 
         return {
           configured: true,
           baseUrl: trimmed,
-          entries: raw.slice(0, capped).map(toEntry),
+          entries: accepted,
+          page: parsed.data.page ?? safePage,
+          pageSize: parsed.data.pageSize ?? safeSize,
+          total: parsed.data.total ?? accepted.length,
+          totalPages: parsed.data.totalPages ?? 1,
+          sort: 'views',
+          query: search,
           error: null,
         };
       } catch (error) {
-        return {
-          configured: true,
-          baseUrl: trimmed,
-          entries: [],
-          error: error instanceof Error ? error.message : 'The catalogue could not be reached.',
-        };
+        return emptyPage(describeNetworkError(error, trimmed), safePage, safeSize, search);
       }
     },
+
+    async downloadPet(id: string): Promise<CatalogueDownload> {
+      if (!configured || !base) throw new Error('No catalogue is configured.');
+
+      const entry = entries.get(id) ?? await fetchEntry(id);
+      const downloadUrl = remembered.get(id)?.download;
+      if (!downloadUrl) {
+        throw new Error(`The catalogue did not offer a download for "${id}".`);
+      }
+
+      const response = await fetch(downloadUrl, {
+        headers: { accept: 'application/zip' },
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        redirect: 'error',
+      });
+
+      if (!response.ok) {
+        throw new Error(`The catalogue answered ${response.status} when asked for "${id}".`);
+      }
+
+      const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+      if (!contentType.includes('zip')) {
+        throw new Error(`The catalogue sent "${contentType || 'nothing'}" instead of a ZIP archive.`);
+      }
+
+      return {
+        bytes: await readCapped(response, MAX_ARCHIVE_BYTES, 'download'),
+        contentType,
+        validation: entry.validation,
+        entry,
+      };
+    },
+
+    async fetchPreview(id: string): Promise<{ bytes: Buffer; contentType: string }> {
+      if (!configured) throw new Error('No catalogue is configured.');
+
+      if (!remembered.has(id)) await fetchEntry(id);
+      const previewUrl = remembered.get(id)?.preview;
+      if (!previewUrl) throw new Error(`No preview image for "${id}".`);
+
+      const response = await fetch(previewUrl, {
+        signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
+        redirect: 'error',
+      });
+
+      if (!response.ok) throw new Error(`The preview for "${id}" answered ${response.status}.`);
+
+      const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+      if (!contentType.startsWith('image/')) {
+        throw new Error(`The preview for "${id}" is not an image.`);
+      }
+
+      return {
+        bytes: await readCapped(response, MAX_PREVIEW_BYTES, 'preview'),
+        contentType,
+      };
+    },
   };
+}
+
+/**
+ * Turns a fetch failure into something a person can act on.
+ *
+ * `fetch` reports "fetch failed" for a missing network, a dead host and a
+ * refused TLS handshake alike, and "the shop is offline" is the answer the user
+ * needs — not a stack of causes.
+ */
+function describeNetworkError(error: unknown, baseUrl: string): string {
+  if (error instanceof DOMException && error.name === 'TimeoutError') {
+    return `${baseUrl} did not answer in time.`;
+  }
+  if (error instanceof Error && error.name === 'TimeoutError') {
+    return `${baseUrl} did not answer in time.`;
+  }
+  return `${baseUrl} could not be reached. Check the connection and try again.`;
 }

@@ -10,6 +10,7 @@ type SessionRow = {
   updated_at: string;
   pinned_at: string | null;
   archived_at: string | null;
+  pet_id: string | null;
 };
 
 /**
@@ -39,11 +40,12 @@ const toChatSession = (row: SessionRow): ChatSession => ({
   updatedAt: toIsoTimestamp(row.updated_at),
   pinnedAt: row.pinned_at ? toIsoTimestamp(row.pinned_at) : null,
   archivedAt: row.archived_at ? toIsoTimestamp(row.archived_at) : null,
+  petId: row.pet_id,
 });
 
 const COLUMNS = [
   'id', 'provider_session_id', 'title', 'cwd',
-  'created_at', 'updated_at', 'pinned_at', 'archived_at',
+  'created_at', 'updated_at', 'pinned_at', 'archived_at', 'pet_id',
 ].join(', ');
 
 /**
@@ -164,6 +166,19 @@ export const sessionsRepository = {
    */
   setCwd(id: string, cwd: string): void {
     getConnection().prepare('UPDATE sessions SET cwd = ? WHERE id = ?').run(cwd, id);
+  },
+
+  /**
+   * Assigns the companion that belongs to this conversation, or clears it.
+   *
+   * Stored as a bare id with no foreign key: pets live on disk under
+   * `~/.tails/pets`, not in this database, and a conversation must survive its
+   * pet being uninstalled. A dangling id reads as "no pet", which is the right
+   * outcome rather than a load failure. Leaves `updated_at` alone for the same
+   * reason as `setCwd` — this is not a message.
+   */
+  setPetId(id: string, petId: string | null): void {
+    getConnection().prepare('UPDATE sessions SET pet_id = ? WHERE id = ?').run(petId, id);
   },
 
   /**

@@ -5,12 +5,14 @@ import remarkGfm from 'remark-gfm';
 
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
 import { EmptyState } from '@/components/chat/EmptyState';
+import { PetPicker } from '@/components/chat/PetPicker';
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
 import { PlanCard } from '@/components/chat/PlanCard';
 import { QuestionCard } from '@/components/chat/QuestionCard';
 import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
+import { api } from '@/lib/api';
 import type { AttachmentPayload, ChatRow, MessageAttachment } from '@/types/chat';
 
 function ThinkingRow({ row }: { row: Extract<ChatRow, { type: 'thinking' }> }) {
@@ -147,6 +149,8 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true);
   const composerRef = useRef<ComposerHandle>(null);
+  const [petPickerOpen, setPetPickerOpen] = useState(false);
+  const [pet, setPet] = useState<{ id: string; name: string } | null>(null);
 
   // Follow the stream only while the user is already at the bottom; yanking
   // them down while they're reading earlier output is the classic chat-UI sin.
@@ -155,6 +159,40 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     if (!container || !pinnedToBottomRef.current) return;
     container.scrollTop = container.scrollHeight;
   }, [rows]);
+
+  /**
+   * Resolves this conversation's pet to something showable.
+   *
+   * Two calls, and only when there is something to resolve: the session row
+   * knows the id, and only the pets library knows the name. An id whose pet is
+   * no longer installed resolves to nothing, which is the intended reading of
+   * a dangling assignment rather than an error to surface.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      let resolved: { id: string; name: string } | null = null;
+      try {
+        if (sessionId) {
+          const session = await api.getSession(sessionId);
+          if (session.petId) {
+            const library = await api.listPets();
+            const match = library.pets.find((entry) => entry.definition.id === session.petId);
+            if (match) resolved = { id: match.definition.id, name: match.definition.name };
+          }
+        }
+      } catch {
+        // A chat with no row yet, or an unreadable pet library. Either way the
+        // menu simply shows no assignment.
+      }
+      if (!cancelled) setPet(resolved);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
   const handleScroll = () => {
     const container = scrollRef.current;
@@ -197,7 +235,9 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
         </div>
       </div>
 
-      <div className="border-t border-border px-10 py-4">
+      {/* No rule above the composer: the input already reads as its own surface,
+          and a full-width line under a rounded field is a seam, not structure. */}
+      <div className="px-10 pb-4 pt-2">
         <div className="mx-auto max-w-2xl space-y-3">
           {pendingPrompts.map((prompt) => (
             prompt.kind === 'question' ? (
@@ -236,8 +276,19 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
           onAbort={abort}
           suggestion={suggestion}
           onSuggestionDismiss={clearSuggestion}
+          onAssignPet={() => setPetPickerOpen(true)}
+          petName={pet?.name ?? null}
         />
       </div>
+
+      {petPickerOpen && sessionId ? (
+        <PetPicker
+          sessionId={sessionId}
+          petId={pet?.id ?? null}
+          onAssigned={setPet}
+          onClose={() => setPetPickerOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

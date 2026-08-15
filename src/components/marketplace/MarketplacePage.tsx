@@ -1,4 +1,4 @@
-import { AlertTriangle, PawPrint, Plus, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, PawPrint, Plus, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -10,7 +10,8 @@ import { ImportPetDialog } from './ImportPetDialog';
 import { LibraryEmpty, LibrarySkeleton, NoMatches } from './LibraryStates';
 import {
   petsApi,
-  type CatalogueResult,
+  type CatalogueEntry,
+  type CataloguePage,
   type FrameGrid,
   type InstalledPet,
   type PetLibrary,
@@ -27,6 +28,7 @@ import {
 import { PetCard } from './PetCard';
 import { PetDetailDialog } from './PetDetailDialog';
 import { PetSpotlight } from './PetSpotlight';
+import { PetThumbnail } from './PetThumbnail';
 import { SPRITE_KEYFRAMES } from './SpritePreview';
 import { StorefrontToolbar } from './StorefrontToolbar';
 
@@ -42,13 +44,18 @@ import { StorefrontToolbar } from './StorefrontToolbar';
  * page itself only owns data and actions; each of those four parts is its own
  * component.
  *
- * Two rules constrain what it is allowed to show. Nothing here is invented:
- * there are no ratings, no download counts and no placeholder pets, because
- * nothing supplies them and a storefront that lies about its stock is worse
- * than a small one. And every pet's frame layout is labelled with where it came
- * from, because Codex spritesheets do not describe their own layout, so most of
- * these animations are the app's best guess and the user is the one who can
- * correct it.
+ * There are two shelves and they work differently on purpose. The library is
+ * what is on this machine, animated live from the real spritesheets. The
+ * codex-pets.net shelf is 3,040 pets browsed a page at a time through our own
+ * server, with the top 50 by views as the landing page; nothing is downloaded
+ * until someone installs a specific pet, because bulk-importing that library
+ * would be about five gigabytes.
+ *
+ * Every number shown comes from somewhere real — the catalogue's own view,
+ * like and download counts, or a count of the files on disk. Nothing is
+ * invented to make a shelf look busier, and every pet's frame layout says where
+ * it came from, because Codex spritesheets do not describe their own layout and
+ * the user is the one who can correct a bad guess.
  */
 
 export type MarketplacePageProps = {
@@ -59,7 +66,6 @@ export type MarketplacePageProps = {
 
 export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
   const [library, setLibrary] = useState<PetLibrary | null>(null);
-  const [catalogue, setCatalogue] = useState<CatalogueResult | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -70,6 +76,16 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
   const [source, setSource] = useState<SourceFilter>('all');
   const [kind, setKind] = useState<string | null>(null);
   const [order, setOrder] = useState<SortOrder>('name');
+  const [showHidden, setShowHidden] = useState(false);
+
+  // The fetched page is stored with the request that produced it, so "still
+  // loading" is derived by comparing keys rather than tracked as its own flag —
+  // a late response for page 2 can then never clear the spinner for page 3.
+  const [catalogueState, setCatalogueState] = useState<{ key: string; page: CataloguePage } | null>(null);
+  const [cataloguePage, setCataloguePage] = useState(1);
+  const [catalogueQuery, setCatalogueQuery] = useState('');
+  const [catalogueSearch, setCatalogueSearch] = useState('');
+  const [installingId, setInstallingId] = useState<string | null>(null);
 
   // Reloads are requested by bumping a token rather than by calling a fetcher
   // directly, which keeps every state write inside a promise callback instead
@@ -77,6 +93,12 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
   const [reloadToken, setReloadToken] = useState(0);
   const [catalogueToken, setCatalogueToken] = useState(0);
   const refresh = useCallback(() => setReloadToken((current) => current + 1), []);
+
+  const catalogueKey = `${cataloguePage}|${catalogueSearch}|${catalogueToken}`;
+  // The last page fetched stays on screen, dimmed, while the next one loads:
+  // paging that empties the shelf on every click reads as breakage.
+  const catalogue = catalogueState?.page ?? null;
+  const catalogueLoading = catalogueState?.key !== catalogueKey;
 
   useEffect(() => {
     let cancelled = false;
@@ -97,24 +119,54 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
     };
   }, [reloadToken]);
 
+  // Typing in the remote search must not fire a request per keystroke at a
+  // 3,040-pet API. A short pause, and the page resets to 1 because results for
+  // a new search have no page 4.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setCatalogueSearch(catalogueQuery.trim());
+      setCataloguePage(1);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [catalogueQuery]);
+
   // Separate from the pet list: a slow or dead remote must not hold up the
   // gallery, and its failure is reported on its own shelf.
   useEffect(() => {
     let cancelled = false;
 
-    petsApi.listCatalogue()
+    petsApi.listCatalogue({ page: cataloguePage, query: catalogueSearch })
       .then((next) => {
-        if (!cancelled) setCatalogue(next);
+        if (!cancelled) setCatalogueState({ key: catalogueKey, page: next });
       })
-      .catch(() => {
+      .catch((catalogueError: unknown) => {
         if (cancelled) return;
-        setCatalogue({ configured: false, baseUrl: null, entries: [], error: null });
+        // The shelf's own offline state, not the page's error banner: the
+        // local library is fine and must not look broken because a website is.
+        setCatalogueState({
+          key: catalogueKey,
+          page: {
+            configured: true,
+            baseUrl: null,
+            entries: [],
+            page: cataloguePage,
+            pageSize: 0,
+            total: 0,
+            totalPages: 0,
+            sort: 'views',
+            query: catalogueSearch,
+            error: catalogueError instanceof Error
+              ? catalogueError.message
+              : 'The catalogue could not be reached.',
+          },
+        });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [catalogueToken]);
+  }, [cataloguePage, catalogueSearch, catalogueKey]);
 
   const runAction = async (id: string, action: () => Promise<unknown>) => {
     setBusyId(id);
@@ -144,6 +196,33 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
     void runAction(pet.definition.id, () => petsApi.importFromPath(pet.directory));
   };
 
+  /**
+   * Takes a pet out of the library without touching its files.
+   *
+   * What "remove" means for a pet in `~/.codex/pets`: Codex owns that folder,
+   * so the listing is the only thing we may change. Two Sonics on disk, one in
+   * the library.
+   */
+  const handleHide = (pet: InstalledPet, hidden: boolean) => {
+    setConfirmingRemoveId(null);
+    setDetailId((current) => (hidden && current === pet.definition.id ? null : current));
+    void runAction(pet.definition.id, () => petsApi.setHidden(pet.definition.id, hidden));
+  };
+
+  /** Downloads one catalogue pet. Never a bulk import — see remote-catalogue.ts. */
+  const handleInstallFromCatalogue = (entry: CatalogueEntry) => {
+    setInstallingId(entry.id);
+    setError(null);
+    petsApi.installFromCatalogue(entry.id)
+      .then(() => refresh())
+      .catch((installError: unknown) => {
+        setError(installError instanceof Error
+          ? installError.message
+          : `${entry.displayName} could not be installed.`);
+      })
+      .finally(() => setInstallingId(null));
+  };
+
   /** Two-step, because removing a pet deletes its folder and there is no undo. */
   const handleRemove = (pet: InstalledPet) => {
     if (confirmingRemoveId !== pet.definition.id) {
@@ -161,11 +240,32 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
   };
 
   const pets = useMemo(() => library?.pets ?? [], [library]);
+  const hiddenPets = useMemo(() => library?.hidden ?? [], [library]);
   const kinds = useMemo(() => collectKinds(pets), [pets]);
   const visible = useMemo(
     () => sortPets(filterPets(pets, { query, source, kind }), order),
     [pets, query, source, kind, order],
   );
+
+  // Both lists count as installed: a hidden pet is still on disk, and offering
+  // to install it again from the catalogue would fail with "already installed".
+  const installedIds = useMemo(
+    () => new Set([...pets, ...hiddenPets].map((pet) => pet.definition.id)),
+    [pets, hiddenPets],
+  );
+
+  // Display names are not unique — Codex generated two pets both called
+  // "Sonic" — so cards for a shared name also show their id.
+  const duplicateNames = useMemo(() => {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const pet of pets) {
+      const name = pet.definition.displayName;
+      if (seen.has(name)) duplicates.add(name);
+      seen.add(name);
+    }
+    return duplicates;
+  }, [pets]);
 
   const sourceCounts: Record<SourceFilter, number> = {
     all: countBySource(pets, 'all'),
@@ -315,15 +415,59 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
                       pet={pet}
                       busy={busyId === pet.definition.id}
                       confirmingRemove={confirmingRemoveId === pet.definition.id}
+                      ambiguousName={duplicateNames.has(pet.definition.displayName)}
                       onOpen={(target) => setDetailId(target.definition.id)}
                       onSetActive={handleSetActive}
                       onAddCopy={handleAddCopy}
                       onRemove={handleRemove}
+                      onHide={(target) => handleHide(target, true)}
                     />
                   </Reveal>
                 ))}
               </div>
             )}
+          </section>
+        ) : null}
+
+        {hiddenPets.length > 0 ? (
+          <section className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowHidden((current) => !current)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors duration-quick hover:text-foreground"
+            >
+              {showHidden ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              {hiddenPets.length} hidden {hiddenPets.length === 1 ? 'pet' : 'pets'} — still on disk,
+              just not in your library
+            </button>
+
+            {showHidden ? (
+              <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {hiddenPets.map((pet) => (
+                  <li
+                    key={pet.definition.id}
+                    data-tails-part="card"
+                    className="flex items-center gap-3 p-2.5"
+                  >
+                    <PetThumbnail pet={pet} size={36} className="opacity-60" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{pet.definition.displayName}</p>
+                      <p className="truncate text-[11px] text-muted-foreground" title={pet.directory}>
+                        {pet.definition.id}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleHide(pet, false)}
+                      disabled={busyId === pet.definition.id}
+                      className="shrink-0 rounded-md border border-border px-2 py-1 text-xs transition-colors duration-quick hover:bg-accent disabled:opacity-50"
+                    >
+                      Restore
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </section>
         ) : null}
 
@@ -346,11 +490,15 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
 
         <div className="border-t border-border pt-5">
           <CatalogueShelf
-            result={catalogue}
-            onRetry={() => {
-              setCatalogue(null);
-              setCatalogueToken((current) => current + 1);
-            }}
+            page={catalogue}
+            loading={catalogueLoading}
+            query={catalogueQuery}
+            onQueryChange={setCatalogueQuery}
+            onPageChange={setCataloguePage}
+            onRetry={() => setCatalogueToken((current) => current + 1)}
+            installedIds={installedIds}
+            installingId={installingId}
+            onInstall={handleInstallFromCatalogue}
           />
         </div>
 
@@ -372,6 +520,7 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
           onSetActive={handleSetActive}
           onAddCopy={handleAddCopy}
           onRemove={handleRemove}
+          onHide={(target) => handleHide(target, true)}
           onSaveLayout={handleSaveLayout}
         />
       ) : null}

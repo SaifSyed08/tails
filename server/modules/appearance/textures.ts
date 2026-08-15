@@ -4,6 +4,7 @@ import type {
   OverlayKind,
   TextureKind,
 } from '@/modules/appearance/surface-recipe.js';
+import type { PointerKind, TrailKind } from '@/modules/appearance/theme-spec.js';
 
 /**
  * Every image a theme can put on a surface, owned by the app.
@@ -193,6 +194,48 @@ export function readOverlayPaint(
 ): OverlayPaint | null {
   if (kind === 'none' || strength <= 0) return null;
   return OVERLAY_PAINTS[kind](angle, strength, tint);
+}
+
+/**
+ * The app-drawn cursor and its trail.
+ *
+ * Gradients rather than images, and that is forced rather than chosen: a custom
+ * cursor is normally `cursor: url(...)`, and `url()` is the one thing this
+ * system refuses everywhere, because a stylesheet that can name a remote image
+ * can report where the user is pointing at the resolution of every hover. What
+ * is left is the shapes CSS can draw, which turns out to be enough — a soft
+ * halo, a hollow ring and a filled dot are the three shapes anybody actually
+ * wants, and all three are one radial gradient.
+ *
+ * The colour arrives fully opaque and the *strength* stays on the element as
+ * `opacity`. That is the opposite of the rule textures and overlays follow, and
+ * the difference is real: those two share one pseudo-element and therefore one
+ * `opacity`, so their strength has to live in the pixels. A cursor is its own
+ * element with one layer, so its opacity is free — and leaving it free is what
+ * lets `theme_controls` publish "how strong" as a slider that binds
+ * `--t-pointer-opacity` directly, with no re-derivation.
+ */
+export function readPointerPaint(kind: PointerKind, color: string): string {
+  switch (kind) {
+    case 'system':
+      return 'none';
+    // Soft all the way out. This is the shape a frame of lag is invisible on,
+    // which is why it is the default and the only one worth using with
+    // `replace`.
+    case 'halo':
+      return `radial-gradient(circle closest-side, ${color} 0%, transparent 72%)`;
+    case 'ring':
+      return `radial-gradient(circle closest-side, transparent 0%, transparent 56%, ${color} 62%, ${color} 78%, transparent 84%)`;
+    case 'dot':
+      return `radial-gradient(circle closest-side, ${color} 0%, ${color} 40%, transparent 52%)`;
+  }
+}
+
+/** One trail segment. Always a soft dot: a hard edge repeated eight times reads as beads. */
+export function readTrailPaint(kind: TrailKind, color: string): string {
+  return kind === 'none'
+    ? 'none'
+    : `radial-gradient(circle closest-side, ${color} 0%, ${color} 34%, transparent 70%)`;
 }
 
 /**

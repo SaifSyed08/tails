@@ -56,6 +56,12 @@ export function createSessionsRouter(): express.Router {
       return sessionsService.setArchived(sessionId, req.body.archived);
     }
 
+    // `null` is meaningful here — it is how the picker clears the assignment —
+    // so the field's presence is what routes, not its truthiness.
+    if ('petId' in (req.body ?? {})) {
+      return sessionsService.assignPet(sessionId, readString(req.body?.petId));
+    }
+
     const cwd = readString(req.body?.cwd);
     if (cwd) return sessionsService.setWorkingDirectory(sessionId, cwd);
     return sessionsService.renameSession(sessionId, readString(req.body?.title) ?? 'Untitled');

@@ -25,7 +25,9 @@ import {
 import {
   readAmbientPaint,
   readOverlayPaint,
+  readPointerPaint,
   readTexturePaint,
+  readTrailPaint,
 } from '@/modules/appearance/textures.js';
 import {
   FONT_FAMILIES,
@@ -833,12 +835,42 @@ function buildInteractionTokens(
     return formatColor(color, alpha);
   };
 
+  const { pointer } = spec.interaction;
+  const pointerColor = resolve(pointer.color, formatColor(colors.primary));
+  const trailColor = resolve(pointer.trail.color, pointerColor);
+  const drawn = pointer.kind !== 'system';
+  const trailOn = drawn && pointer.trail.kind !== 'none';
+
   return {
     't-caret-color': resolve(spec.interaction.caretColor, formatColor(colors.primary)),
     't-caret-shape': spec.interaction.caretShape,
     't-selection-fill': resolve(spec.interaction.selectionFill, formatColor(colors.primary, 0.28)),
     't-selection-ink': resolve(spec.interaction.selectionInk, 'currentColor'),
-    't-cursor': spec.interaction.cursor,
+    // `replace` reaches the page through the token that already exists rather
+    // than through one of its own. `cursor: none` on the body *is* hiding the
+    // native pointer, so a second token saying the same thing would be a second
+    // place for the two to disagree.
+    't-cursor': drawn && pointer.replace ? 'none' : spec.interaction.cursor,
+
+    't-pointer-image': readPointerPaint(pointer.kind, pointerColor),
+    // The live-knob multiplier again: undeclared, so it resolves to 1 until a
+    // published control sets it, and then the drawn cursor resizes with no
+    // re-derivation.
+    't-pointer-size': `calc(${pointer.size}px * var(--t-pointer-scale, 1))`,
+    't-pointer-opacity': drawn ? String(pointer.opacity) : '0',
+    't-pointer-blend': drawn ? pointer.blend : 'normal',
+
+    't-trail-image': trailOn ? readTrailPaint(pointer.trail.kind, trailColor) : 'none',
+    't-trail-size': `${pointer.trail.size}px`,
+    't-trail-opacity': trailOn ? String(pointer.trail.opacity) : '0',
+    // Never zero, even when the trail is off: it is a divisor in the
+    // per-segment falloff, and a zero there makes the whole declaration invalid
+    // at computed-value time rather than merely invisible.
+    't-trail-length': String(trailOn ? pointer.trail.length : 1),
+    // 1 tapers each segment toward nothing (a comet), 0 keeps the width and
+    // fades only (a ribbon). One number instead of two shapes, so the falloff
+    // is a single formula in the renderer and a bindable control here.
+    't-trail-taper': pointer.trail.kind === 'comet' ? '1' : '0',
   };
 }
 

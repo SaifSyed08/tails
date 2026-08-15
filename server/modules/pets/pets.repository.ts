@@ -48,9 +48,31 @@ CREATE TABLE IF NOT EXISTS active_pet (
 );
 `;
 
+/**
+ * Columns added after the table shipped.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op once the table exists, so a column
+ * added to the DDL above never reaches a database created before it. Applied
+ * here rather than in `db/connection.ts` so the pets module keeps owning its
+ * own schema.
+ */
+const ADDED_COLUMNS: { name: string; definition: string }[] = [
+  { name: 'hidden_at', definition: 'DATETIME' },
+];
+
 /** Applies the pets schema to a connection. Idempotent. */
 export function ensurePetsSchema(database: Database.Database): void {
   database.exec(PETS_SCHEMA_SQL);
+
+  const existing = new Set(
+    (database.prepare('PRAGMA table_info(installed_pets)').all() as { name: string }[])
+      .map((column) => column.name),
+  );
+
+  for (const column of ADDED_COLUMNS) {
+    if (existing.has(column.name)) continue;
+    database.exec(`ALTER TABLE installed_pets ADD COLUMN ${column.name} ${column.definition}`);
+  }
 }
 
 /**
@@ -93,6 +115,15 @@ export type InstalledPetRecord = {
   states: PetStates | null;
   installedAt: string;
   updatedAt: string;
+  /**
+   * When the user hid this pet from their library, if they did.
+   *
+   * Hiding exists because `~/.codex/pets` is another tool's directory: a pet
+   * installed there cannot be deleted, and "I do not want this one in my
+   * library" still has to mean something. It is our listing, so it is ours to
+   * leave a pet out of.
+   */
+  hiddenAt: string | null;
 };
 
 type InstalledPetRow = {
@@ -103,6 +134,7 @@ type InstalledPetRow = {
   states_json: string | null;
   installed_at: string;
   updated_at: string;
+  hidden_at: string | null;
 };
 
 /**
@@ -128,9 +160,10 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   states: parseJson<PetStates>(row.states_json),
   installedAt: row.installed_at,
   updatedAt: row.updated_at,
+  hiddenAt: row.hidden_at,
 });
 
-const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at';
+const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, hidden_at';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -183,6 +216,22 @@ export const petsRepository = {
       input.states ? JSON.stringify(input.states) : null,
       id,
     );
+  },
+
+  /**
+   * Hides a pet from the library, or brings it back.
+   *
+   * Deliberately separate from `forgetPet`: forgetting is for a pet whose files
+   * are gone, hiding is for one that is still on disk and must stay there.
+   * Inserts nothing — a pet is always remembered before it can be hidden.
+   */
+  setHidden(id: string, hidden: boolean): void {
+    db().prepare(`
+      UPDATE installed_pets
+      SET hidden_at = ${hidden ? 'CURRENT_TIMESTAMP' : 'NULL'},
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(id);
   },
 
   forgetPet(id: string): void {

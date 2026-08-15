@@ -26,7 +26,12 @@ export type {
   PetStateName,
   PetStates,
 } from '@/modules/pets/pet-spec.js';
-export { createRemoteCatalogue } from '@/modules/pets/remote-catalogue.js';
-export type { CatalogueEntry, CatalogueResult, PetCatalogue } from '@/modules/pets/remote-catalogue.js';
+export { createRemoteCatalogue, DEFAULT_CATALOGUE_URL } from '@/modules/pets/remote-catalogue.js';
+export type {
+  CatalogueEntry,
+  CataloguePage,
+  CatalogueValidation,
+  PetCatalogue,
+} from '@/modules/pets/remote-catalogue.js';
 export { CODEX_SPRITE_CELL, inferFrameGrid, readImageSize } from '@/modules/pets/sprite-metrics.js';
 export type { GridBasis, GridInference, ImageSize } from '@/modules/pets/sprite-metrics.js';

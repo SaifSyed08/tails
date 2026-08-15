@@ -1,101 +1,278 @@
-import { Eye, Globe, PawPrint, RefreshCw } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  Download,
+  Eye,
+  Globe,
+  Heart,
+  Loader2,
+  PawPrint,
+  RefreshCw,
+  Search,
+  WifiOff,
+  X,
+} from 'lucide-react';
+import type { ReactNode } from 'react';
 
-import type { CatalogueResult } from './marketplace-api';
+import { cn } from '@/lib/utils';
+import { Reveal } from '@/shared/ui/Motion';
+import { readStaggerDelay } from '@/theme/motion';
+
+import type { CatalogueEntry, CataloguePage } from './marketplace-api';
 import { Pill } from './Pill';
 
 /**
- * The codex-pet.net shelf.
+ * The codex-pets.net shelf.
  *
- * The stated goal is browsing that library — or at least its top 100 pets by
- * views — from in here. **No public endpoint for it has been confirmed**, so
- * this shelf has nothing real to put out, and the one thing it must not do is
- * fill itself with plausible-looking pets. Everything a fake row would earn in
- * the first ten seconds it loses the moment someone clicks one.
+ * A real storefront over a real API: 3,040 pets, sorted by view count, browsed
+ * a page at a time with the top 50 as the landing shelf. Nothing is bulk
+ * imported — at roughly 1.7MB per pet that would be about five gigabytes — so
+ * a pet is downloaded when someone asks for that pet.
  *
- * So the unconfigured case is drawn as an empty display case: outlines where
- * stock will go, a plain account of what is missing, and the environment
- * variable that switches it on. It reads as a shelf awaiting delivery rather
- * than as a section that failed to load.
+ * Every request goes through our own server, including the thumbnails, so the
+ * renderer never talks to the remote host and a dead network produces one
+ * designed state here rather than a grid of broken images.
  */
 
 type CatalogueShelfProps = {
-  result: CatalogueResult | null;
+  page: CataloguePage | null;
+  /** True while a page request is in flight; the shelf dims rather than emptying. */
+  loading: boolean;
+  query: string;
+  onQueryChange: (value: string) => void;
+  onPageChange: (page: number) => void;
   onRetry: () => void;
+  /** Ids already on disk, so an installed pet is never offered for install again. */
+  installedIds: Set<string>;
+  installingId: string | null;
+  onInstall: (entry: CatalogueEntry) => void;
 };
 
 const SHIMMER = 'animate-shimmer bg-gradient-to-r from-muted via-accent to-muted bg-[length:200%_100%]';
 
-/** Outlines, not products: no name, no number, nothing to mistake for stock. */
-function EmptyCase() {
+const compact = (value: number): string => value.toLocaleString(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+function ShelfHeader({
+  status,
+  tone,
+  children,
+}: {
+  status: string;
+  tone: 'neutral' | 'warning' | 'positive';
+  children?: ReactNode;
+}) {
   return (
-    <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-hidden="true">
-      {[0, 1, 2, 3].map((slot) => (
-        <li
-          key={slot}
-          className="flex h-28 items-center justify-center rounded-lg border border-dashed border-border"
-        >
-          <PawPrint className="size-6 text-muted-foreground/30" />
+    <div className="flex flex-wrap items-center gap-2">
+      <h2 className="flex items-center gap-1.5 font-display text-sm font-semibold">
+        <Globe className="size-3.5" aria-hidden="true" /> codex-pets.net
+      </h2>
+      <Pill tone={tone}>{status}</Pill>
+      {children}
+    </div>
+  );
+}
+
+function SkeletonRow() {
+  return (
+    <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {[0, 1, 2, 3, 4, 5, 6, 7].map((slot) => (
+        <li key={slot} data-tails-part="card" className="overflow-hidden">
+          <div className={`h-28 ${SHIMMER}`} />
+          <div className="space-y-2 p-3">
+            <div className={`h-3.5 w-2/3 rounded ${SHIMMER}`} />
+            <div className={`h-3 w-full rounded ${SHIMMER}`} />
+          </div>
         </li>
       ))}
     </ul>
   );
 }
 
-function ShelfHeader({ status, tone }: { status: string; tone: 'neutral' | 'warning' | 'positive' }) {
+/**
+ * One remote pet.
+ *
+ * The thumbnail is the catalogue's own preview image rather than a live sprite:
+ * animating 50 remote spritesheets would mean downloading 85MB to render a
+ * page. The animation starts once the pet is installed.
+ */
+function CatalogueCard({
+  entry,
+  installed,
+  installing,
+  onInstall,
+}: {
+  entry: CatalogueEntry;
+  installed: boolean;
+  installing: boolean;
+  onInstall: (entry: CatalogueEntry) => void;
+}) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <h2 className="flex items-center gap-1.5 font-display text-sm font-semibold">
-        <Globe className="size-3.5" aria-hidden="true" /> codex-pet.net library
-      </h2>
-      <Pill tone={tone}>{status}</Pill>
+    <div data-tails-part="card" className="flex h-full flex-col overflow-hidden">
+      <div className="relative flex h-28 items-center justify-center bg-gradient-to-b from-muted/70 to-transparent">
+        {entry.previewUrl ? (
+          <img
+            src={entry.previewUrl}
+            alt=""
+            loading="lazy"
+            className="h-full w-full object-contain"
+            style={{ imageRendering: 'pixelated' }}
+          />
+        ) : (
+          <PawPrint className="size-6 text-muted-foreground/40" aria-hidden="true" />
+        )}
+        {installed ? (
+          <Pill tone="positive" className="absolute left-2 top-2">
+            <Check className="size-2.5" aria-hidden="true" /> Installed
+          </Pill>
+        ) : null}
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-3">
+        <div className="flex min-w-0 items-start justify-between gap-2">
+          <h3 className="truncate text-sm font-medium">{entry.displayName}</h3>
+          {entry.kind ? <Pill>{entry.kind}</Pill> : null}
+        </div>
+
+        {entry.description ? (
+          <p className="line-clamp-2 text-xs text-muted-foreground">{entry.description}</p>
+        ) : null}
+
+        <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
+          {entry.views === null ? null : (
+            <span className="inline-flex items-center gap-1">
+              <Eye className="size-3" aria-hidden="true" /> {compact(entry.views)}
+            </span>
+          )}
+          {entry.likes === null ? null : (
+            <span className="inline-flex items-center gap-1">
+              <Heart className="size-3" aria-hidden="true" /> {compact(entry.likes)}
+            </span>
+          )}
+          {entry.downloads ? (
+            <span className="inline-flex items-center gap-1">
+              <Download className="size-3" aria-hidden="true" /> {compact(entry.downloads)}
+            </span>
+          ) : null}
+          {entry.ownerHandle ? <span className="truncate">by {entry.ownerHandle}</span> : null}
+        </p>
+
+        {entry.tags.length > 0 ? (
+          <p className="flex flex-wrap gap-1">
+            {entry.tags.slice(0, 3).map((tag) => (
+              <span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {tag}
+              </span>
+            ))}
+          </p>
+        ) : null}
+
+        <div className="mt-auto pt-1.5">
+          {installed ? (
+            <p className="text-[11px] text-muted-foreground">Already in your library.</p>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onInstall(entry)}
+              disabled={installing}
+              className="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-transform duration-instant ease-emphasis active:scale-95 disabled:opacity-60"
+            >
+              {installing
+                ? <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                : <Download className="size-3" aria-hidden="true" />}
+              {installing ? 'Installing…' : 'Install'}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-export function CatalogueShelf({ result, onRetry }: CatalogueShelfProps) {
-  if (!result) {
+export function CatalogueShelf({
+  page,
+  loading,
+  query,
+  onQueryChange,
+  onPageChange,
+  onRetry,
+  installedIds,
+  installingId,
+  onInstall,
+}: CatalogueShelfProps) {
+  if (!page && loading) {
     return (
       <section className="space-y-3">
-        <ShelfHeader status="checking" tone="neutral" />
-        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[0, 1, 2, 3].map((slot) => (
-            <li key={slot} className={`h-28 rounded-lg ${SHIMMER}`} />
-          ))}
-        </ul>
+        <ShelfHeader status="loading" tone="neutral" />
+        <SkeletonRow />
       </section>
     );
   }
 
-  if (!result.configured) {
+  if (!page) return null;
+
+  if (!page.configured) {
     return (
       <section className="space-y-3">
-        <ShelfHeader status="coming soon" tone="neutral" />
+        <ShelfHeader status="turned off" tone="neutral" />
         <p className="max-w-prose text-xs text-muted-foreground">
-          Browsing the shared library — the plan is its top 100 pets by views — needs a catalogue
-          URL in <code className="rounded bg-muted px-1 py-0.5">TAILS_PET_CATALOGUE_URL</code>. No
-          public API for codex-pet.net has been confirmed, so this shelf is deliberately empty
-          rather than stocked with pets that do not exist. Set the variable once a real endpoint is
-          known and it fills itself in. Until then, importing a folder puts any pet you already have
-          on the shelf above.
+          Browsing the shared library is switched off:{' '}
+          <code className="rounded bg-muted px-1 py-0.5">TAILS_PET_CATALOGUE_URL</code> is set to
+          nothing, so this machine makes no requests to a catalogue. Clear the variable to get the
+          default library back, or point it at a mirror.
         </p>
-        <EmptyCase />
       </section>
     );
   }
 
-  if (result.error) {
+  const search = (
+    <div className="relative min-w-[12rem] flex-1">
+      <Search
+        className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+        aria-hidden="true"
+      />
+      <input
+        value={query}
+        onChange={(event) => onQueryChange(event.target.value)}
+        placeholder={`Search ${page.total ? page.total.toLocaleString() : 'the'} pets`}
+        aria-label="Search the catalogue"
+        data-tails-part="input"
+        className="w-full py-1.5 pl-8 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring"
+      />
+      {query ? (
+        <button
+          type="button"
+          onClick={() => onQueryChange('')}
+          aria-label="Clear catalogue search"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors duration-quick hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      ) : null}
+    </div>
+  );
+
+  if (page.error) {
     return (
       <section className="space-y-3">
-        <ShelfHeader status="unreachable" tone="warning" />
+        <ShelfHeader status="offline" tone="warning" />
         <div
           data-tails-critical
-          className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-8 text-center"
         >
-          <span className="min-w-0 flex-1">{result.error}</span>
+          <WifiOff className="size-6 text-muted-foreground" aria-hidden="true" />
+          <p className="text-sm font-medium">The catalogue is out of reach</p>
+          <p className="max-w-md text-xs text-muted-foreground">{page.error}</p>
+          <p className="max-w-md text-xs text-muted-foreground">
+            Your installed pets are unaffected — they live on this machine.
+          </p>
           <button
             type="button"
             onClick={onRetry}
-            className="flex items-center gap-1.5 rounded-md border border-destructive/40 px-2 py-1 transition-colors duration-quick hover:bg-destructive/10"
+            className="mt-1 flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs transition-colors duration-quick hover:bg-accent"
           >
             <RefreshCw className="size-3" aria-hidden="true" /> Try again
           </button>
@@ -104,55 +281,88 @@ export function CatalogueShelf({ result, onRetry }: CatalogueShelfProps) {
     );
   }
 
-  if (result.entries.length === 0) {
-    return (
-      <section className="space-y-3">
-        <ShelfHeader status="empty" tone="neutral" />
-        <p className="text-xs text-muted-foreground">
-          The catalogue at {result.baseUrl} answered, but listed no pets.
-        </p>
-        <EmptyCase />
-      </section>
-    );
-  }
+  const first = (page.page - 1) * page.pageSize + 1;
+  const last = Math.min(page.total, first + page.entries.length - 1);
 
   return (
-    <section className="space-y-3">
-      <ShelfHeader status={`${result.entries.length} pets`} tone="positive" />
-      <p className="text-xs text-muted-foreground">
-        Listed by {result.baseUrl}. Installing straight from a catalogue is not wired up yet, so
-        these are browse-only — download a pet folder and import it from the button above.
-      </p>
-      <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {result.entries.map((entry) => (
-          <li key={entry.id} data-tails-part="card" className="flex flex-col overflow-hidden">
-            {entry.previewUrl ? (
-              <img
-                src={entry.previewUrl}
-                alt=""
-                loading="lazy"
-                className="h-28 w-full bg-muted/40 object-contain"
-                style={{ imageRendering: 'pixelated' }}
+    <section className={cn('space-y-3', loading && 'opacity-60')}>
+      <ShelfHeader status={`${page.total.toLocaleString()} pets`} tone="positive">
+        <span className="text-xs text-muted-foreground">
+          {page.query
+            ? `Matching “${page.query}”`
+            : page.page === 1 ? 'Top 50 by views' : 'Most viewed'}
+        </span>
+      </ShelfHeader>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {search}
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => onPageChange(page.page - 1)}
+            disabled={page.page <= 1 || loading}
+            aria-label="Previous page"
+            className="rounded-md border border-border p-1.5 transition-colors duration-quick hover:bg-accent disabled:opacity-40"
+          >
+            <ChevronLeft className="size-3.5" />
+          </button>
+          <span className="tabular-nums">
+            {page.entries.length > 0 ? `${first.toLocaleString()}–${last.toLocaleString()}` : '0'}
+            {' of '}
+            {page.total.toLocaleString()}
+          </span>
+          <button
+            type="button"
+            onClick={() => onPageChange(page.page + 1)}
+            disabled={page.page >= page.totalPages || loading}
+            aria-label="Next page"
+            className="rounded-md border border-border p-1.5 transition-colors duration-quick hover:bg-accent disabled:opacity-40"
+          >
+            <ChevronRight className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {page.entries.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-8 text-center">
+          <Search className="size-5 text-muted-foreground" aria-hidden="true" />
+          <p className="text-sm font-medium">
+            {page.query ? `Nothing there matches “${page.query}”` : 'The catalogue listed no pets'}
+          </p>
+          {page.query ? (
+            <button
+              type="button"
+              onClick={() => onQueryChange('')}
+              className="rounded-md border border-border px-2.5 py-1 text-xs transition-colors duration-quick hover:bg-accent"
+            >
+              Clear search
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {page.entries.map((entry, index) => (
+            <Reveal
+              key={entry.id}
+              as="li"
+              variant="fade"
+              delayMs={readStaggerDelay(index)}
+            >
+              <CatalogueCard
+                entry={entry}
+                installed={installedIds.has(entry.id)}
+                installing={installingId === entry.id}
+                onInstall={onInstall}
               />
-            ) : (
-              <div className="flex h-28 items-center justify-center bg-muted/40">
-                <PawPrint className="size-6 text-muted-foreground/40" aria-hidden="true" />
-              </div>
-            )}
-            <div className="flex flex-1 flex-col gap-1 p-3">
-              <p className="truncate text-sm font-medium">{entry.displayName}</p>
-              {entry.description ? (
-                <p className="line-clamp-2 text-xs text-muted-foreground">{entry.description}</p>
-              ) : null}
-              {entry.views === null ? null : (
-                <p className="mt-auto flex items-center gap-1 pt-1 text-[11px] text-muted-foreground">
-                  <Eye className="size-3" aria-hidden="true" /> {entry.views.toLocaleString()} views
-                </p>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
+            </Reveal>
+          ))}
+        </ul>
+      )}
+
+      <p className="text-[11px] text-muted-foreground">
+        Browsed live from {page.baseUrl}. Installing downloads that one pet — about 1.7MB — and
+        writes it to your own pets folder.
+      </p>
     </section>
   );
 }

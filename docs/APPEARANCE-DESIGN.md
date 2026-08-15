@@ -188,14 +188,32 @@ primitive rather than approximate with the nearest preset.
   ink, and the mouse cursor over the app body.
 - **Mouse-following effects.** `--pointer-x` / `--pointer-y` (percentages) and
   `--pointer-px` / `--pointer-py` (pixels) are published on `:root` and follow
-  the pointer, rAF-coalesced. A spotlight is
-  `radial-gradient(circle at var(--pointer-x) var(--pointer-y), …)`. Deliberately
-  two numbers rather than a built-in effect: a built-in trail would be one
-  effect somebody chose, and coordinates in the cascade are every effect anyone
-  can compose from a gradient, a shadow or a transform.
+  the pointer, rAF-coalesced, and only while something reads them. A spotlight
+  is `radial-gradient(circle at var(--pointer-x) var(--pointer-y), …)`.
+  Deliberately two numbers as well as the built-in effects below: coordinates in
+  the cascade are every effect anyone can compose from a gradient, a shadow or a
+  transform.
+- **A custom cursor and a trail.** `interaction.pointer` — `halo`, `ring`, `dot`
+  — plus `trail` as `comet` or `ribbon`. Not an imported image, because
+  `cursor: url(...)` is refused and always will be: a stylesheet that can name a
+  remote resource can report where the user is pointing at the resolution of
+  every hover. So it is a gradient the app draws and moves.
+
+  Three things about it are deliberate. The default is a *companion* rather than
+  a replacement — a drawn cursor is painted by the page and therefore lands a
+  frame after the pointer event, which is invisible on a large soft halo and
+  obviously broken on a small hard dot, so `replace` is an opt-in for authors
+  who have chosen a shape that survives it. The native cursor always returns
+  over text fields, contenteditable regions and `[data-tails-critical]`, which
+  is the `cursor` property's version of the selector ban. And the trail is
+  spaced by *distance travelled* rather than by time, so it is frame-rate
+  independent and retracts to nothing when the pointer stops, instead of pooling
+  into a blob under a stationary cursor.
 
 **Gaps still open**, named rather than quietly left:
 
+- **An imported cursor image** is not coming. `cursor: url(...)` is the one
+  thing the validator will not yield on, so the drawn shapes are the ceiling.
 - **Caret blink rate and width** are the operating system's, not CSS's.
   `caret-shape: block` gets the fat terminal cursor; "make it blink faster" is
   not reachable and would need a custom caret in a contenteditable, which is a

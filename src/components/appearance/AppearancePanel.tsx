@@ -7,7 +7,8 @@ import {
   setLiveToken,
   writeLiveTokens,
 } from '@/components/appearance/liveTokens';
-import { startPointerTokens } from '@/components/appearance/pointerTokens';
+import { PointerLayer } from '@/components/appearance/PointerLayer';
+import { refreshPointerTracking, startPointerTokens } from '@/components/appearance/pointerTokens';
 import { ThemeProposal, type ProposalVariant } from '@/components/appearance/ThemeProposal';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { applyFreeformCss, applyTheme, clearTheme, type AppearancePayload } from '@/theme/applyTheme';
@@ -174,6 +175,10 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
   const onControlChange = useCallback((control: AppearanceControl, value: number | boolean | string) => {
     setValues((current) => ({ ...current, [control.id]: value }));
     setLiveToken(control.binds, tokenValue(control, value));
+    // A control can switch a drawn cursor on, or point a gradient at
+    // `--pointer-x`, so the gate on the pointer writer has to be reconsidered
+    // after a drag as well as after a theme change.
+    refreshPointerTracking();
     // Knob positions are folded into the *current* snapshot rather than pushed
     // as a new one. Otherwise a single slider drag would bury the state the
     // user actually wants to undo to under sixty intermediate frames.
@@ -243,13 +248,19 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
   // panel earns its place by appearing at the moment it becomes useful — but a
   // proposal can be on screen before anything has been applied at all.
   if (!touched || dismissed) {
-    return proposal.length > 0
-      ? <ThemeProposal variants={proposal} onDismiss={() => setProposal([])} />
-      : null;
+    return (
+      <>
+        <PointerLayer />
+        {proposal.length > 0
+          ? <ThemeProposal variants={proposal} onDismiss={() => setProposal([])} />
+          : null}
+      </>
+    );
   }
 
   return (
     <>
+      <PointerLayer />
       <ThemeProposal variants={proposal} onDismiss={() => setProposal([])} />
       <div
         data-tails-part="popover"

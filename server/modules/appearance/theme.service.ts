@@ -186,12 +186,22 @@ export const themeService = {
    * the settings UI, the agent tool, and a preset click all travel the same
    * path and cannot drift apart.
    */
-  applyTheme(themeId: string, scope: ThemeScope, scopeKey = ''): ResolvedAppearance {
+  applyTheme(
+    themeId: string,
+    scope: ThemeScope,
+    scopeKey = '',
+    options: { keepFreeformLayer?: boolean } = {},
+  ): ResolvedAppearance {
     // Resolve before binding so a bad id fails loudly instead of leaving a
     // dangling binding that silently falls through to the default.
     const resolved = this.resolveThemeId(themeId, scope);
     themesRepository.setBinding(scope, scopeKey, themeId);
     lastShown.set(scopeKey, { spec: null, themeId });
+
+    // The freeform layer was written against a particular look, so switching
+    // look retires it — unless the caller is the agent, which is mid-composition
+    // and knows what it layered. See the note on `clearFreeformCss`.
+    if (!options.keepFreeformLayer) this.clearFreeformCss(scopeKey);
 
     appBroadcast.publish(createMessage('appearance_changed', scopeKey, {
       // Spread first so the explicit binding scope wins over the resolved one.
@@ -268,6 +278,17 @@ export const themeService = {
   unbind(scope: ThemeScope, scopeKey = ''): void {
     themesRepository.clearBinding(scope, scopeKey);
     const fallback = this.resolveAppearance();
+
+    // Every layer, not just the bound theme. This was a real leak and it is
+    // worth naming: a `theme_css` layer is adopted as its own stylesheet and
+    // nothing here ever dropped it, so an effect written into it — a glow that
+    // follows the cursor was the case that surfaced it — outlived the theme it
+    // was written for, survived switching to a different theme, and survived
+    // "reset appearance" as well. The only things that cleared it were a
+    // reload and the panic key. To the user that is indistinguishable from a
+    // permanent app feature nobody can find the switch for.
+    this.clearFreeformCss(scopeKey);
+    this.clearControls(scopeKey);
 
     appBroadcast.publish(createMessage('appearance_changed', scopeKey, {
       appearance: {

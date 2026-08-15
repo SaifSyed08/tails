@@ -20,6 +20,8 @@ export type ChatSession = {
   updatedAt: string;
   pinnedAt: string | null;
   archivedAt: string | null;
+  /** The companion assigned to this conversation, if it has one of its own. */
+  petId: string | null;
 };
 
 /**
@@ -95,6 +97,27 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ archived }),
     }),
+
+  getSession: (sessionId: string) =>
+    request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`),
+
+  /** `null` clears the conversation's own pet and falls back to the global one. */
+  setSessionPet: (sessionId: string, petId: string | null) =>
+    request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ petId }),
+    }),
+
+  /**
+   * The installed pets, read straight from the pets module's own endpoint.
+   *
+   * Typed to the handful of fields the picker shows rather than mirroring
+   * `InstalledPet` — that shape belongs to the pets module and is still moving.
+   */
+  listPets: () => request<{
+    pets: { definition: { id: string; name: string }; spriteUrl: string; active: boolean }[];
+    activePetId: string | null;
+  }>('/pets'),
 
   listThemes: () => request<ThemeSummary[]>('/appearance/themes'),
 

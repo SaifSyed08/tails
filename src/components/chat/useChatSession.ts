@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { mergeTranscript, unaccountedFor } from '@/components/chat/transcript';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { api } from '@/lib/api';
 import { PERMISSION_MODE_VALUES, type PermissionMode } from '@/types/chat';
@@ -176,16 +177,25 @@ export function useChatSession(sessionId: string | null) {
     setStreamingText('');
   }, []);
 
-  const loadHistory = useCallback(async (id: string) => {
+  /**
+   * Reloads the transcript, returning what it read.
+   *
+   * The return value matters: a failed read used to be indistinguishable from
+   * an empty one at the call site, and the caller went on to clear the live
+   * messages either way.
+   */
+  const loadHistory = useCallback(async (id: string): Promise<NormalizedMessage[] | null> => {
     try {
       const messages = await api.getMessages(id);
       setHistory(messages);
       setState((current) => ({ ...current, error: null }));
+      return messages;
     } catch (error) {
       setState((current) => ({
         ...current,
         error: error instanceof Error ? error.message : 'Could not load this conversation.',
       }));
+      return null;
     }
   }, []);
 
@@ -315,8 +325,13 @@ export function useChatSession(sessionId: string | null) {
             ...current, busy: false, pendingPermissions: [], pendingPrompts: [],
           }));
           // Re-read from the transcript so what's on screen matches what was
-          // actually persisted, then drop the optimistic realtime rows.
-          void loadHistory(sessionId).then(() => setRealtime([]));
+          // actually persisted, then drop only the live messages that read
+          // actually accounts for. Dropping all of them assumed the transcript
+          // was complete, and when it was not the turn disappeared.
+          void loadHistory(sessionId).then((messages) => {
+            if (!messages) return;
+            setRealtime((current) => unaccountedFor(messages, current));
+          });
           return;
 
         case 'session_created':
@@ -335,8 +350,10 @@ export function useChatSession(sessionId: string | null) {
   // Rebuild rows whenever any input changes. Cheap relative to the render it
   // feeds, and keeps the merge logic in exactly one place.
   useEffect(() => {
-    const merged = [...history, ...realtime];
-    const rows = buildChatRows(merged);
+    // Merged rather than concatenated: between the reload landing and the
+    // prune running, both copies of the same message exist, and the user
+    // should not watch the last answer flash twice.
+    const rows = buildChatRows(mergeTranscript(history, realtime));
     if (streamingText) {
       rows.push({ type: 'assistant', id: '__streaming', content: streamingText, streaming: true });
     }

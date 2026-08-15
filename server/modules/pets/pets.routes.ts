@@ -16,9 +16,54 @@ export function createPetsRouter(): express.Router {
       }
     };
 
-  // Registered before `/:petId` so a pet can never shadow it.
-  router.get('/catalogue', respond((req) => petsService.listRemoteCatalogue(
-    req.query.limit === undefined ? undefined : Number(req.query.limit),
+  // Registered before `/:petId` so a pet can never shadow them.
+  router.get('/catalogue', respond((req) => petsService.listRemoteCatalogue({
+    page: req.query.page === undefined ? undefined : Number(req.query.page),
+    pageSize: req.query.pageSize === undefined ? undefined : Number(req.query.pageSize),
+    query: typeof req.query.q === 'string' ? req.query.q : undefined,
+  })));
+
+  /**
+   * Downloads one catalogue pet and installs it.
+   *
+   * Takes an id and nothing else. A body carrying a URL would make this a
+   * general-purpose fetcher pointed at our own network, so the URL is resolved
+   * server-side from what the catalogue advertised.
+   */
+  router.post('/catalogue/:petId/install', respond(
+    (req) => petsService.installFromCatalogue(String(req.params.petId)),
+  ));
+
+  /**
+   * Proxies a catalogue thumbnail.
+   *
+   * Here so the renderer makes no third-party requests: the marketplace shows
+   * remote artwork without the remote host ever seeing the user.
+   */
+  router.get('/catalogue/:petId/preview', async (req, res, next) => {
+    try {
+      const preview = await petsService.fetchCataloguePreview(String(req.params.petId));
+      res.setHeader('Content-Type', preview.contentType);
+      res.setHeader('Content-Length', String(preview.bytes.byteLength));
+      // Long and immutable-ish: thumbnails are versioned in their upstream URL,
+      // and a browsing session revisits the same page constantly.
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.end(preview.bytes);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * Which pet a surface should render.
+   *
+   * `?sessionPetId=` is the conversation's assignment, if it has one. The
+   * precedence and the dangling-reference handling live in the service so every
+   * caller gets the same answer; this route exists so a caller does not have to
+   * be on the server to ask.
+   */
+  router.get('/display', respond((req) => petsService.resolveDisplayPet(
+    typeof req.query.sessionPetId === 'string' ? req.query.sessionPetId : null,
   )));
 
   router.get('/', respond(() => petsService.listPets()));
@@ -34,6 +79,12 @@ export function createPetsRouter(): express.Router {
 
   router.post('/:petId/activate', respond((req) => petsService.setActivePet(
     req.body?.active === false ? null : String(req.params.petId),
+  )));
+
+  /** Hiding is the only "remove" available for a pet Codex owns. */
+  router.post('/:petId/hidden', respond((req) => petsService.setPetHidden(
+    String(req.params.petId),
+    req.body?.hidden !== false,
   )));
 
   router.delete('/:petId', respond((req) => petsService.removePet(String(req.params.petId))));

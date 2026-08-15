@@ -43,6 +43,32 @@ database, never returned from `/resolve`, gone on reload. That is not an
 oversight to be tidied up later — it is what makes "reload the window" a
 complete recovery path, and the loosened freeform validator (§8) depends on it.
 
+### 1.1 When an ephemeral layer is retired
+
+Ephemeral is not the same as self-clearing, and conflating the two shipped a
+real bug. The `css` layer is its own adopted stylesheet, and nothing dropped it
+when the theme underneath changed — so an effect written into it (a glow that
+followed the cursor, in the case that surfaced this) outlived the look it was
+written for, survived switching to a different theme, and survived *reset
+appearance* as well. Only a reload or the panic key cleared it. From the user's
+side that is indistinguishable from a permanent app feature with no switch.
+
+The lifecycle is now explicit:
+
+| event | theme | css | controls |
+| --- | --- | --- | --- |
+| `theme_preview` | replaced | kept | kept |
+| `theme_apply` **from the agent** | replaced | **kept** | kept |
+| `POST /apply` **from Settings** | replaced | **dropped** | kept |
+| `unbind` / reset | dropped | **dropped** | **dropped** |
+
+The split on apply is the whole subtlety. An agent applying a theme is
+mid-composition — the CSS it wrote a moment ago is part of the look it is now
+binding — so `theme_apply` passes `keepFreeformLayer`. A user picking a theme in
+Settings means the opposite: a different look, from a clean slate. Same service
+method, opposite intent, so the intent is stated at the call site rather than
+guessed at from the arguments.
+
 Never write theme tokens as inline styles on `documentElement`. Inline styles
 outrank every selector, so a theme applied that way silently defeats the `.dark`
 overrides and breaks dark mode.
@@ -167,7 +193,45 @@ default is a colour.
 | `--t-caret-shape` | `auto \| bar \| block \| underscore` | `body { caret-shape }` — Chromium 139+ |
 | `--t-selection-fill` | `<color>` | `::selection { background-color }` |
 | `--t-selection-ink` | `<color>` or `currentColor` | `::selection { color }` |
-| `--t-cursor` | `<cursor>` keyword | `body { cursor }` |
+| `--t-cursor` | `<cursor>` keyword or `none` | `body { cursor }` |
+| `--t-pointer-image` | `<image>` or `none` | `.t-pointer { background-image }` |
+| `--t-pointer-size` | `<length>` | `.t-pointer` width/height |
+| `--t-pointer-opacity` | `<number>` | `.t-pointer { opacity }` |
+| `--t-pointer-blend` | `<blend-mode>` | `.t-pointer`, `.t-trail-segment` |
+| `--t-trail-image` | `<image>` or `none` | `.t-trail-segment { background-image }` |
+| `--t-trail-size` | `<length>` | widest segment |
+| `--t-trail-opacity` | `<number>` | nearest segment; the rest fall off |
+| `--t-trail-length` | `<number>`, never `0` | segment count *and* falloff divisor |
+| `--t-trail-taper` | `0` or `1` | 1 shrinks each segment (comet), 0 keeps width (ribbon) |
+
+**A custom cursor is never an image.** `cursor: url(...)` is refused by the
+validator and always will be — a stylesheet that can name a remote resource can
+report where the user is pointing at the resolution of every hover. So the two
+available mechanisms are the native keyword set (`--t-cursor`) and a shape the
+app draws and moves with the pointer (`.t-pointer`, positioned entirely from
+`--pointer-px` / `--pointer-py` with no per-element script).
+
+`replace: true` in the spec reaches the page as `--t-cursor: none` rather than
+as a token of its own, because `cursor: none` on the body *is* hiding the native
+pointer and a second token saying the same thing is a second place for the two
+to disagree.
+
+**Two rules the renderer owes the user regardless of the theme.** The native
+cursor is restored over `input`, `textarea`, `select`, `[contenteditable]` and
+`[data-tails-critical]` and their descendants — over a text field the caret
+position is carried by the I-beam and over a permission prompt the pointer is
+how the user knows which button they are about to press. Those rules live in the
+base layer, so a Tailwind `cursor-*` utility still wins and a resize handle keeps
+its own cursor without being listed. And `.t-trail-segment` is hidden entirely
+under `prefers-reduced-motion`, because a trail keeps moving after the pointer
+has passed; the drawn cursor stays, because it tracks the user's own hand.
+
+`--seg-index`, `--seg-fade` and `--seg-scale` are **not** theme tokens and
+deliberately carry no `--t-` prefix. The renderer writes `--seg-index` on each
+segment at mount and derives the other two from it in CSS, which is what keeps
+the frame loop down to one `translate` write per segment — and what makes
+`--t-trail-length`, `--t-trail-opacity` and `--t-trail-taper` live controls for
+free.
 
 **Renderer-owned, never emitted by the derivation.** These are defined in
 `index.css` and written at runtime; a theme reads them, it does not set them.
@@ -177,6 +241,16 @@ default is a colour.
 | `--font-smoothing` | `index.css`, default `auto` | `body { -webkit-font-smoothing }` |
 | `--pointer-x` `--pointer-y` | `pointerTokens.ts`, percentages | mouse-following gradients |
 | `--pointer-px` `--pointer-py` | `pointerTokens.ts`, pixels | mouse-following transforms and shadows |
+
+**The pointer writer is gated, and must stay gated.** Writing four custom
+properties on `:root` every frame the mouse moves invalidates computed style
+across the document each time; doing it for a whole session when no bound theme
+reads them is a battery cost with no benefit, which is how it originally
+shipped. The writes now happen only while something consumes them — an adopted
+stylesheet mentioning `--pointer-`, or a drawn cursor or trail being on — and
+the answer is recomputed on every appearance change rather than per mouse move.
+`refreshPointerTracking()` is the hook; call it after anything that could change
+who is reading.
 
 `--font-smoothing` exists because `-webkit-font-smoothing: antialiased` used to
 be hard-coded on `body`. That is a macOS idiom; on Windows it switches Chromium

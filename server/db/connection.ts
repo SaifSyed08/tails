@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   pinned_at DATETIME,
-  archived_at DATETIME
+  archived_at DATETIME,
+  -- The companion assigned to this conversation. No foreign key: pets live on
+  -- disk, not in this database, and uninstalling one must not break a chat.
+  pet_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
@@ -105,6 +108,7 @@ export function getConnection(): Database.Database {
   connection.exec(SCHEMA_SQL);
   ensureColumn(connection, 'sessions', 'pinned_at', 'DATETIME');
   ensureColumn(connection, 'sessions', 'archived_at', 'DATETIME');
+  ensureColumn(connection, 'sessions', 'pet_id', 'TEXT');
   return connection;
 }
 

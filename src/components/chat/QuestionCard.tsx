@@ -1,6 +1,7 @@
 import { MessageCircleQuestion } from 'lucide-react';
 import { useState } from 'react';
 
+import { composeAnswer } from '@/components/chat/answers';
 import { cn } from '@/lib/utils';
 import { Reveal } from '@/shared/ui/Motion';
 import type { AskUserQuestion } from '@/types/chat';
@@ -14,18 +15,26 @@ type QuestionCardProps = {
 /**
  * The model's own question, rendered so it can actually be answered.
  *
- * Answers are keyed by the question's exact text and valued by the chosen
- * option's label, because that is the shape the tool reads back. Multi-select
- * joins labels with a comma.
+ * Every question owns its options *and* its own free-text box. The previous
+ * version had one shared box whose contents were sent as `response` while
+ * `answers` stayed empty — which the runtime read as "no option was chosen",
+ * so a typed answer reached the tool as no answer at all.
  */
 export function QuestionCard({ requestId, questions, onAnswer }: QuestionCardProps) {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [other, setOther] = useState('');
+  const [custom, setCustom] = useState<Record<string, string>>({});
 
   const toggle = (question: AskUserQuestion, label: string) => {
     setSelections((current) => {
       const existing = current[question.question] ?? [];
-      if (!question.multiSelect) return { ...current, [question.question]: [label] };
+      if (!question.multiSelect) {
+        // Tapping the chosen option again clears it, which is the only way to
+        // fall back to a typed answer without reloading the card.
+        return {
+          ...current,
+          [question.question]: existing[0] === label ? [] : [label],
+        };
+      }
       return {
         ...current,
         [question.question]: existing.includes(label)
@@ -35,17 +44,22 @@ export function QuestionCard({ requestId, questions, onAnswer }: QuestionCardPro
     });
   };
 
-  const answered = questions.every((question) => (selections[question.question]?.length ?? 0) > 0);
-  const canSubmit = answered || other.trim().length > 0;
+  const answerFor = (question: AskUserQuestion) => composeAnswer(
+    selections[question.question] ?? [],
+    custom[question.question] ?? '',
+  );
+
+  // Every question needs something, or the tool reports the whole set
+  // unanswered — a half-filled form is not a partial answer to it.
+  const canSubmit = questions.every((question) => answerFor(question).length > 0);
 
   const submit = () => {
     if (!canSubmit) return;
     const answers: Record<string, string> = {};
     for (const question of questions) {
-      const chosen = selections[question.question];
-      if (chosen?.length) answers[question.question] = chosen.join(', ');
+      answers[question.question] = answerFor(question);
     }
-    onAnswer(requestId, answers, other.trim() || undefined);
+    onAnswer(requestId, answers);
   };
 
   return (
@@ -75,6 +89,7 @@ export function QuestionCard({ requestId, questions, onAnswer }: QuestionCardPro
                     <button
                       key={option.label}
                       type="button"
+                      aria-pressed={selected}
                       onClick={() => toggle(question, option.label)}
                       className={cn(
                         'flex w-full items-start gap-2 rounded-lg border p-2.5 text-left transition-colors duration-quick',
@@ -103,25 +118,23 @@ export function QuestionCard({ requestId, questions, onAnswer }: QuestionCardPro
                   );
                 })}
               </div>
+
+              <input
+                value={custom[question.question] ?? ''}
+                onChange={(event) => setCustom((current) => ({
+                  ...current,
+                  [question.question]: event.target.value,
+                }))}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') submit();
+                }}
+                placeholder="Or answer in your own words…"
+                aria-label={`Your own answer to: ${question.question}`}
+                data-tails-part="input"
+                className="w-full px-2.5 py-1.5 text-sm outline-none transition-shadow duration-quick focus:[--t-shadow:0_0_0_1px_hsl(var(--ring)/0.45),0_8px_24px_-10px_hsl(var(--ring)/0.5)]"
+              />
             </fieldset>
           ))}
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground" htmlFor={`other-${requestId}`}>
-              Or answer in your own words
-            </label>
-            <input
-              id={`other-${requestId}`}
-              value={other}
-              onChange={(event) => setOther(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') submit();
-              }}
-              placeholder="Something else…"
-              data-tails-part="input"
-              className="w-full px-2.5 py-1.5 text-sm outline-none transition-shadow duration-quick focus:ring-2 focus:ring-ring"
-            />
-          </div>
 
           <button
             type="button"

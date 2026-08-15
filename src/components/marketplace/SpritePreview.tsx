@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
 import type { FrameGrid, FrameRange } from './marketplace-api';
+import { usePlayableRange } from './sprite-usage';
 
 /**
  * The keyframes every sprite preview shares.
@@ -36,6 +37,15 @@ type SpritePreviewProps = {
   /** Rendered cell height in CSS pixels; the width follows the cell's aspect ratio. */
   height?: number;
   paused?: boolean;
+  /**
+   * Whether to stop at the last cell that holds artwork.
+   *
+   * On by default: Codex rows are ragged, so a range covering a whole row
+   * usually ends in empty cells and playing them is a visible hole in the loop.
+   * The frame editor turns it off, because there the blank cells are the thing
+   * being diagnosed and hiding them would hide the problem.
+   */
+  trimBlankFrames?: boolean;
   className?: string;
 };
 
@@ -58,6 +68,11 @@ const clamp = (value: number, low: number, high: number) =>
  * A multi-row range that starts partway along a row cannot be expressed this
  * way and plays approximately; `describeRangeFit` reports that so the editor
  * can say so rather than leaving the user to wonder.
+ *
+ * Two things here exist purely to stop the loop showing a cell it should not:
+ * the `jump-none` timing (see the comment on the custom properties below) and
+ * `trimBlankFrames`, which drops the empty padding at the end of a ragged row.
+ * Together they are the fix for pets vanishing for one frame per loop.
  */
 export function SpritePreview({
   spriteUrl,
@@ -65,13 +80,21 @@ export function SpritePreview({
   range,
   height = 96,
   paused = false,
+  trimBlankFrames = true,
   className,
 }: SpritePreviewProps) {
   const reduced = useReducedMotion();
 
   const lastFrame = Math.max(0, grid.columns * grid.rows - 1);
-  const start = clamp(range?.start ?? 0, 0, lastFrame);
-  const end = clamp(range?.end ?? grid.columns - 1, start, lastFrame);
+  const requested: FrameRange = {
+    start: clamp(range?.start ?? 0, 0, lastFrame),
+    end: clamp(range?.end ?? grid.columns - 1, clamp(range?.start ?? 0, 0, lastFrame), lastFrame),
+    fps: range?.fps,
+  };
+
+  const played = usePlayableRange(spriteUrl, grid, requested, trimBlankFrames);
+  const start = played.start;
+  const end = played.end;
   const frameCount = end - start + 1;
 
   const startColumn = start % grid.columns;
@@ -82,12 +105,12 @@ export function SpritePreview({
   const cellWidth = grid.width * scale;
   const cellHeight = grid.height * scale;
 
-  const fps = range?.fps ?? grid.fps ?? 8;
+  const fps = played.fps ?? grid.fps ?? 8;
   const framesPerSweep = rowSpan === 1 ? frameCount : grid.columns;
   const sweepSeconds = framesPerSweep / Math.max(0.5, fps);
   const totalSeconds = frameCount / Math.max(0.5, fps);
 
-  const still = reduced || paused || frameCount < 2;
+  const still = reduced || paused || frameCount < 2 || framesPerSweep < 2;
   const originX = rowSpan === 1 ? -startColumn * cellWidth : 0;
 
   const style: Record<string, string> = {
@@ -99,18 +122,31 @@ export function SpritePreview({
     // Sprites are pixel art; smoothing them on a non-integer scale is the
     // difference between crisp and mush.
     imageRendering: 'pixelated',
+    // Both axes stop *on* the last frame rather than one cell past it. With
+    // `steps(n)` the keyframe end has to be the cell after the last, and an
+    // animation that loops on a whole-second boundary lands a paint exactly
+    // there — showing the empty cell beyond the range for one frame. Ending on
+    // the last frame with `jump-none` gives the same n positions, evenly held,
+    // and never addresses a cell outside the range.
     '--sprite-x-from': `${originX}px`,
-    '--sprite-x-to': `${originX - framesPerSweep * cellWidth}px`,
+    '--sprite-x-to': `${originX - (framesPerSweep - 1) * cellWidth}px`,
     '--sprite-y-from': `${-startRow * cellHeight}px`,
-    '--sprite-y-to': `${-(startRow + rowSpan) * cellHeight}px`,
+    '--sprite-y-to': `${-(startRow + rowSpan - 1) * cellHeight}px`,
   };
 
   if (still) {
     style.backgroundPosition = `${-startColumn * cellWidth}px ${-startRow * cellHeight}px`;
   } else {
+    // A single-row range animates X only, so Y has to be planted on the row —
+    // without this it defaults to 0 and a walk cycle on row 3 silently plays
+    // row 0.
+    if (rowSpan === 1) style.backgroundPositionY = `${-startRow * cellHeight}px`;
+
     style.animation = [
-      `tails-sprite-x ${sweepSeconds}s steps(${framesPerSweep}) infinite`,
-      ...(rowSpan > 1 ? [`tails-sprite-y ${totalSeconds}s steps(${rowSpan}) infinite`] : []),
+      `tails-sprite-x ${sweepSeconds}s steps(${framesPerSweep}, jump-none) infinite`,
+      ...(rowSpan > 1
+        ? [`tails-sprite-y ${totalSeconds}s steps(${rowSpan}, jump-none) infinite`]
+        : []),
     ].join(', ');
   }
 

@@ -52,6 +52,7 @@ export const sessionsService = {
       updatedAt: now,
       pinnedAt: null,
       archivedAt: null,
+      petId: null,
     };
   },
 
@@ -204,8 +205,16 @@ export const sessionsService = {
 
     let raw;
     try {
+      // `dir` is deliberately not passed. It narrows the lookup to a single
+      // project directory and matches only when the string canonicalises to
+      // exactly the key the CLI wrote under — which our stored `cwd` often
+      // does not, because it came from `os.homedir()`, `path.resolve()` or an
+      // adopted session while the subprocess normalised its own way (8.3 short
+      // names, symlinks, drive-letter case). A miss is not an error: it
+      // returns zero messages, which the client then rendered as the whole
+      // conversation vanishing. Omitted, the SDK searches every project
+      // directory and finds the transcript wherever it really lives.
       raw = await getSessionMessages(providerSessionId, {
-        ...(owned?.cwd ? { dir: owned.cwd } : {}),
         ...(options.limit !== undefined ? { limit: options.limit } : {}),
         ...(options.offset !== undefined ? { offset: options.offset } : {}),
       });
@@ -307,6 +316,24 @@ export const sessionsService = {
     // things people do before typing the first message.
     this.ensureSession(sessionId, { cwd: resolved });
     sessionsRepository.setCwd(sessionId, resolved);
+    return this.getSession(sessionId);
+  },
+
+  /**
+   * Gives this conversation a companion of its own, or takes it away.
+   *
+   * The id is stored without checking that the pet exists. Pets are folders on
+   * disk that come and go, and validating here would only move the failure: a
+   * pet uninstalled after being assigned would still leave a dangling id. The
+   * reader resolves it and treats "not found" as "no pet", which is the same
+   * outcome for both cases and needs no repair step.
+   *
+   * `ensureSession` first, because assigning a pet is one of the things people
+   * do to a brand-new chat before typing anything into it.
+   */
+  assignPet(sessionId: string, petId: string | null): ChatSession {
+    this.ensureSession(sessionId);
+    sessionsRepository.setPetId(sessionId, petId);
     return this.getSession(sessionId);
   },
 

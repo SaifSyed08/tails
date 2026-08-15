@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CopyPlus, Sliders, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CopyPlus, EyeOff, Sliders, Trash2, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -43,6 +43,7 @@ type PetDetailDialogProps = {
   onSetActive: (pet: InstalledPet) => void;
   onAddCopy: (pet: InstalledPet) => void;
   onRemove: (pet: InstalledPet) => void;
+  onHide: (pet: InstalledPet) => void;
   onSaveLayout: (id: string, patch: { frame: FrameGrid; states: PetStates }) => Promise<void>;
 };
 
@@ -65,6 +66,7 @@ export function PetDetailDialog({
   onSetActive,
   onAddCopy,
   onRemove,
+  onHide,
   onSaveLayout,
 }: PetDetailDialogProps) {
   const { definition } = pet;
@@ -269,9 +271,14 @@ export function PetDetailDialog({
               {confirmingRemove ? 'Really remove — this deletes the folder' : 'Remove'}
             </button>
           ) : (
-            <p className="ml-auto text-[11px] text-muted-foreground">
-              Codex owns this folder, so T.A.I.L.S. never deletes it.
-            </p>
+            <button
+              type="button"
+              onClick={() => onHide(pet)}
+              title="Codex owns this folder, so the files stay exactly where they are."
+              className="ml-auto flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+            >
+              <EyeOff className="size-3.5" aria-hidden="true" /> Hide from my library
+            </button>
           )}
         </footer>
       </div>

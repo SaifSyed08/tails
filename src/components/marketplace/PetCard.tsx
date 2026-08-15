@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CopyPlus, Film, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, CopyPlus, EyeOff, Film, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -25,21 +25,27 @@ type PetCardProps = {
   pet: InstalledPet;
   busy: boolean;
   confirmingRemove: boolean;
+  /** True when another installed pet shares this one's display name; the id is shown to tell them apart. */
+  ambiguousName: boolean;
   onOpen: (pet: InstalledPet) => void;
   onSetActive: (pet: InstalledPet) => void;
   /** Copies a read-only Codex pet into `~/.tails/pets`, where it can be edited. */
   onAddCopy: (pet: InstalledPet) => void;
   onRemove: (pet: InstalledPet) => void;
+  /** Takes a pet out of the library without deleting anything. The only "remove" a Codex pet has. */
+  onHide: (pet: InstalledPet) => void;
 };
 
 export function PetCard({
   pet,
   busy,
   confirmingRemove,
+  ambiguousName,
   onOpen,
   onSetActive,
   onAddCopy,
   onRemove,
+  onHide,
 }: PetCardProps) {
   const [hovered, setHovered] = useState(false);
   const { definition } = pet;
@@ -77,7 +83,16 @@ export function PetCard({
 
       <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
         <div className="flex min-w-0 items-start justify-between gap-2">
-          <h3 className="truncate text-sm font-semibold">{definition.displayName}</h3>
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold">{definition.displayName}</h3>
+            {/* Two pets can ship under one name — Codex generated two called
+                "Sonic" — and then the name alone does not say which is which. */}
+            {ambiguousName ? (
+              <p className="truncate text-[11px] text-muted-foreground" title={pet.directory}>
+                {definition.id}
+              </p>
+            ) : null}
+          </div>
           <Pill
             tone={pet.source === 'tails' ? 'positive' : 'neutral'}
             title={pet.directory}
@@ -147,7 +162,17 @@ export function PetCard({
               <Trash2 className="size-3" aria-hidden="true" />
               {confirmingRemove ? 'Really?' : null}
             </button>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              onClick={() => onHide(pet)}
+              title="Keeps the files where Codex put them and takes the pet out of your library."
+              aria-label={`Hide ${definition.displayName} from the library`}
+              className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+            >
+              <EyeOff className="size-3" aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
     </article>
