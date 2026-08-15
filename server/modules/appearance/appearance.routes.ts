@@ -41,6 +41,10 @@ export function createAppearanceRouter(): express.Router {
     return { ok: true };
   }));
 
+  router.patch('/themes/:themeId', respond((req) => (
+    themeService.renameTheme(String(req.params.themeId), String(req.body?.name ?? ''))
+  )));
+
   router.delete('/themes/:themeId', respond((req) => (
     themeService.deleteTheme(String(req.params.themeId))
   )));

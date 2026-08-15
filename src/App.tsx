@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ChatView } from '@/components/chat/ChatView';
 import { Intro } from '@/components/intro/Intro';
+import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { Sidebar } from '@/components/sidebar/Sidebar';
 import { AppearanceProvider, useAppearance } from '@/contexts/AppearanceContext';
 import { WebSocketProvider } from '@/contexts/WebSocketContext';
@@ -38,6 +39,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [cwd, setCwd] = useState<string>('');
   const [refreshToken, setRefreshToken] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   /**
    * Starts a new conversation.
@@ -101,7 +103,7 @@ export default function App() {
           activeSessionId={sessionId}
           onSelect={openSession}
           onNewChat={() => void startNewChat()}
-          onOpenSettings={() => undefined}
+          onOpenSettings={() => setSettingsOpen(true)}
           refreshToken={refreshToken}
         />
 
@@ -124,6 +126,10 @@ export default function App() {
           />
         </main>
       </div>
+
+      {settingsOpen ? (
+        <SettingsPanel sessionId={sessionId} onClose={() => setSettingsOpen(false)} />
+      ) : null}
       </AppearanceProvider>
     </WebSocketProvider>
   );

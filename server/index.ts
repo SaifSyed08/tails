@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +14,28 @@ import { AppError } from '@/shared/utils.js';
 const PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
 const HOST = '127.0.0.1';
 
-const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/**
+ * Locates the project root by walking up to the nearest `package.json`.
+ *
+ * A fixed number of `..` segments cannot work here: this file runs from
+ * `server/` under tsx in development and from `dist-server/server/` once
+ * built, which are different depths. Guessing one of them silently serves the
+ * client from a directory that does not exist.
+ */
+function findAppRoot(startDir: string): string {
+  let current = startDir;
+
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (fs.existsSync(path.join(current, 'package.json'))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return process.cwd();
+}
+
+const APP_ROOT = findAppRoot(path.dirname(fileURLToPath(import.meta.url)));
 
 const app = express();
 

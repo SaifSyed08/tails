@@ -54,4 +54,46 @@ export const api = {
 
   deleteSession: (sessionId: string) =>
     request<{ id: string }>(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
+
+  listThemes: () => request<ThemeSummary[]>('/appearance/themes'),
+
+  /** Shows a look without saving or binding it. Reverted by re-resolving. */
+  previewTheme: (spec: unknown, sessionId?: string) =>
+    request<{ name: string; contrast: { minRatio: number; adjusted: string[] } }>(
+      '/appearance/preview',
+      { method: 'POST', body: JSON.stringify({ spec, sessionId }) },
+    ),
+
+  applyTheme: (input: { themeId?: string; spec?: unknown; scope: 'session' | 'global'; sessionId?: string }) =>
+    request<{ themeId: string; name: string }>('/appearance/apply', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  unbindTheme: (scope: 'session' | 'global', sessionId?: string) =>
+    request<{ ok: true }>('/appearance/unbind', {
+      method: 'POST',
+      body: JSON.stringify({ scope, sessionId }),
+    }),
+
+  renameTheme: (themeId: string, name: string) =>
+    request<{ id: string; name: string }>(`/appearance/themes/${encodeURIComponent(themeId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
+  deleteTheme: (themeId: string) =>
+    request<{ id: string }>(`/appearance/themes/${encodeURIComponent(themeId)}`, { method: 'DELETE' }),
+};
+
+export type ThemeSummary = {
+  id: string;
+  name: string;
+  summary: string;
+  builtIn: boolean;
+  spec: {
+    palette: { surfaceHue: number; accentHue: number; surfaceChroma: string; accentChroma: string };
+    mode: 'adaptive' | 'light' | 'dark';
+    [key: string]: unknown;
+  };
 };

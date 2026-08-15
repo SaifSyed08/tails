@@ -236,6 +236,33 @@ export const themeService = {
     }));
   },
 
+  /**
+   * Renames a saved look and promotes it to a keeper.
+   *
+   * This is how a theme the agent generated becomes one of the user's own:
+   * flipping `origin` to `saved` marks it as deliberately kept rather than a
+   * by-product of a conversation, which is what any future cleanup of
+   * generated themes must not touch.
+   */
+  renameTheme(themeId: string, name: string): StoredTheme {
+    const stored = themesRepository.getTheme(themeId);
+    if (!stored) {
+      throw new AppError('That look no longer exists.', { code: 'THEME_NOT_FOUND', statusCode: 404 });
+    }
+
+    const trimmed = name.trim().slice(0, 40);
+    if (!trimmed) {
+      throw new AppError('A preset needs a name.', { code: 'THEME_NAME_REQUIRED', statusCode: 400 });
+    }
+
+    return themesRepository.saveTheme({
+      id: stored.id,
+      spec: { ...stored.spec, name: trimmed },
+      tokens: stored.tokens,
+      origin: 'saved',
+    });
+  },
+
   deleteTheme(themeId: string): { id: string } {
     if (!themesRepository.deleteTheme(themeId)) {
       throw new AppError('That look no longer exists.', { code: 'THEME_NOT_FOUND', statusCode: 404 });
