@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
 /**
@@ -18,6 +19,27 @@ const WORDS = [
 /** How long each word stays up. Long enough to read, short enough to notice. */
 const WORD_INTERVAL_MS = 2600;
 
+/**
+ * The sweep that runs across the text.
+ *
+ * A gradient behind `background-clip: text`, so the highlight travels through
+ * the letters rather than behind them. Both ends of the gradient are the
+ * ordinary muted ink, which is why the word never looks like it changed
+ * colour — only like light passed over it. Tokens throughout, so a re-theme
+ * carries the effect with it.
+ */
+const SHIMMER_STYLE = {
+  backgroundImage: [
+    'linear-gradient(90deg,',
+    'hsl(var(--muted-foreground)) 40%,',
+    'hsl(var(--foreground)) 50%,',
+    'hsl(var(--muted-foreground)) 60%)',
+  ].join(' '),
+  // Wider than the text so the highlight has somewhere to travel from and
+  // somewhere to go, leaving a beat between sweeps.
+  backgroundSize: '250% 100%',
+};
+
 type ThinkingIndicatorProps = {
   /** Optional detail from a status event, e.g. "Compacting context". */
   detail?: string | null;
@@ -32,7 +54,18 @@ type ThinkingIndicatorProps = {
  */
 export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
   const reduced = useReducedMotion();
-  const [wordIndex, setWordIndex] = useState(() => Math.floor(Math.random() * WORDS.length));
+  /**
+   * The two words on screen, and which of them is showing.
+   *
+   * Two permanent spans that swap opacity, rather than one span remounted per
+   * word: a remount restarts the entrance animation from zero, which is what
+   * made the indicator blank for a frame on every change. Cross-fading two
+   * live nodes means something is always fully legible.
+   */
+  const [slots, setSlots] = useState<[string, string]>(
+    () => [WORDS[Math.floor(Math.random() * WORDS.length)], ''],
+  );
+  const [active, setActive] = useState<0 | 1>(0);
   const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
@@ -42,12 +75,27 @@ export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
 
   useEffect(() => {
     if (reduced) return undefined;
-    const rotate = window.setInterval(
-      () => setWordIndex((current) => (current + 1) % WORDS.length),
-      WORD_INTERVAL_MS,
-    );
+
+    const rotate = window.setInterval(() => {
+      setActive((current) => {
+        const next = current === 0 ? 1 : 0;
+        setSlots((words) => {
+          const showing = WORDS.indexOf(words[current]);
+          const upcoming = WORDS[(showing + 1 + WORDS.length) % WORDS.length];
+          const swapped: [string, string] = [...words] as [string, string];
+          // Written into the hidden slot, so the text changes while that node
+          // is still invisible and only then fades up.
+          swapped[next] = upcoming;
+          return swapped;
+        });
+        return next;
+      });
+    }, WORD_INTERVAL_MS);
+
     return () => window.clearInterval(rotate);
   }, [reduced]);
+
+  const shimmerClass = !reduced && 'animate-shimmer bg-clip-text text-transparent';
 
   return (
     <div className="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
@@ -57,12 +105,33 @@ export function ThinkingIndicator({ detail }: ThinkingIndicatorProps) {
         ) : null}
         <span className="relative inline-flex size-2 rounded-full bg-primary" />
       </span>
-      <span
-        key={wordIndex}
-        className={!reduced ? 'animate-fade-in' : undefined}
-      >
-        {detail || `${WORDS[wordIndex]}…`}
-      </span>
+
+      {detail ? (
+        <span className={cn(shimmerClass)} style={reduced ? undefined : SHIMMER_STYLE}>
+          {detail}
+        </span>
+      ) : (
+        // One grid cell holding both words: the cross-fade costs no layout,
+        // and the row cannot reflow halfway through a swap.
+        <span className="grid">
+          {slots.map((word, index) => (
+            <span
+              key={index}
+              aria-hidden={index === active ? undefined : true}
+              className={cn(
+                'col-start-1 row-start-1 transition-opacity duration-settle ease-standard',
+                index === active ? 'opacity-100' : 'opacity-0',
+                shimmerClass,
+              )}
+              style={reduced ? undefined : SHIMMER_STYLE}
+            >
+              {word}
+              {word ? '…' : null}
+            </span>
+          ))}
+        </span>
+      )}
+
       {seconds >= 3 ? (
         <span className="tabular-nums text-xs opacity-60">{seconds}s</span>
       ) : null}

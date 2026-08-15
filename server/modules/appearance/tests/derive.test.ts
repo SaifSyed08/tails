@@ -126,7 +126,7 @@ test('every emitted surface carries the complete token set', () => {
   // v1's central defect was validating fields it then dropped. This asserts the
   // opposite property directly: every part, in every ramp, defines every token,
   // with a usable value rather than an empty string.
-  const expected = Object.keys(deriveTokens(THEME_PRESETS.liquidGlass).light.surfaces.default);
+  const expected = Object.keys(deriveTokens(THEME_PRESETS.paper).light.surfaces.default);
   assert.ok(expected.length >= 20, 'the surface token set looks suspiciously small');
 
   for (const [id, preset] of Object.entries(THEME_PRESETS)) {
@@ -148,7 +148,7 @@ test('every emitted surface carries the complete token set', () => {
 });
 
 test('a texture selection reaches the stylesheet as an app-owned image', () => {
-  const css = serializeStylesheet(deriveTokens(THEME_PRESETS.liquidGlass));
+  const css = serializeStylesheet(deriveTokens(THEME_PRESETS.paper));
   assert.match(css, /--t-texture-image: url\("data:image\/svg\+xml,/);
   // Every url() the app itself writes must be a data URI. A remote one would
   // mean the generator is making the request the freeform validator exists to
@@ -161,40 +161,64 @@ test('a texture selection reaches the stylesheet as an app-owned image', () => {
 });
 
 test('texture and overlay strength is baked in, not left to an opacity token', () => {
-  const surfaces = deriveTokens(THEME_PRESETS.liquidGlass).light.surfaces;
+  const surfaces = deriveTokens(THEME_PRESETS.paper).light.surfaces;
   // The renderer paints texture and overlay as two background layers on one
   // pseudo-element, where a per-layer opacity does not exist. The presence flag
   // must stay 0/1 so applying it can never square the strength.
   assert.equal(surfaces.default['t-texture-opacity'], '1');
   assert.equal(surfaces.default['t-overlay-opacity'], '1');
-  assert.match(surfaces.default['t-texture-image'], /opacity=%220\.05%22/);
-  assert.equal(surfaces.scrim['t-overlay-opacity'], '0');
-  assert.equal(surfaces.scrim['t-overlay-image'], 'none');
+  assert.match(surfaces.default['t-texture-image'], /opacity=%220\.055%22/);
+  assert.equal(surfaces.code['t-texture-opacity'], '0');
+  assert.equal(surfaces.code['t-texture-image'], 'none');
 });
 
-test('a gradient ring is composited into the fill so it can follow the radius', () => {
-  // border-image squares off corners and a mask-composite pseudo-element cannot
-  // inherit corner-shape, so the ring rides as the last background layer,
-  // clipped to the border box. That also leaves ::after free for the renderer,
-  // which is what makes three paint layers fit in two pseudo-elements.
-  const glass = deriveTokens(THEME_PRESETS.liquidGlass).light.surfaces.default;
-  assert.equal(glass['t-border-color'], 'transparent');
-  assert.match(glass['t-fill-clip'], /border-box$/);
+// The gradient ring used to be asserted against the `liquidGlass` preset, which
+// no longer exists — deliberately, since a shipped glass preset is what let the
+// engine be tested with the answer written into the question. The same
+// construction is now proved in `glass-composition.test.ts`, against a spec
+// built out of primitives.
 
-  const layers = glass['t-fill-blend'].split(', ').length;
-  assert.equal(layers, 3, 'two authored fills plus the ring');
-  assert.equal(glass['t-fill-clip'].split(', ').length, layers);
-  assert.equal(glass['t-fill-origin'].split(', ').length, layers);
+test('an ambient recipe emits a moving layer and the keyframes it references', () => {
+  // The primitive that was missing entirely: "drifting clouds behind the chat"
+  // had no word in the spec, so it was reachable only through hand-written CSS.
+  const spec = baseSpec({
+    surfaces: { default: { ambient: { kind: 'clouds', strength: 0.16, speed: 90, hue: 320 } } },
+  });
+  const surface = deriveTokens(spec).light.surfaces.default;
 
-  // The ring itself must not also be published as a token of its own: a second
-  // copy invites a renderer to paint it twice.
-  assert.equal(glass['t-ring-image'], undefined);
-  assert.equal(glass['t-refraction'], undefined);
+  assert.match(surface['t-ambient-image'], /radial-gradient/);
+  assert.match(surface['t-ambient-animation'], /^t-ambient-clouds /);
+  // Speed rides a `calc()` against an undeclared property so a published
+  // control can retime every ambient layer in the app with one `:root` write.
+  assert.match(surface['t-ambient-animation'], /var\(--t-ambient-speed, 1\)/);
 
-  // Refraction is not dropped, it is folded into the two tokens that already
-  // exist.
-  assert.match(glass['t-backdrop'], /contrast\(/);
-  assert.match(glass['t-shadow'], /^inset /);
+  const css = serializeStylesheet(deriveTokens(spec));
+  assert.match(css, /@keyframes t-ambient-clouds/);
+
+  // A theme with no ambience carries no keyframes: they are app-owned
+  // constants, and four unused blocks in every stylesheet is noise in the one
+  // artefact a human reads when a theme looks wrong.
+  assert.doesNotMatch(serializeStylesheet(deriveTokens(THEME_PRESETS.paper)), /@keyframes/);
+});
+
+test('caret, selection and pointer are themed rather than left to the browser', () => {
+  const spec = baseSpec({
+    interaction: {
+      caretColor: { role: 'accent' },
+      caretShape: 'block',
+      selectionFill: { role: 'accent', alpha: 0.35 },
+      cursor: 'auto',
+    },
+  });
+  const css = serializeStylesheet(deriveTokens(spec));
+
+  assert.match(css, /--t-caret-shape: block;/);
+  assert.match(css, /--t-caret-color: hsl\(/);
+  assert.match(css, /--t-selection-fill: hsl\([^)]+\/ 0\.35\);/);
+  // Selected text keeps its own colour unless the theme says otherwise: a
+  // translucent fill leaves the glyph readable, and forcing a colour there is
+  // how a selection ends up less legible than the text it highlights.
+  assert.match(css, /--t-selection-ink: currentColor;/);
 });
 
 test('an adaptive theme produces both ramps and they differ', () => {

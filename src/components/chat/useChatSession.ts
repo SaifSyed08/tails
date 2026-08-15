@@ -2,7 +2,24 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { api } from '@/lib/api';
-import type { ChatRow, NormalizedMessage, PendingPermission, PendingPrompt } from '@/types/chat';
+import { PERMISSION_MODE_VALUES, type PermissionMode } from '@/types/chat';
+import type {
+  AttachmentPayload,
+  ChatRow,
+  NormalizedMessage,
+  PendingPermission,
+  PendingPrompt,
+} from '@/types/chat';
+
+/**
+ * Narrows a mode the server reported.
+ *
+ * A mode this build does not know about is ignored rather than displayed, so
+ * a newer server can never put the indicator into a state with no label.
+ */
+function readPermissionMode(value: unknown): PermissionMode | null {
+  return PERMISSION_MODE_VALUES.find((entry) => entry === value) ?? null;
+}
 
 /**
  * How often accumulated stream deltas are flushed to React state.
@@ -27,11 +44,18 @@ export function buildChatRows(messages: NormalizedMessage[]): ChatRow[] {
   for (const message of messages) {
     switch (message.kind) {
       case 'text': {
-        if (!message.content) break;
         if (message.role === 'user') {
-          rows.push({ type: 'user', id: message.id, content: message.content });
+          // A message with nothing but a screenshot on it still has to draw.
+          if (!message.content && !message.attachments?.length) break;
+          rows.push({
+            type: 'user',
+            id: message.id,
+            content: message.content ?? '',
+            ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+          });
           break;
         }
+        if (!message.content) break;
 
         const previous = rows[rows.length - 1];
         if (previous?.type === 'assistant' && !previous.streaming) {
@@ -109,11 +133,41 @@ export function useChatSession(sessionId: string | null) {
     rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], error: null,
   });
 
+  /**
+   * The permission mode this conversation is in.
+   *
+   * Owned here rather than by the view because it is a property of the
+   * conversation, not of the screen: keeping it in a component that stays
+   * mounted across conversation switches is what left the composer showing
+   * "Auto-accept edits" on a brand-new chat that was really running in the
+   * default mode.
+   */
+  const [mode, setMode] = useState<PermissionMode>('default');
+
+  /**
+   * The model's guess at what the user would say next, if it offered one.
+   *
+   * Arrives after the turn's `complete`, belongs to exactly one turn, and is
+   * never rendered as a message — the composer shows it as ghost text and
+   * throws it away the moment the user does anything else.
+   */
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+
   // Deltas land here and are flushed on a timer; writing them to state per
   // token is the single easiest way to make a chat UI feel slow.
   const streamBufferRef = useRef('');
   const flushTimerRef = useRef<number | undefined>(undefined);
   const lastSeqRef = useRef(0);
+  const modeRef = useRef<PermissionMode>('default');
+  // The server's mode is authoritative only until the user picks one: a
+  // reconnect mid-conversation must not undo a selection they just made.
+  const modeAdoptedRef = useRef(false);
+
+  const changeMode = useCallback((next: PermissionMode) => {
+    modeAdoptedRef.current = true;
+    modeRef.current = next;
+    setMode(next);
+  }, []);
 
   const resetStream = useCallback(() => {
     if (flushTimerRef.current) window.clearTimeout(flushTimerRef.current);
@@ -141,6 +195,14 @@ export function useChatSession(sessionId: string | null) {
     setRealtime([]);
     resetStream();
     setState({ rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], error: null });
+    // A new conversation starts in the default mode until the server says
+    // otherwise, which it does in the subscribe acknowledgement.
+    modeAdoptedRef.current = false;
+    modeRef.current = 'default';
+    setMode('default');
+    // A suggestion is about one turn of one conversation; it must never
+    // follow the user into another.
+    setSuggestion(null);
 
     if (sessionId) void loadHistory(sessionId);
   }, [sessionId, loadHistory, resetStream]);
@@ -179,6 +241,11 @@ export function useChatSession(sessionId: string | null) {
 
         case 'chat_subscribed': {
           const payload = message.appearance as { pendingPermissions?: PendingPermission[] } | undefined;
+          const reported = readPermissionMode(message.permissionMode);
+          if (reported && !modeAdoptedRef.current) {
+            modeRef.current = reported;
+            setMode(reported);
+          }
           setState((current) => ({
             ...current,
             busy: message.statusCode === 'running',
@@ -222,6 +289,12 @@ export function useChatSession(sessionId: string | null) {
               plan: message.plan ?? '',
             }],
           }));
+          return;
+
+        case 'prompt_suggestion':
+          // Deliberately not added to `realtime`: this is not part of the
+          // transcript and must never become a row.
+          setSuggestion(message.content?.trim() || null);
           return;
 
         case 'permission_cancelled':
@@ -270,10 +343,25 @@ export function useChatSession(sessionId: string | null) {
     setState((current) => ({ ...current, rows }));
   }, [history, realtime, streamingText]);
 
-  const sendMessage = useCallback((content: string, cwd?: string, permissionMode?: string) => {
-    if (!sessionId || !content.trim()) return;
+  const sendMessage = useCallback((
+    content: string,
+    options: { cwd?: string; attachments?: AttachmentPayload[] } = {},
+  ) => {
+    const attachments = options.attachments ?? [];
+    if (!sessionId || (!content.trim() && attachments.length === 0)) return;
     setState((current) => ({ ...current, busy: true, error: null }));
-    send({ type: 'chat.send', sessionId, content, cwd, permissionMode });
+    // Whatever the last turn predicted, this message is the real answer.
+    setSuggestion(null);
+    send({
+      type: 'chat.send',
+      sessionId,
+      content,
+      cwd: options.cwd,
+      // Read from the ref rather than the closure so a mode changed between
+      // renders cannot send a turn under the mode the composer used to show.
+      permissionMode: modeRef.current,
+      attachments,
+    });
   }, [sessionId, send]);
 
   const abort = useCallback(() => {
@@ -319,8 +407,25 @@ export function useChatSession(sessionId: string | null) {
       ...current,
       pendingPrompts: current.pendingPrompts.filter((prompt) => prompt.requestId !== requestId),
     }));
+    // Approving leaves plan mode server-side, so the indicator has to move
+    // with it — this is the one place the mode changes without the user
+    // touching the composer.
+    if (approve) changeMode(options.autoAcceptEdits ? 'acceptEdits' : 'default');
     send({ type: 'chat.plan-response', requestId, approve, ...options });
-  }, [send]);
+  }, [send, changeMode]);
 
-  return { ...state, sendMessage, abort, answerPermission, answerQuestion, answerPlan };
+  const clearSuggestion = useCallback(() => setSuggestion(null), []);
+
+  return {
+    ...state,
+    mode,
+    changeMode,
+    suggestion,
+    clearSuggestion,
+    sendMessage,
+    abort,
+    answerPermission,
+    answerQuestion,
+    answerPlan,
+  };
 }

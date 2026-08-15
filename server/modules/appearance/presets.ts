@@ -17,77 +17,10 @@ import { themeSpecV2Schema, type ThemeSpecV2 } from '@/modules/appearance/theme-
  */
 
 const PRESET_SPECS: Record<string, unknown> = {
-  liquidGlass: {
-    specVersion: 2,
-    name: 'Liquid Glass',
-    summary: 'Translucent panels over a saturated backdrop, with a specular rim and a faint grain.',
-    mode: 'adaptive',
-    palette: {
-      surfaceHue: 218, surfaceChroma: 'tinted',
-      accentHue: 196, accentChroma: 'vivid',
-      scheme: 'analogous', statusHueShift: 0,
-    },
-    surface: { lightAnchor: 'paper', darkAnchor: 'deep', step: 5, contrastTarget: 'aa' },
-    type: {
-      sansFamily: 'grotesk', displayFamily: 'grotesk', monoFamily: 'mono',
-      scale: 'default', displayWeight: 'medium', letterSpacing: 'normal',
-      lineHeight: 'default', measure: 'default',
-    },
-    density: 'default',
-    motion: 'calm',
-    surfaces: {
-      default: {
-        fill: [
-          { kind: 'linear', angle: 160, blend: 'normal', stops: [
-            { color: { role: 'light', tier: 6, alpha: 0.24 }, position: 0 },
-            { color: { role: 'light', tier: 1, alpha: 0.1 }, position: 55 },
-            { color: { role: 'shadow', tier: 2, alpha: 0.12 }, position: 100 },
-          ] },
-          { kind: 'solid', stops: [{ color: { role: 'light', tier: 1, alpha: 0.55 } }] },
-        ],
-        border: {
-          width: 1,
-          variant: 'gradient-ring',
-          ring: { angle: 145, stops: [
-            { color: { role: 'light', tier: 12, alpha: 0.75 }, position: 0 },
-            { color: { role: 'light', tier: 6, alpha: 0.12 }, position: 40 },
-            { color: { role: 'shadow', tier: 4, alpha: 0.35 }, position: 100 },
-          ] },
-        },
-        corner: { radius: 18, shape: 'squircle' },
-        shadows: [
-          { inset: true, y: 1, blur: 1, color: { role: 'light', tier: 12 }, alpha: 0.4 },
-          { y: 2, blur: 8, color: { role: 'shadow', tier: 6 }, alpha: 0.14 },
-          { y: 18, blur: 42, spread: -12, color: { role: 'shadow', tier: 8 }, alpha: 0.28 },
-        ],
-        backdrop: { blur: 20, saturate: 1.8, brightness: 1.02, refraction: 0.55 },
-        texture: { kind: 'grain', opacity: 0.05, scale: 1, blend: 'overlay' },
-        overlay: { kind: 'sheen', angle: 145, strength: 0.14 },
-      },
-      popover: {
-        backdrop: { blur: 30, saturate: 2, refraction: 0.7 },
-        shadows: [
-          { inset: true, y: 1, blur: 1, color: { role: 'light', tier: 12 }, alpha: 0.5 },
-          { y: 24, blur: 60, spread: -16, color: { role: 'shadow', tier: 9 }, alpha: 0.36 },
-        ],
-      },
-      input: {
-        fill: [{ kind: 'solid', stops: [{ color: { role: 'shadow', tier: 1, alpha: 0.22 } }] }],
-        shadows: [{ inset: true, y: 1, blur: 2, color: { role: 'shadow', tier: 6 }, alpha: 0.25 }],
-        overlay: { kind: 'none' },
-      },
-      scrim: {
-        fill: [{ kind: 'solid', stops: [{ color: { role: 'shadow', tier: 10, alpha: 0.45 } }] }],
-        border: { style: 'none' },
-        corner: { radius: 0, shape: 'square' },
-        backdrop: { blur: 6, saturate: 1.1 },
-        shadows: [],
-        overlay: { kind: 'none' },
-        texture: { kind: 'none' },
-      },
-    },
-  },
-
+  // There is deliberately no glass preset here. See the note at the bottom of
+  // this file: glass is what the primitives *do*, and shipping it as a named
+  // look was how the engine came to be tested with the answer written into the
+  // question.
   brutalist: {
     specVersion: 2,
     name: 'Brutalist',
@@ -487,3 +420,32 @@ export const THEME_PRESETS: Record<string, ThemeSpecV2> = Object.fromEntries(
 );
 
 export type PresetId = keyof typeof THEME_PRESETS;
+
+/**
+ * Why `liquidGlass` is not in this file.
+ *
+ * It used to be, and then "make it liquid glass" was used to check whether the
+ * engine could produce glass. It could, and the check meant nothing: the answer
+ * had been written into the question.
+ *
+ * The failure is subtler than one bad preset. Any system that hands a model a
+ * list of finished looks and a way to apply one has made preset-picking the
+ * cheapest correct-looking action available, and the model is not cheating when
+ * it picks — it is doing the obvious thing with the affordances it was given.
+ * For composition to be what happens, composition has to be the only path.
+ *
+ * Glass is not a style this app knows. It is a translucent fill, a wide
+ * backdrop blur with saturation, a bright specular ring on the light-facing
+ * edge, and a soft ambient shadow — four primitives that already exist here,
+ * every one of them used by some other preset for some other purpose. That it
+ * composes is asserted in `tests/glass-composition.test.ts`, which builds the
+ * spec from those primitives and checks the emitted CSS carries all four. If it
+ * ever stops composing, that is a missing primitive and a real bug; a preset
+ * would only have hidden it.
+ *
+ * The remaining presets stay for the opposite reason: they are worked examples
+ * a model reads to learn *how* a look is constructed, and each differs
+ * structurally from the others rather than in hue. `theme_list` says so in its
+ * own description, because the description is the only channel through which
+ * that distinction can be taught.
+ */

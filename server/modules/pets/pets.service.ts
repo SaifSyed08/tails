@@ -79,6 +79,14 @@ export type InstalledPet = {
   /** Pixel size of the sheet, or null when the header could not be read. */
   spriteSize: { width: number; height: number } | null;
   gridBasis: PetGridBasis;
+  /**
+   * When T.A.I.L.S. first recorded this pet, as an ISO timestamp.
+   *
+   * Null until the first scan has stored it. This is "when it appeared in your
+   * library", not when the artwork was made — nothing on disk records the
+   * latter, and the UI says so rather than implying a release date.
+   */
+  installedAt: string | null;
   /** True only for pets under `~/.tails/pets`. */
   removable: boolean;
   active: boolean;
@@ -155,6 +163,19 @@ function assertRealpathInside(baseDir: string, target: string): void {
       statusCode: 400,
     });
   }
+}
+
+/**
+ * Stamps a SQLite timestamp as UTC.
+ *
+ * `CURRENT_TIMESTAMP` is UTC but carries no zone marker, and `new Date` in the
+ * renderer would read it as local time — a silent shift of several hours on a
+ * date the user is being shown.
+ */
+function toIsoTimestamp(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const parsed = new Date(`${raw.replace(' ', 'T')}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
 function readHeader(filePath: string): Buffer | null {
@@ -251,6 +272,7 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     displayName: file.data.displayName,
     description: file.data.description ?? '',
     kind: file.data.kind,
+    author: file.data.author,
     spriteVersionNumber: file.data.spriteVersionNumber,
     spritesheetPath,
     frame: grid,
@@ -274,6 +296,7 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     spriteUrl: `/api/pets/${encodeURIComponent(definition.data.id)}/sprite`,
     spriteSize: size ? { width: size.width, height: size.height } : null,
     gridBasis,
+    installedAt: toIsoTimestamp(override?.installedAt),
     removable: source === 'tails',
     active: false,
     warnings,
@@ -351,6 +374,7 @@ function installPet(file: PetFile, spriteBytes: Buffer, spriteFileName: string):
     displayName: file.displayName,
     description: file.description ?? '',
     kind: file.kind,
+    author: file.author,
     spriteVersionNumber: file.spriteVersionNumber,
     spritesheetPath: spriteName.data,
     frame: grid,
@@ -444,8 +468,19 @@ export const petsService = {
     const activePetId = storedActive && byId.has(storedActive) ? storedActive : null;
     if (storedActive && !activePetId) petsRepository.setActivePetId(null);
 
+    // Read back after the loop above, so a pet discovered for the first time on
+    // this very scan still reports the moment it entered the library rather
+    // than nothing at all.
+    const firstSeen = new Map(
+      petsRepository.listRecords().map((record) => [record.id, toIsoTimestamp(record.installedAt)]),
+    );
+
     const pets = [...byId.values()]
-      .map((pet) => ({ ...pet, active: pet.definition.id === activePetId }))
+      .map((pet) => ({
+        ...pet,
+        active: pet.definition.id === activePetId,
+        installedAt: firstSeen.get(pet.definition.id) ?? pet.installedAt,
+      }))
       .sort((left, right) => left.definition.displayName.localeCompare(right.definition.displayName));
 
     return {

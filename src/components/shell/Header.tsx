@@ -92,8 +92,13 @@ function EditableLabel({
         }}
         aria-label={ariaLabel}
         data-tails-part="input"
+        // Sized to the text rather than to a guessed column. `field-sizing`
+        // does it exactly (Chromium 123+, so always in the desktop build); the
+        // `size` attribute is the approximation anything older falls back to.
+        // A caller that passes an explicit width still wins over both.
+        size={Math.max(draft.length, 8)}
         className={cn(
-          'min-w-0 px-1.5 py-0.5 outline-none focus:ring-2 focus:ring-ring',
+          'min-w-0 px-1.5 py-0.5 outline-none [field-sizing:content] focus:ring-2 focus:ring-ring',
           inputClassName,
         )}
       />
@@ -131,7 +136,11 @@ export function Header({
   return (
     <header
       data-tails-part="header"
-      className="app-drag flex h-11 shrink-0 items-center gap-2 px-3"
+      // h-14 (56px) is shared with the sidebar's top row and with
+      // HEADER_HEIGHT in electron/main.js, which sizes the OS caption-button
+      // overlay. All three have to move together or the window controls stop
+      // lining up with the app's own header.
+      className="app-drag flex h-14 shrink-0 items-center gap-2 px-3"
     >
       {sidebarCollapsed ? (
         <button
@@ -150,11 +159,15 @@ export function Header({
         onCommit={onRenameSession}
         placeholder="Untitled chat"
         ariaLabel="Conversation name"
-        className="min-w-0 flex-1 text-sm font-medium"
-        inputClassName="w-64 text-sm font-medium"
+        className="min-w-0 max-w-[24rem] text-sm font-medium"
+        inputClassName="max-w-[24rem] text-sm font-medium"
       />
 
-      <div className="app-no-drag flex shrink-0 items-center gap-1">
+      {/* Pushed right by a margin, not by a stretched title. The slack between
+          the name and the folder is the only part of this row that is plain
+          header, and plain header is what `app-drag` makes grabbable — a title
+          that filled the gap left the window with almost nowhere to hold. */}
+      <div className="app-no-drag ml-auto flex shrink-0 items-center gap-1">
         <FolderOpen className="size-3.5 text-muted-foreground" aria-hidden="true" />
         <EditableLabel
           value={cwd}

@@ -147,6 +147,15 @@ export const petDefinitionSchema = z.object({
   kind: z.string().max(40).optional(),
 
   /**
+   * Who made the pet.
+   *
+   * Optional and never inferred. Codex's manifests do not carry it, so most
+   * pets will have none — and a gallery that invents an author for them would
+   * be attributing artwork to someone at random.
+   */
+  author: z.string().max(80).optional(),
+
+  /**
    * Codex's sheet revision marker.
    *
    * Preserved but never interpreted — see `sprite-metrics.ts` for what the two
@@ -179,6 +188,7 @@ export const petFileSchema = z.object({
   displayName: z.string().min(1).max(80),
   description: z.string().max(500).optional(),
   kind: z.string().max(40).optional(),
+  author: z.string().max(80).optional(),
   spriteVersionNumber: z.number().int().min(0).max(9999).optional(),
   spritesheetPath: spritePathSchema.optional(),
   frame: frameGridSchema.optional(),

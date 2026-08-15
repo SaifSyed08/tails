@@ -1,5 +1,6 @@
 import type { DerivedTheme, Hsl, ThemeTokens } from '@/modules/appearance/derive.js';
 import { SURFACE_PARTS } from '@/modules/appearance/surface-recipe.js';
+import { AMBIENT_KEYFRAMES } from '@/modules/appearance/textures.js';
 
 /**
  * Renders derived tokens as a stylesheet.
@@ -37,7 +38,9 @@ function formatGlobalDeclarations(tokens: ThemeTokens): string {
   for (const [name, value] of Object.entries(tokens.colors)) {
     entries.push([name, formatHsl(value)]);
   }
-  for (const group of [tokens.lengths, tokens.fonts, tokens.durations, tokens.easings]) {
+  for (const group of [
+    tokens.lengths, tokens.fonts, tokens.durations, tokens.easings, tokens.interaction,
+  ]) {
     for (const [name, value] of Object.entries(group ?? {})) entries.push([name, value]);
   }
   for (const [name, value] of Object.entries(tokens.surfaces?.default ?? {})) {
@@ -104,8 +107,65 @@ export function serializeToCss(theme: DerivedTheme): { light: string; dark: stri
   return { light, dark };
 }
 
-/** The single stylesheet text the renderer adopts. */
+/**
+ * Renders a theme scoped to one container, for the live miniature.
+ *
+ * The user asked to see a proposed look before the app commits to it, framed by
+ * the real layout — sidebar left, chat right. The obvious reading of that is
+ * "generate an image", and an image is the wrong mechanism: it cannot be
+ * fetched (the `url()` ban), generating one locally is a large detour, and
+ * decisively it would be an *approximation* of a look this module can already
+ * render exactly. What it produces instead is the real stylesheet with `:root`
+ * swapped for a class, so a scaled-down mock of the app chrome renders in the
+ * candidate theme without a single token escaping into the running app.
+ *
+ * The `.dark` rules are emitted as `.dark .scope` rather than `.scope.dark`,
+ * because the miniature follows the window it is shown in: the user is choosing
+ * between two looks, not between two colour modes, and flipping one of them to
+ * the other mode would make the comparison about the wrong thing.
+ */
+export function serializeScoped(theme: DerivedTheme, className: string): string {
+  const scope = `.${className}`;
+
+  const blocks = [
+    block(scope, formatGlobalDeclarations(theme.light)),
+    ...formatScopedRules(theme.light, `${scope} `),
+  ];
+
+  if (theme.dark) {
+    blocks.push(
+      block(`.dark ${scope}`, formatGlobalDeclarations(theme.dark)),
+      ...formatScopedRules(theme.dark, `.dark ${scope} `),
+    );
+  }
+
+  const body = blocks.filter(Boolean).join('\n\n');
+  return usesAmbient(theme) ? `${AMBIENT_KEYFRAMES}\n\n${body}` : body;
+}
+
+/**
+ * True when any surface in either ramp actually animates its ambient layer.
+ *
+ * Checked rather than assumed so a theme with no ambience carries no keyframes:
+ * they are app-owned constants, and shipping four unused `@keyframes` blocks in
+ * every stylesheet would be several hundred bytes of noise in the one artefact
+ * a human reads when a theme looks wrong.
+ */
+const usesAmbient = (theme: DerivedTheme): boolean =>
+  [theme.light, theme.dark].some((ramp) =>
+    Object.values(ramp?.surfaces ?? {}).some((tokens) =>
+      tokens['t-ambient-animation'] && tokens['t-ambient-animation'] !== 'none'));
+
+/**
+ * The single stylesheet text the renderer adopts.
+ *
+ * The ambient keyframes go at the top rather than the bottom because
+ * `animation-name` resolves by name at used-value time and does not care about
+ * order — putting them first simply means the reader meets the definition
+ * before the reference.
+ */
 export function serializeStylesheet(theme: DerivedTheme): string {
   const { light, dark } = serializeToCss(theme);
-  return dark ? `${light}\n\n${dark}` : light;
+  const body = dark ? `${light}\n\n${dark}` : light;
+  return usesAmbient(theme) ? `${AMBIENT_KEYFRAMES}\n\n${body}` : body;
 }

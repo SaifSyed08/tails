@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { AppearancePanel } from '@/components/appearance/AppearancePanel';
 import { ChatView } from '@/components/chat/ChatView';
 import { Intro } from '@/components/intro/Intro';
 import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
@@ -48,14 +49,15 @@ export default function App() {
 
   const startNewChat = useCallback(async () => {
     try {
-      // No cwd passed: the server defaults a new conversation to the user's
-      // home folder rather than wherever the process happens to be running.
-      const session = await api.createSession();
+      // A draft, not a row. Nothing is written until the first message, which
+      // is what stops every launch and every "New chat" click from leaving an
+      // empty conversation in the sidebar. The server still mints the id and
+      // the default folder so both sides agree on them.
+      const session = await api.draftSession();
       setSessionId(session.id);
       setSessionTitle(session.title);
       setCwd(session.cwd);
       setView('chat');
-      setRefreshToken((current) => current + 1);
     } catch {
       setSessionId(null);
     }
@@ -131,6 +133,9 @@ export default function App() {
       <AppearanceProvider sessionId={sessionId}>
         {showIntro ? <Intro onDone={() => setShowIntro(false)} /> : null}
         <RestylingChip />
+        {/* Renders nothing until the appearance actually changes, then carries
+            the agent's published controls plus save / undo / reset. */}
+        <AppearancePanel sessionId={sessionId} />
 
         <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
           {!sidebarCollapsed ? (
@@ -141,10 +146,10 @@ export default function App() {
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenMarketplace={() => setView('marketplace')}
               onToggleCollapsed={() => setSidebarCollapsed(true)}
-              onRename={(session) => {
-                void openSession(session);
-                // The header field is the rename affordance, so selecting the
-                // chat and letting them click the title keeps one code path.
+              onRenamed={(renamedId, title) => {
+                // The sidebar owns the rename; this only keeps the header's
+                // copy of the name honest when it is the open conversation.
+                if (renamedId === sessionId) setSessionTitle(title);
               }}
               onDelete={(session) => void deleteSession(session)}
               refreshToken={refreshToken}

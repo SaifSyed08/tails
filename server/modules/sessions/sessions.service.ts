@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { sessionsRepository } from '@/db/sessions.repository.js';
 import { normalizeSdkMessage } from '@/modules/chat/normalize.js';
+import { publishSessionsChanged } from '@/shared/broadcast.js';
 import type { ChatSession, NormalizedMessage, SessionListItem } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -31,6 +32,29 @@ function deriveTitle(prompt: string): string {
  * DB the first time they are opened.
  */
 export const sessionsService = {
+  /**
+   * Mints a conversation without writing a row.
+   *
+   * A chat with nothing in it is not a conversation, so nothing is persisted
+   * until the first send — `ensureSession` creates the row then. This returns
+   * the id and default folder the client needs in order to have somewhere to
+   * type, and is the reason the sidebar no longer accumulates a "New chat"
+   * every time the app is opened.
+   */
+  draftSession(): ChatSession {
+    const now = new Date().toISOString();
+    return {
+      id: randomUUID(),
+      providerSessionId: null,
+      title: 'New chat',
+      cwd: os.homedir(),
+      createdAt: now,
+      updatedAt: now,
+      pinnedAt: null,
+      archivedAt: null,
+    };
+  },
+
   /** Creates a conversation. The id is minted here, before the first send. */
   createSession(input: { cwd?: string; title?: string } = {}): ChatSession {
     return sessionsRepository.createSession({
@@ -49,13 +73,28 @@ export const sessionsService = {
    */
   ensureSession(sessionId: string, input: { cwd?: string; title?: string } = {}): ChatSession {
     const existing = sessionsRepository.getSession(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      // A row can exist before the first send when the user retargeted the
+      // folder or renamed the draft. Such a row still carries the placeholder
+      // title, and this is the only moment a real prompt is available to
+      // replace it with.
+      if (input.title && existing.title === 'New chat' && !existing.providerSessionId) {
+        sessionsRepository.renameSession(sessionId, deriveTitle(input.title));
+        return this.getSession(sessionId);
+      }
+      return existing;
+    }
 
     return sessionsRepository.createSession({
       id: sessionId,
       title: input.title ? deriveTitle(input.title) : 'New chat',
       cwd: input.cwd || os.homedir(),
     });
+  },
+
+  /** The session, or null when the id belongs to a draft that has no row yet. */
+  findSession(sessionId: string): ChatSession | null {
+    return sessionsRepository.getSession(sessionId);
   },
 
   getSession(sessionId: string): ChatSession {
@@ -70,13 +109,26 @@ export const sessionsService = {
    * The sidebar list.
    *
    * App-owned sessions come first and win on identity: if a Claude Code
-   * session is already mapped to one of ours, it is not listed twice.
+   * session is already mapped to one of ours, it is not listed twice. The
+   * suppression set is built from *every* owned row, not just the ones being
+   * returned, so archiving or deleting a conversation cannot resurrect it
+   * through its external twin.
+   *
+   * Ordering is pinned-first, then by last message. It is computed on epoch
+   * milliseconds rather than by comparing the strings: the two sources format
+   * their timestamps differently, and a lexical compare silently interleaved
+   * them wrongly.
    */
-  async listConversations(limit = 50): Promise<SessionListItem[]> {
-    const owned = sessionsRepository.listSessions(limit);
-    const ownedProviderIds = new Set(
-      owned.map((session) => session.providerSessionId).filter((id): id is string => id !== null),
-    );
+  async listConversations(
+    limit = 50,
+    options: { archived?: boolean } = {},
+  ): Promise<SessionListItem[]> {
+    const archived = options.archived === true;
+    const owned = sessionsRepository.listSessions({ limit, archived });
+    const suppressed = new Set([
+      ...sessionsRepository.listOwnedProviderSessionIds(),
+      ...sessionsRepository.listHiddenProviderSessionIds(),
+    ]);
 
     const items: SessionListItem[] = owned.map((session) => ({
       id: session.id,
@@ -84,28 +136,53 @@ export const sessionsService = {
       cwd: session.cwd,
       updatedAt: session.updatedAt,
       external: false,
+      pinned: session.pinnedAt !== null,
+      archived: session.archivedAt !== null,
     }));
 
-    try {
-      const external = await listSessions({ limit });
-      for (const info of external) {
-        if (ownedProviderIds.has(info.sessionId)) continue;
-        items.push({
-          id: info.sessionId,
-          title: info.customTitle || info.summary || info.firstPrompt || 'Untitled',
-          cwd: info.cwd ?? '',
-          updatedAt: new Date(info.lastModified).toISOString(),
-          external: true,
-        });
+    // Claude Code's own history has no notion of our archive, so the archived
+    // view is app-owned rows only.
+    if (!archived) {
+      try {
+        const external = await listSessions({ limit });
+        for (const info of external) {
+          if (suppressed.has(info.sessionId)) continue;
+          items.push({
+            id: info.sessionId,
+            title: info.customTitle || info.summary || info.firstPrompt || 'Untitled',
+            cwd: info.cwd ?? '',
+            updatedAt: new Date(info.lastModified).toISOString(),
+            external: true,
+            pinned: false,
+            archived: false,
+          });
+        }
+      } catch {
+        // No Claude Code history yet, or an unreadable transcript directory.
+        // The app's own sessions are still perfectly listable.
       }
-    } catch {
-      // No Claude Code history yet, or an unreadable transcript directory.
-      // The app's own sessions are still perfectly listable.
     }
 
     return items
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .sort((left, right) => {
+        if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
+        return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+      })
       .slice(0, limit);
+  },
+
+  /**
+   * Removes every conversation that never produced a transcript.
+   *
+   * Called once at boot. Earlier builds wrote a row the moment the app opened
+   * and again for every "New chat" click, so an existing install has a pile of
+   * empty ones to clear; the draft-until-first-send lifecycle stops new ones
+   * accumulating.
+   */
+  sweepEmptySessions(): number {
+    const removed = sessionsRepository.deleteEmptySessions();
+    if (removed > 0) publishSessionsChanged();
+    return removed;
   },
 
   /**
@@ -125,11 +202,20 @@ export const sessionsService = {
     const providerSessionId = owned ? owned.providerSessionId : sessionId;
     if (!providerSessionId) return [];
 
-    const raw = await getSessionMessages(providerSessionId, {
-      ...(owned?.cwd ? { dir: owned.cwd } : {}),
-      ...(options.limit !== undefined ? { limit: options.limit } : {}),
-      ...(options.offset !== undefined ? { offset: options.offset } : {}),
-    });
+    let raw;
+    try {
+      raw = await getSessionMessages(providerSessionId, {
+        ...(owned?.cwd ? { dir: owned.cwd } : {}),
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options.offset !== undefined ? { offset: options.offset } : {}),
+      });
+    } catch (error) {
+      // A client-minted id with no row is a draft the user has not sent in
+      // yet, so there is no transcript on disk to find. For a session we do
+      // own, an unreadable transcript is a real failure and must surface.
+      if (owned) throw error;
+      return [];
+    }
 
     // The same normalizer as the live path, so history and streaming can never
     // render differently.
@@ -153,7 +239,7 @@ export const sessionsService = {
       ?? sessionsRepository.getSession(providerSessionId);
     if (existing) return existing;
 
-    return sessionsRepository.createSession({
+    const adopted = sessionsRepository.createSession({
       id: providerSessionId,
       providerSessionId,
       title: deriveTitle(title),
@@ -163,12 +249,42 @@ export const sessionsService = {
       // sidebar — the list orders by last message, not last viewed.
       lastActivityAt,
     });
+    publishSessionsChanged(adopted.id);
+    return adopted;
   },
 
+  /**
+   * Retitles a conversation.
+   *
+   * `ensureSession` rather than `getSession`: a draft can be renamed before
+   * anything has been sent in it, and 404-ing there would make the header's
+   * title field mysteriously fail on a brand-new chat. The row it creates has
+   * no transcript, so it stays out of the sidebar either way.
+   */
   renameSession(sessionId: string, title: string): ChatSession {
-    this.getSession(sessionId);
+    this.ensureSession(sessionId, { title });
     sessionsRepository.renameSession(sessionId, deriveTitle(title));
-    return this.getSession(sessionId);
+    const renamed = this.getSession(sessionId);
+    publishSessionsChanged(sessionId);
+    return renamed;
+  },
+
+  /** Pinned conversations sort above everything else in the sidebar. */
+  setPinned(sessionId: string, pinned: boolean): ChatSession {
+    this.getSession(sessionId);
+    sessionsRepository.setPinned(sessionId, pinned);
+    const updated = this.getSession(sessionId);
+    publishSessionsChanged(sessionId);
+    return updated;
+  },
+
+  /** Archiving takes a conversation out of the main list without deleting it. */
+  setArchived(sessionId: string, archived: boolean): ChatSession {
+    this.getSession(sessionId);
+    sessionsRepository.setArchived(sessionId, archived);
+    const updated = this.getSession(sessionId);
+    publishSessionsChanged(sessionId);
+    return updated;
   },
 
   /**
@@ -179,8 +295,6 @@ export const sessionsService = {
    * subprocess.
    */
   setWorkingDirectory(sessionId: string, cwd: string): ChatSession {
-    this.getSession(sessionId);
-
     const resolved = path.resolve(cwd);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
       throw new AppError('That folder does not exist.', {
@@ -189,6 +303,9 @@ export const sessionsService = {
       });
     }
 
+    // Same reasoning as `renameSession`: retargeting the folder is one of the
+    // things people do before typing the first message.
+    this.ensureSession(sessionId, { cwd: resolved });
     sessionsRepository.setCwd(sessionId, resolved);
     return this.getSession(sessionId);
   },
@@ -198,10 +315,25 @@ export const sessionsService = {
     return os.homedir();
   },
 
+  /**
+   * Removes a conversation from the app.
+   *
+   * The row goes; the Claude Code transcript it points at does not, because
+   * `~/.claude` belongs to the CLI and this app only reads it. A tombstone
+   * keeps that transcript from reappearing in the list as an "external"
+   * conversation the next time the SDK enumerates history.
+   */
   deleteSession(sessionId: string): { id: string } {
-    if (!sessionsRepository.deleteSession(sessionId)) {
+    const existing = sessionsRepository.getSession(sessionId);
+    if (!existing) {
       throw new AppError('Conversation not found.', { code: 'SESSION_NOT_FOUND', statusCode: 404 });
     }
+
+    sessionsRepository.deleteSession(sessionId);
+    if (existing.providerSessionId) {
+      sessionsRepository.hideProviderSession(existing.providerSessionId);
+    }
+    publishSessionsChanged(sessionId);
     return { id: sessionId };
   },
 };

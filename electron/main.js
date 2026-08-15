@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,118 @@ const APP_URL = DEV_URL || SERVER_URL;
 let mainWindow = null;
 let splashWindow = null;
 let serverProcess = null;
+
+/**
+ * App zoom.
+ *
+ * Done with `webContents.setZoomLevel` rather than a CSS/root-font-size scale
+ * in the renderer, because the renderer only owns type: an em-based scale would
+ * leave every `px` border, every icon and the whole layout grid at their
+ * original size, which is not what "make everything bigger" means. Chromium's
+ * zoom multiplies the CSS pixel itself, so the entire UI — including the
+ * scrollbars and the themed surfaces — scales as one.
+ *
+ * The step is Chromium's own logarithmic level (factor = 1.2 ^ level), so the
+ * increments feel the same going up as coming down.
+ */
+const ZOOM_STEP = 0.5;
+const ZOOM_LIMIT = 4;
+
+/**
+ * The header's CSS height, mirrored from `Header.tsx` (`h-14`) and from the
+ * sidebar's top row, which sits beside it. All three are the same number and
+ * have to move together, or the OS caption buttons stop lining up with the
+ * app's own header.
+ */
+const HEADER_HEIGHT = 56;
+
+let zoomLevel = 0;
+let zoomSaveTimer = null;
+
+function readUiStatePath() {
+  return path.join(app.getPath('userData'), 'ui-state.json');
+}
+
+function clampZoomLevel(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(ZOOM_LIMIT, Math.max(-ZOOM_LIMIT, value));
+}
+
+/** Reads the persisted zoom, tolerating a missing or corrupt file. */
+function readStoredZoomLevel() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(readUiStatePath(), 'utf8'));
+    return clampZoomLevel(Number(parsed?.zoomLevel));
+  } catch {
+    return 0;
+  }
+}
+
+/** Writes the level out now, tolerating a read-only or full disk. */
+function writeZoomLevel() {
+  if (zoomSaveTimer) clearTimeout(zoomSaveTimer);
+  zoomSaveTimer = null;
+
+  try {
+    fs.writeFileSync(readUiStatePath(), JSON.stringify({ zoomLevel }));
+  } catch {
+    // A zoom level that does not survive a restart is a far smaller problem
+    // than a crash on quit.
+  }
+}
+
+/**
+ * Schedules the write, coalescing a burst into one.
+ *
+ * Ctrl+wheel changes the level once per notch, and a synchronous write per
+ * notch would put the disk in the middle of a gesture.
+ */
+function saveZoomLevel() {
+  if (zoomSaveTimer) clearTimeout(zoomSaveTimer);
+  zoomSaveTimer = setTimeout(writeZoomLevel, 400);
+}
+
+function applyZoomLevel(next) {
+  zoomLevel = clampZoomLevel(next);
+
+  const contents = mainWindow?.webContents;
+  if (!contents || contents.isDestroyed()) return;
+
+  contents.setZoomLevel(zoomLevel);
+
+  // The caption-button overlay is measured in unscaled device pixels, so it
+  // does not follow the zoom on its own — left alone, the window controls stop
+  // lining up with the app's own header the moment the user zooms.
+  if (process.platform !== 'darwin') {
+    try {
+      mainWindow.setTitleBarOverlay({
+        height: Math.round(HEADER_HEIGHT * contents.getZoomFactor()),
+      });
+    } catch {
+      // Only meaningful while the overlay exists; never worth failing a zoom.
+    }
+  }
+
+  saveZoomLevel();
+}
+
+/**
+ * Maps a keystroke to a zoom intent, or null.
+ *
+ * Covers the four spellings of the same two keys people actually press: `=`
+ * and `-` on the main row, `+` and `_` when Shift is held, and the numpad
+ * pair — the last identified by `code`, since the numpad reports the same
+ * `key` as the main row. Alt is excluded so this never eats the Ctrl+Alt+Shift
+ * appearance reset.
+ */
+function readZoomIntent(input) {
+  if (input.type !== 'keyDown' || !input.control || input.alt) return null;
+
+  if (input.key === '=' || input.key === '+' || input.code === 'NumpadAdd') return 'in';
+  if (input.key === '-' || input.key === '_' || input.code === 'NumpadSubtract') return 'out';
+  if (input.key === '0' || input.code === 'Numpad0') return 'reset';
+  return null;
+}
 
 /** Resolves once the local server answers, or rejects after the timeout. */
 function waitForServer(timeoutMs = 30_000) {
@@ -177,17 +290,35 @@ function createMainWindow() {
     },
   });
 
-  // Fires in the main process before the page sees the event, so a theme
-  // cannot swallow it.
+  // Fires in the main process before the page sees the event, so neither a
+  // theme nor a focused text field can swallow it.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     const isPanic = input.type === 'keyDown'
       && input.control && input.alt && input.shift
       && input.key.toLowerCase() === 't';
-    if (!isPanic) return;
+    if (isPanic) {
+      event.preventDefault();
+      void mainWindow?.webContents.executeJavaScript(PANIC_RESET_SCRIPT).catch(() => {});
+      return;
+    }
+
+    const intent = readZoomIntent(input);
+    if (!intent) return;
 
     event.preventDefault();
-    void mainWindow?.webContents.executeJavaScript(PANIC_RESET_SCRIPT).catch(() => {});
+    if (intent === 'reset') applyZoomLevel(0);
+    else applyZoomLevel(zoomLevel + (intent === 'in' ? ZOOM_STEP : -ZOOM_STEP));
   });
+
+  // Ctrl+wheel. Electron reports the gesture here rather than acting on it, so
+  // the same clamp and the same persistence apply as for the keyboard.
+  mainWindow.webContents.on('zoom-changed', (_event, direction) => {
+    applyZoomLevel(zoomLevel + (direction === 'in' ? ZOOM_STEP : -ZOOM_STEP));
+  });
+
+  // Re-applied per load: a navigation resets the renderer's zoom, so a reload
+  // would otherwise silently drop the user back to 100%.
+  mainWindow.webContents.on('did-finish-load', () => applyZoomLevel(zoomLevel));
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
@@ -253,9 +384,24 @@ function installApplicationMenu() {
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        // Not the `zoomIn`/`zoomOut`/`resetZoom` roles: those move the zoom
+        // behind our back, so the persisted level and the caption-overlay
+        // height would both go stale the first time the menu was used.
+        {
+          label: 'Actual size',
+          accelerator: 'CmdOrCtrl+0',
+          click: () => applyZoomLevel(0),
+        },
+        {
+          label: 'Zoom in',
+          accelerator: 'CmdOrCtrl+Plus',
+          click: () => applyZoomLevel(zoomLevel + ZOOM_STEP),
+        },
+        {
+          label: 'Zoom out',
+          accelerator: 'CmdOrCtrl+-',
+          click: () => applyZoomLevel(zoomLevel - ZOOM_STEP),
+        },
         { role: 'togglefullscreen' },
       ],
     },
@@ -265,6 +411,10 @@ function installApplicationMenu() {
 
 async function bootstrap() {
   await app.whenReady();
+
+  // Before the window exists, so the first `did-finish-load` already carries
+  // the level the user left the app at.
+  zoomLevel = readStoredZoomLevel();
 
   installApplicationMenu();
   createSplash();
@@ -291,6 +441,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  // Quitting inside the save debounce would otherwise lose the last change,
+  // which is exactly the one the user just made.
+  if (zoomSaveTimer) writeZoomLevel();
   serverProcess?.kill();
 });
 

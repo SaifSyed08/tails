@@ -18,6 +18,27 @@ export type SlashCommandEntry = {
  * the UI advertises that the agent can restyle its own interface.
  */
 export const LOCAL_COMMANDS: Record<string, { description: string; argumentHint?: string; expand: (args: string) => string }> = {
+  /**
+   * The expansion is the whole feature, so it is written as a procedure rather
+   * than as a wish.
+   *
+   * The previous version said "list the reference presets first, then preview,
+   * then apply" and "design something of your own rather than picking the
+   * closest preset" — an instruction immediately after the step that hands over
+   * a list of finished looks. Unsurprisingly, what came back was preset-shaped.
+   * Three things changed:
+   *
+   * - `theme_list` now returns the appearance *guide* along with the presets,
+   *   so the reading step teaches construction instead of offering a menu. It
+   *   is named here as "read the guide", not "list the presets".
+   * - Ambiguity gets asked about rather than guessed at, through
+   *   `AskUserQuestion`, and — the user's own framing — the two options are a
+   *   drastic reading and a conservative one, not two shades of the same idea.
+   * - A substantial change is *shown* first, as two live miniatures of the real
+   *   app, so the choice is made against something visible. The threshold is
+   *   stated here rather than left to taste, because "ask before big changes"
+   *   without a definition of big is how a font swap ends up behind a modal.
+   */
   personalize: {
     description: 'Redesign the T.A.I.L.S. interface',
     argumentHint: '<the look you want>',
@@ -25,9 +46,12 @@ export const LOCAL_COMMANDS: Record<string, { description: string; argumentHint?
       'Redesign the T.A.I.L.S. interface for me.',
       args.trim()
         ? `Here is what I want: ${args.trim()}`
-        : 'Ask me what mood or style I want if it is not obvious from our conversation.',
-      'Use the tails-appearance tools: list the reference presets first, then preview your design so I can see it, then apply it once I am happy.',
-      'Design something of your own rather than picking the closest preset — the presets are only examples of the format.',
+        : 'I have not said what I want yet — ask me, with AskUserQuestion, offering concrete directions rather than "what would you like?".',
+      'Start by calling mcp__tails-appearance__theme_list and actually reading the guide it returns; it explains how looks are composed here and what the primitives can do. The presets in that response are worked examples to learn from, not options to pick from.',
+      'Then judge how big this change is. If it only moves colour, typography, density or corner radius, just build it and preview it — do not make me choose between mockups of a font swap.',
+      'If it changes structure — fills, shadows, borders, backdrops, ambient motion, or pinning light/dark — or if what I asked for is open to interpretation, design TWO readings of it: one drastic and one conservative. Show them with mcp__tails-appearance__theme_propose, which renders both as live miniatures of this app, and then ask me which with AskUserQuestion. Do that before applying anything.',
+      'Once I have chosen, apply it, and then publish the three or four knobs worth adjusting for that specific look with mcp__tails-appearance__theme_controls so I can tune it without asking you.',
+      'Compose the thing I asked for. If some part of it genuinely cannot be built, tell me which primitive is missing rather than giving me the nearest shipped look.',
     ].join(' '),
   },
 };

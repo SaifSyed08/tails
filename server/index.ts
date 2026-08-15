@@ -10,6 +10,7 @@ import { createAppearanceRouter } from '@/modules/appearance/appearance.routes.j
 import { attachChatGateway } from '@/modules/chat/chat-gateway.js';
 import { createPetsRouter } from '@/modules/pets/index.js';
 import { createSessionsRouter } from '@/modules/sessions/sessions.routes.js';
+import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { attachTerminalGateway } from '@/modules/terminal/terminal-gateway.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -103,6 +104,10 @@ attachChatGateway(server);
 attachTerminalGateway(server);
 
 getConnection();
+// A conversation with no messages is not a conversation. Earlier builds wrote
+// one on every launch, so the first boot after this change has a backlog to
+// clear.
+sessionsService.sweepEmptySessions();
 
 server.listen(PORT, HOST, () => {
   console.log(`T.A.I.L.S. server listening on http://${HOST}:${PORT}`);

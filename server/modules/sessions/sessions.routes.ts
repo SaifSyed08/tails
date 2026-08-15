@@ -19,12 +19,16 @@ export function createSessionsRouter(): express.Router {
 
   router.get('/', respond((req) => sessionsService.listConversations(
     Number(req.query.limit) || 50,
+    { archived: req.query.archived === '1' || req.query.archived === 'true' },
   )));
 
   router.post('/', respond((req) => sessionsService.createSession({
     cwd: readString(req.body?.cwd) ?? undefined,
     title: readString(req.body?.title) ?? undefined,
   })));
+
+  // Above `/:sessionId`, or Express matches "draft" as an id.
+  router.get('/draft', respond(() => sessionsService.draftSession()));
 
   router.get('/:sessionId', respond((req) => sessionsService.getSession(String(req.params.sessionId))));
 
@@ -45,14 +49,24 @@ export function createSessionsRouter(): express.Router {
 
   router.patch('/:sessionId', respond((req) => {
     const sessionId = String(req.params.sessionId);
+    if (typeof req.body?.pinned === 'boolean') {
+      return sessionsService.setPinned(sessionId, req.body.pinned);
+    }
+    if (typeof req.body?.archived === 'boolean') {
+      return sessionsService.setArchived(sessionId, req.body.archived);
+    }
+
     const cwd = readString(req.body?.cwd);
     if (cwd) return sessionsService.setWorkingDirectory(sessionId, cwd);
     return sessionsService.renameSession(sessionId, readString(req.body?.title) ?? 'Untitled');
   }));
 
   router.get('/:sessionId/commands', respond(async (req) => {
-    const session = sessionsService.getSession(String(req.params.sessionId));
-    return listSlashCommands(session.cwd);
+    // A draft conversation has no row yet, and the composer asks for its
+    // commands the moment it mounts. Falling back to the default folder gives
+    // the palette something real instead of a 404 the client swallows.
+    const session = sessionsService.findSession(String(req.params.sessionId));
+    return listSlashCommands(session?.cwd ?? sessionsService.defaultWorkingDirectory());
   }));
 
   router.delete('/:sessionId', respond((req) => sessionsService.deleteSession(

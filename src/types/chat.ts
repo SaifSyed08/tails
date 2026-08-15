@@ -19,10 +19,44 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'question_request'
   | 'plan_request'
+  | 'prompt_suggestion'
   | 'chat_subscribed'
   | 'session_created'
+  | 'sessions_changed'
   | 'appearance_changed'
   | 'protocol_error';
+
+/**
+ * The permission modes the UI can select, mirroring the server's
+ * `SELECTABLE_PERMISSION_MODES`.
+ *
+ * `bypassPermissions` is deliberately absent: it resolves permissions before
+ * the app's callback runs, which would silently stop questions and plans ever
+ * reaching the user.
+ */
+export const PERMISSION_MODE_VALUES = ['default', 'acceptEdits', 'plan'] as const;
+export type PermissionMode = typeof PERMISSION_MODE_VALUES[number];
+
+/**
+ * A file staged in the composer, on its way out.
+ *
+ * Carries the bytes; `MessageAttachment` is the same file once it is part of
+ * the transcript, where the bytes are optional.
+ */
+export type AttachmentPayload = {
+  name: string;
+  mediaType: string;
+  /** Base64 without the data-URL prefix, which is what the SDK expects. */
+  data: string;
+};
+
+/** A file that travelled with a message, as the transcript remembers it. */
+export type MessageAttachment = {
+  name: string;
+  mediaType: string;
+  /** `data:` URL. Images only, and only when small enough to inline. */
+  previewUrl?: string;
+};
 
 export type NormalizedMessage = {
   id: string;
@@ -32,6 +66,8 @@ export type NormalizedMessage = {
   seq?: number;
   role?: 'user' | 'assistant';
   content?: string;
+  attachments?: MessageAttachment[];
+  permissionMode?: string;
   toolName?: string;
   toolInput?: unknown;
   toolId?: string;
@@ -78,7 +114,7 @@ export type PendingPermission = {
  * bubble — and several kinds render nothing at all.
  */
 export type ChatRow =
-  | { type: 'user'; id: string; content: string }
+  | { type: 'user'; id: string; content: string; attachments?: MessageAttachment[] }
   | { type: 'assistant'; id: string; content: string; streaming?: boolean }
   | { type: 'thinking'; id: string; content: string }
   | {

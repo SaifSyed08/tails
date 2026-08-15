@@ -47,6 +47,35 @@ export function createAppearanceRouter(): express.Router {
     return { ok: true };
   }));
 
+  // "Keep this one." Separate from /apply because applying binds a look and
+  // this promotes it — a user can want either without the other.
+  router.post('/keep', respond((req) => themeService.keepCurrent(
+    String(req.body?.name ?? ''),
+    readString(req.body?.sessionId) ?? '',
+  )));
+
+  // The live-controls layer. Ephemeral like /css and separate from it because
+  // it adopts no stylesheet at all — it publishes the knobs, and the renderer
+  // writes single custom properties as the user drags them.
+  // The payload is rebuilt rather than forwarded: the control schema is strict,
+  // and `sessionId` rides in the same body as transport rather than as content.
+  router.post('/controls', respond((req) => themeService.publishControls(
+    { title: req.body?.title, controls: req.body?.controls },
+    readString(req.body?.sessionId) ?? '',
+  )));
+
+  router.delete('/controls', respond((req) => {
+    themeService.clearControls(readString(req.query.sessionId) ?? '');
+    return { ok: true };
+  }));
+
+  // A proposal takes itself off screen when a theme lands, so this exists for
+  // the case where the user decided against both and nothing was applied.
+  router.delete('/proposal', respond((req) => {
+    themeService.clearProposal(readString(req.query.sessionId) ?? '');
+    return { ok: true };
+  }));
+
   router.post('/unbind', respond((req) => {
     const scope = req.body?.scope === 'session' ? 'session' : 'global';
     themeService.unbind(scope, readString(req.body?.sessionId) ?? '');

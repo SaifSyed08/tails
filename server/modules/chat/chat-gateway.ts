@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 import {
+  getSessionPermissionMode,
   resolvePermission,
   runChatTurn,
   SELECTABLE_PERMISSION_MODES,
@@ -34,14 +35,16 @@ function parseClientMessage(raw: string): ClientMessage | null {
     case 'chat.send': {
       const sessionId = readString(message.sessionId);
       const content = typeof message.content === 'string' ? message.content : '';
-      if (!sessionId || !content.trim()) return null;
+      const attachments = readAttachments(message.attachments);
+      // A message that is only a screenshot is still a message.
+      if (!sessionId || (!content.trim() && attachments.length === 0)) return null;
       return {
         type: 'chat.send',
         sessionId,
         content,
         cwd: readString(message.cwd) ?? undefined,
         permissionMode: readString(message.permissionMode) ?? undefined,
-        attachments: readAttachments(message.attachments),
+        attachments,
       };
     }
     case 'chat.abort': {
@@ -179,10 +182,13 @@ export function attachChatGateway(server: Server): WebSocketServer {
         case 'chat.subscribe':
           for (const entry of message.sessions) {
             // The acknowledgement carries everything a reconnecting client
-            // needs to resume: whether a run is live, and any prompt already
-            // waiting on an answer.
+            // needs to resume: whether a run is live, any prompt already
+            // waiting on an answer, and the permission mode actually in force
+            // — which is the only way the composer's indicator can be right
+            // on a conversation this client has never sent to.
             send(createMessage('chat_subscribed', entry.sessionId, {
               statusCode: runRegistry.isRunning(entry.sessionId) ? 'running' : 'idle',
+              permissionMode: getSessionPermissionMode(entry.sessionId),
               appearance: { pendingPermissions: runRegistry.listPendingPermissions(entry.sessionId) },
             }));
 

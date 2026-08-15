@@ -42,6 +42,8 @@ export type PetDefinition = {
   displayName: string;
   description: string;
   kind?: string;
+  /** Only ever present when the pet's own manifest declares one; never inferred. */
+  author?: string;
   spriteVersionNumber?: number;
   spritesheetPath: string;
   frame: FrameGrid;
@@ -66,6 +68,8 @@ export type InstalledPet = {
   spriteUrl: string;
   spriteSize: { width: number; height: number } | null;
   gridBasis: PetGridBasis;
+  /** ISO timestamp of when this pet entered the library, not when it was made. */
+  installedAt: string | null;
   removable: boolean;
   active: boolean;
   warnings: string[];
@@ -102,6 +106,7 @@ export type PetFileDraft = {
   displayName: string;
   description?: string;
   kind?: string;
+  author?: string;
   spriteVersionNumber?: number;
   spritesheetPath?: string;
   frame?: FrameGrid;

@@ -53,6 +53,53 @@
     --radius: 0.625rem;
     --space-unit: 0.25rem;
 
+    /* Typography floors, chosen so an unbound app looks exactly as it did
+       before these tokens had consumers: `1rem` is the browser default body
+       size, and `normal` / `none` are the initial values of the three
+       properties below. A generated theme overrides them; the floor is not a
+       design, it is the absence of one. */
+    --font-size-base: 1rem;
+    --line-height-base: normal;
+    --letter-spacing-base: normal;
+    --display-weight: 600;
+    --measure: none;
+
+    /**
+     * Grayscale font smoothing, off by default — and this is the fix for
+     * "the generated themes look pixelated".
+     *
+     * `-webkit-font-smoothing: antialiased` was applied unconditionally on
+     * `body`. It is a macOS idiom, and on macOS since Mojave it is close to a
+     * no-op because the OS stopped doing subpixel antialiasing anyway. On
+     * Windows it is not a no-op: it switches Chromium from DirectWrite subpixel
+     * rendering (ClearType) to grayscale, which at 13-15px turns well-hinted
+     * stems into soft grey smears. That is what "somewhat pixelated" was.
+     *
+     * It read as a *theme* problem rather than an app-wide one because the
+     * built-in stack lands on Segoe UI, which Microsoft hints specifically for
+     * this rasteriser, while a generated theme swaps to Arial, Georgia,
+     * Trebuchet or Corbel — faces whose hinting assumes the ClearType that had
+     * just been turned off. Same bug, only visible once the font moved.
+     *
+     * Kept as a token rather than deleted so a look that genuinely wants the
+     * thinner grayscale rendering can ask for it, from `theme_css` or from a
+     * published control.
+     */
+    --font-smoothing: auto;
+
+    /**
+     * Pointer position, in percent of the viewport, written by
+     * `src/components/appearance/pointerTokens.ts` on every animation frame.
+     *
+     * Defined here so `var(--pointer-x)` resolves to something sane before the
+     * first mouse move and in a window that has never been hovered — an
+     * undefined custom property makes the whole declaration invalid at
+     * computed-value time, so a spotlight gradient built on it would vanish
+     * entirely rather than sit in the middle.
+     */
+    --pointer-x: 50%;
+    --pointer-y: 50%;
+
     --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
     --font-serif: Georgia, 'Times New Roman', serif;
     --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
@@ -139,6 +186,24 @@
     --t-ink-muted: hsl(var(--muted-foreground));
     --t-ink-shadow: none;
     --t-accent-on: hsl(var(--primary));
+
+    /* The ambient layer — slow background motion, painted on `::after`. Off at
+       the floor, and `none` is a real off switch: with no image the pseudo
+       element paints nothing, and with no animation the compositor tracks
+       nothing, so an app with no ambience pays for none of this. */
+    --t-ambient-image: none;
+    --t-ambient-size: auto;
+    --t-ambient-blend: normal;
+    --t-ambient-animation: none;
+
+    /* Caret, selection and pointer. Global rather than per-part: there is one
+       caret on screen at a time and it belongs to the theme, not to whichever
+       surface happens to contain the focused field. */
+    --t-caret-color: hsl(var(--primary));
+    --t-caret-shape: auto;
+    --t-selection-fill: hsl(var(--primary) / 0.28);
+    --t-selection-ink: currentColor;
+    --t-cursor: auto;
   }
 
   /* Per-part floor values, mirroring what each part looked like when it was
@@ -204,11 +269,77 @@
     border-color: hsl(var(--border));
   }
 
+  /**
+   * The window itself never scrolls.
+   *
+   * A desktop app with a document scrollbar down the side of the whole window
+   * is a web page in a frame, and it looks like one. Inner panes — the
+   * transcript, the sidebar, a code block — scroll on their own and keep the
+   * themed scrollbar styling below; the document does not.
+   *
+   * It is also a second line of defence for a real bug fixed earlier today: a
+   * modal that lost its `fixed` positioning laid itself out in document flow
+   * below the fold, and the *only* reason that was reachable at all is that the
+   * document could scroll — so it read as "the Settings button does nothing"
+   * instead of as a broken layout. With the window locked, that class of
+   * failure is visible the moment it happens.
+   */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     font-family: var(--font-sans);
-    -webkit-font-smoothing: antialiased;
+    /* The four typography tokens the appearance engine has always emitted and
+       nobody read. Until now `type.scale`, `type.letterSpacing`,
+       `type.lineHeight` and `type.measure` were four of the eight typographic
+       knobs a model could set, and all four changed nothing — the same class of
+       defect as v1's dropped fields, hiding in the half of the contract that
+       lives in this file. */
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-base);
+    letter-spacing: var(--letter-spacing-base);
+    -webkit-font-smoothing: var(--font-smoothing);
+    caret-color: var(--t-caret-color);
+    /* Chromium 139+; a bar everywhere else, which is the correct degradation. */
+    caret-shape: var(--t-caret-shape);
+    cursor: var(--t-cursor);
+  }
+
+  ::selection {
+    background-color: var(--t-selection-fill);
+    color: var(--t-selection-ink);
+  }
+
+  /**
+   * The page-wide ambient layer.
+   *
+   * `:root` carries the `default` surface's tokens, so this picks up whatever
+   * ambience the theme put on `default` — which is what makes "drifting clouds
+   * behind the chat" a thing the spec can say rather than a thing only
+   * hand-written CSS could reach.
+   *
+   * `fixed` rather than `absolute` so the field stays put while the transcript
+   * scrolls; ambience that scrolls with the content is parallax, not weather.
+   * At `z-index: -1` it sits above the canvas background (which is body's own,
+   * propagated) and below everything in `#root`.
+   */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image: var(--t-ambient-image);
+    background-size: var(--t-ambient-size);
+    background-repeat: no-repeat;
+    mix-blend-mode: var(--t-ambient-blend);
+    animation: var(--t-ambient-animation);
   }
 
   /**
@@ -278,8 +409,26 @@
    * but not `corner-shape`, and would square off the corners of every
    * squircle.
    */
-  [data-tails-part][data-tails-part] {
+  /**
+   * The paint layers need a positioned ancestor, and this is the *only*
+   * declaration in the whole contract that must lose to a utility.
+   *
+   * It sits at single specificity, alone, deliberately. Folded into the doubled
+   * rule below it outranked Tailwind's `.fixed` and `.absolute` — so a modal
+   * marked `fixed inset-0` became `position: relative`, `inset-0` stopped
+   * meaning anything, and the dialog laid itself out in document flow below the
+   * fold. It looked exactly like "the Settings button does nothing", right up
+   * until you scrolled and found the panel sitting under the app.
+   *
+   * Any positioned value anchors an absolutely-positioned child equally well,
+   * so letting a utility win costs the contract nothing: `relative` is simply
+   * the floor for a part that would otherwise be `static`.
+   */
+  [data-tails-part] {
     position: relative;
+  }
+
+  [data-tails-part][data-tails-part] {
     /* Makes the part its own stacking context, which is what lets the paint
        layers below sit at `z-index: -1` — above the element's own background
        but beneath its content, including bare text nodes. Also confines the
@@ -336,6 +485,41 @@
   }
 
   /**
+   * The ambient layer — slow background motion, per surface.
+   *
+   * `::after` rather than a third background layer on `::before`, because this
+   * one moves: `background-position` and `transform` are the only two things
+   * the app-owned ambient keyframes touch, both are compositor-only, and giving
+   * them their own element keeps that animation off the layer carrying the
+   * texture.
+   *
+   * `z-index: -2` puts it below the texture and overlay at -1 and above the
+   * element's own fill, which is the order the name implies: the movement is
+   * behind the material, not on top of it.
+   *
+   * Nothing here disables the animation for reduced-motion users. It does not
+   * need to — the global `prefers-reduced-motion` rule in the utilities layer
+   * already collapses every animation in the app to 0.01ms and one iteration,
+   * which leaves the ambient gradient painted and perfectly still. That is the
+   * right degradation: the colour field was always the look, and the drift was
+   * always the garnish.
+   */
+  [data-tails-part][data-tails-part]::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    border-radius: inherit;
+    corner-shape: inherit;
+    pointer-events: none;
+    background-image: var(--t-ambient-image);
+    background-size: var(--t-ambient-size);
+    background-repeat: no-repeat;
+    mix-blend-mode: var(--t-ambient-blend);
+    animation: var(--t-ambient-animation);
+  }
+
+  /**
    * Ink that is aware of the surface it sits on.
    *
    * `--t-ink` is applied to the part itself, but secondary and accent text need
@@ -373,14 +557,30 @@
    */
   .prose-tails {
     @apply text-[0.9375rem] leading-relaxed;
+    /* `type.measure`, finally connected. The floor is `none`, so an unbound app
+       is unchanged and only a theme that asks for a measure gets one — which is
+       the right default, because a cap on line length is an editorial decision
+       rather than a correction. */
+    max-inline-size: var(--measure);
   }
 
   .prose-tails > * + * {
     @apply mt-3;
   }
 
-  .prose-tails h1 { @apply font-display text-lg font-semibold tracking-tight; }
-  .prose-tails h2 { @apply font-display text-base font-semibold tracking-tight; }
+  /* `--display-weight` lands here rather than on `.font-display`, because these
+     two rules are where the app already declares a heading weight and a literal
+     600 in them would out-specify anything the token did. `type.displayWeight`
+     was the fifth typographic knob that validated and changed nothing. */
+  .prose-tails h1 {
+    @apply font-display text-lg tracking-tight;
+    font-weight: var(--display-weight);
+  }
+
+  .prose-tails h2 {
+    @apply font-display text-base tracking-tight;
+    font-weight: var(--display-weight);
+  }
   .prose-tails h3 { @apply text-sm font-semibold; }
 
   .prose-tails p { @apply whitespace-pre-wrap; }

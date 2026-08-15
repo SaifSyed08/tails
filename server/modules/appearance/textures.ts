@@ -1,4 +1,9 @@
-import type { BlendMode, OverlayKind, TextureKind } from '@/modules/appearance/surface-recipe.js';
+import type {
+  AmbientKind,
+  BlendMode,
+  OverlayKind,
+  TextureKind,
+} from '@/modules/appearance/surface-recipe.js';
 
 /**
  * Every image a theme can put on a surface, owned by the app.
@@ -188,4 +193,132 @@ export function readOverlayPaint(
 ): OverlayPaint | null {
   if (kind === 'none' || strength <= 0) return null;
   return OVERLAY_PAINTS[kind](angle, strength, tint);
+}
+
+/**
+ * Ambient motion — the moving half of a background.
+ *
+ * Two decisions are worth recording because both are load-bearing and neither
+ * is obvious.
+ *
+ * **The animation only ever moves `background-position` or `transform`.** Both
+ * are compositor-only properties, so an ambient layer running for the whole
+ * session costs no layout, no paint and no main-thread work. Animating
+ * `background-image` stops or `filter` instead would look identical for a
+ * second and then cost frames forever, on a layer nobody is looking at.
+ *
+ * **The keyframes are app-owned constants, not generated.** A theme picks a
+ * named motion and supplies colour, speed and scale; it cannot author a
+ * keyframe. That keeps the whole feature inside the same promise as textures —
+ * the app draws, the theme chooses — and it means the four motions can be tuned
+ * in one place rather than being frozen into every saved theme's token blob.
+ */
+export type AmbientPaint = { image: string; size: string; animation: string };
+
+/**
+ * The keyframes the ambient animations reference.
+ *
+ * Emitted into the theme stylesheet by `serialize.ts`, once, and only when a
+ * surface actually uses one. Names carry the `t-` prefix that marks everything
+ * the theme layer owns.
+ *
+ * The `--t-ambient-speed` multiplier inside each `animation` value below is what
+ * makes "how fast" a live control rather than a re-derivation: the property is
+ * never declared, so it resolves to its fallback of `1` until someone sets it
+ * on `:root`, and the moment they do every ambient layer in the app retimes
+ * without a single token being recompiled.
+ */
+export const AMBIENT_KEYFRAMES = `
+@keyframes t-ambient-drift {
+  from { background-position: 0% 50%; }
+  to { background-position: 200% 50%; }
+}
+
+@keyframes t-ambient-clouds {
+  0% { background-position: 0% 20%, 100% 80%; }
+  50% { background-position: 100% 60%, 20% 30%; }
+  100% { background-position: 0% 20%, 100% 80%; }
+}
+
+@keyframes t-ambient-grid {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 40px 40px, 40px 40px; }
+}
+
+@keyframes t-ambient-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.09); }
+}
+`.trim();
+
+/** A colour at a given alpha, from a hue the theme chose. */
+export type AmbientTint = (hue: number, alpha: number, lightness?: number) => string;
+
+const AMBIENT_PAINTS: Record<
+  Exclude<AmbientKind, 'none'>,
+  (hue: number, strength: number, scale: number, tint: AmbientTint) => Omit<AmbientPaint, 'animation'>
+> = {
+  // One wide band sliding sideways. `background-size: 220%` is what gives the
+  // position animation somewhere to travel — at 100% there is nothing to slide.
+  drift: (hue, strength, scale, tint) => ({
+    image: `linear-gradient(100deg, transparent 0%, ${tint(hue, strength)} 25%, ${tint(hue + 40, strength * 0.7)} 50%, transparent 78%)`,
+    size: `${Math.round(220 * scale)}% ${Math.round(160 * scale)}%`,
+  }),
+  // Two soft masses on independent paths. The second is deliberately a
+  // different hue and a different size, because two identical blobs moving in
+  // step read as a bug rather than as weather.
+  clouds: (hue, strength, scale, tint) => ({
+    image: [
+      `radial-gradient(ellipse 60% 50% at 30% 40%, ${tint(hue, strength)} 0%, transparent 70%)`,
+      `radial-gradient(ellipse 50% 60% at 70% 60%, ${tint(hue + 55, strength * 0.75)} 0%, transparent 72%)`,
+    ].join(', '),
+    size: `${Math.round(170 * scale)}% ${Math.round(170 * scale)}%, ${Math.round(210 * scale)}% ${Math.round(190 * scale)}%`,
+  }),
+  // A lattice scrolling one cell per cycle, so the loop is seamless. The 40px
+  // period is fixed to match the keyframe, and `scale` moves the drawn line
+  // spacing rather than the travel distance.
+  grid: (hue, strength, scale, tint) => ({
+    image: [
+      `linear-gradient(0deg, ${tint(hue, strength)} 0, ${tint(hue, strength)} 1px, transparent 1px)`,
+      `linear-gradient(90deg, ${tint(hue, strength)} 0, ${tint(hue, strength)} 1px, transparent 1px)`,
+    ].join(', '),
+    size: `${Math.round(40 * scale)}px ${Math.round(40 * scale)}px, ${Math.round(40 * scale)}px ${Math.round(40 * scale)}px`,
+  }),
+  pulse: (hue, strength, scale, tint) => ({
+    image: `radial-gradient(ellipse 70% 70% at 50% 45%, ${tint(hue, strength)} 0%, transparent 75%)`,
+    size: `${Math.round(120 * scale)}% ${Math.round(120 * scale)}%`,
+  }),
+};
+
+/** Motions whose loop only reads correctly when it eases rather than runs flat. */
+const AMBIENT_EASING: Partial<Record<Exclude<AmbientKind, 'none'>, string>> = {
+  clouds: 'ease-in-out',
+  pulse: 'ease-in-out',
+};
+
+/**
+ * Resolves an ambient selection to its paint, or null for "none".
+ *
+ * As with textures and overlays the strength is baked into the colour stops,
+ * because the layer's own `opacity` is spent on the presence flag and applying
+ * the strength twice is a bug that reads as "the ambience is too subtle" for a
+ * week before anyone finds it.
+ */
+export function readAmbientPaint(
+  kind: AmbientKind,
+  hue: number,
+  strength: number,
+  speed: number,
+  scale: number,
+  tint: AmbientTint,
+): AmbientPaint | null {
+  if (kind === 'none' || strength <= 0) return null;
+
+  const paint = AMBIENT_PAINTS[kind](hue, strength, scale, tint);
+  const easing = AMBIENT_EASING[kind] ?? 'linear';
+
+  return {
+    ...paint,
+    animation: `t-ambient-${kind} calc(${speed}s * var(--t-ambient-speed, 1)) ${easing} infinite`,
+  };
 }

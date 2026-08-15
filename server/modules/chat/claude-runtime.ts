@@ -4,8 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { sessionsRepository } from '@/db/sessions.repository.js';
 import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appearance/appearance.tools.js';
 import { expandLocalCommand } from '@/modules/chat/commands.service.js';
-import { normalizeSdkMessage } from '@/modules/chat/normalize.js';
+import {
+  formatAttachedFileHeading,
+  normalizeSdkMessage,
+  toMessageAttachment,
+} from '@/modules/chat/normalize.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
+import { publishSessionsChanged } from '@/shared/broadcast.js';
 import type { AskUserQuestion, NormalizedMessage, PermissionDecision } from '@/shared/types.js';
 import { createCompleteMessage, createMessage, readRecord } from '@/shared/utils.js';
 
@@ -116,6 +121,30 @@ export type ChatAttachment = {
 /** Attachment types the model can actually look at as images. */
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
+/**
+ * Normalises what a browser reports as a file's type.
+ *
+ * `image/jpg` is not a real media type but is what several tools stamp on a
+ * JPEG, and the API rejects the whole block rather than guessing — one
+ * mislabelled screenshot must not cost the user their attachment.
+ */
+function normalizeMediaType(mediaType: string): string {
+  const lowered = mediaType.trim().toLowerCase();
+  return lowered === 'image/jpg' ? 'image/jpeg' : lowered;
+}
+
+/**
+ * Strips a data-URL prefix if one survived the client.
+ *
+ * The wire contract says bare base64, but a prefix reaching the API is a
+ * silent decode failure — the run continues and the model simply cannot see
+ * the image, which is exactly the failure that is hardest to notice.
+ */
+function readBase64(data: string): string {
+  const comma = data.startsWith('data:') ? data.indexOf(',') : -1;
+  return comma >= 0 ? data.slice(comma + 1) : data;
+}
+
 type RunChatTurnInput = {
   sessionId: string;
   prompt: string;
@@ -123,6 +152,46 @@ type RunChatTurnInput = {
   permissionMode?: SelectablePermissionMode;
   attachments?: ChatAttachment[];
 };
+
+/**
+ * Builds the content blocks for one turn.
+ *
+ * Exported for the test that guards the block shapes: a malformed `image`
+ * block does not fail the run, it just quietly reaches the model as nothing,
+ * which is indistinguishable from the attachment never having been sent.
+ */
+export function buildPromptBlocks(
+  text: string,
+  attachments: ChatAttachment[],
+): Record<string, unknown>[] {
+  const blocks: Record<string, unknown>[] = [];
+
+  for (const attachment of attachments) {
+    const mediaType = normalizeMediaType(attachment.mediaType);
+    if (SUPPORTED_IMAGE_TYPES.has(mediaType)) {
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: mediaType, data: readBase64(attachment.data) },
+      });
+      continue;
+    }
+
+    // Anything else is inlined as labelled text. Silently dropping a file the
+    // user visibly attached is worse than showing the model its contents, and
+    // the heading is what lets the transcript reader turn it back into a chip.
+    const decoded = Buffer.from(readBase64(attachment.data), 'base64').toString('utf8');
+    blocks.push({
+      type: 'text',
+      text: `${formatAttachedFileHeading(attachment.name)}\n\n${decoded.slice(0, 200_000)}`,
+    });
+  }
+
+  // Last, so the instruction is the most recent thing the model reads. An
+  // empty text block is rejected by the API outright, which would fail the
+  // whole turn for someone who sent nothing but a screenshot.
+  if (text.trim()) blocks.push({ type: 'text', text });
+  return blocks;
+}
 
 /**
  * Builds the prompt the SDK receives.
@@ -136,27 +205,7 @@ type RunChatTurnInput = {
 function buildPrompt(text: string, attachments: ChatAttachment[]) {
   if (attachments.length === 0) return text;
 
-  const blocks: Record<string, unknown>[] = [];
-
-  for (const attachment of attachments) {
-    if (SUPPORTED_IMAGE_TYPES.has(attachment.mediaType)) {
-      blocks.push({
-        type: 'image',
-        source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data },
-      });
-      continue;
-    }
-
-    // Anything else is inlined as labelled text. Silently dropping a file the
-    // user visibly attached is worse than showing the model its contents.
-    const decoded = Buffer.from(attachment.data, 'base64').toString('utf8');
-    blocks.push({
-      type: 'text',
-      text: `Attached file ${attachment.name}:\n\n${decoded.slice(0, 200_000)}`,
-    });
-  }
-
-  blocks.push({ type: 'text', text });
+  const blocks = buildPromptBlocks(text, attachments);
 
   return (async function* prompt() {
     yield {
@@ -166,6 +215,40 @@ function buildPrompt(text: string, attachments: ChatAttachment[]) {
       session_id: '',
     };
   })();
+}
+
+/**
+ * The permission mode each conversation is actually running in.
+ *
+ * Kept here because this is where the mode is applied and where a plan
+ * approval changes it mid-run. Without it the composer had no source of truth
+ * to read and simply showed whatever the last conversation was set to.
+ */
+const sessionPermissionModes = new Map<string, SelectablePermissionMode>();
+
+/**
+ * How long the stream is drained after the turn has already finished.
+ *
+ * The SDK delivers a prompt suggestion *after* the `result` message, so the
+ * iterator has to be read past the end of the visible turn. This bounds that
+ * wait: a suggestion is a nicety, and a subprocess we never stop reading is
+ * not something to trade for it.
+ */
+const SUGGESTION_DRAIN_MS = 20_000;
+
+/**
+ * Which turn each conversation is currently on.
+ *
+ * A suggestion belongs to the turn that produced it. If the user has already
+ * sent the next message by the time it arrives, it is an answer to a question
+ * nobody is asking any more, so it is dropped rather than shown against the
+ * wrong turn.
+ */
+const sessionTurnTokens = new Map<string, number>();
+let turnCounter = 0;
+
+export function getSessionPermissionMode(sessionId: string): SelectablePermissionMode {
+  return sessionPermissionModes.get(sessionId) ?? 'default';
 }
 
 /**
@@ -199,10 +282,54 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   const send = (message: NormalizedMessage) => runRegistry.record(sessionId, message);
   let exitCode = 0;
 
+  const turnToken = ++turnCounter;
+  sessionTurnTokens.set(sessionId, turnToken);
+
+  /**
+   * Ends the turn for the user.
+   *
+   * Split out of the `finally` because the stream now outlives the turn: the
+   * prompt suggestion arrives after `result`, and holding the terminal
+   * `complete` until the iterator finishes would leave the spinner running
+   * for however long that takes. Called from both places; the registry drops
+   * the duplicate, but tracking it here keeps the sidebar refresh from firing
+   * twice as well.
+   */
+  let completed = false;
+  const finishTurn = () => {
+    if (completed) return;
+    completed = true;
+    send(createCompleteMessage(sessionId, exitCode));
+    sessionsRepository.touchSession(sessionId);
+    publishSessionsChanged(sessionId);
+  };
+
+  let drainTimer: NodeJS.Timeout | null = null;
+
+  // The mode this turn runs in is the mode the conversation is in, so a
+  // client that reconnects — or a new one that opens the same chat — can be
+  // told what is actually in force rather than guessing.
+  sessionPermissionModes.set(sessionId, permissionMode ?? 'default');
+
   // Echo what the user actually typed, not the expanded form — seeing
   // `/personalize` turn into a paragraph of instructions in your own
-  // transcript is disorienting.
-  send(createMessage('text', sessionId, { role: 'user', content: prompt }));
+  // transcript is disorienting. The attachments ride along so the bubble can
+  // show them immediately, before the transcript is read back.
+  send(createMessage('text', sessionId, {
+    role: 'user',
+    content: prompt,
+    ...(attachments.length > 0
+      ? { attachments: attachments.map(toMessageAttachment) }
+      : {}),
+  }));
+
+  // Stamped at the *start* of the turn, not only when it finishes. A long
+  // agentic run can take minutes, and the conversation the user is actively
+  // typing in has to reach the top of the sidebar the moment their message
+  // lands rather than whenever the agent happens to stop.
+  sessionsRepository.touchSession(sessionId);
+  publishSessionsChanged(sessionId);
+
   const modelPrompt = buildPrompt(expandLocalCommand(prompt), attachments);
 
   try {
@@ -216,11 +343,15 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
-        // The agent has to be told this capability exists, and told to reach
-        // for the reference presets before inventing a look from nothing.
+        // The agent has to be told this capability exists, and — the part that
+        // was missing — told that the whole of it exists. Naming only list,
+        // preview and apply here is what made the freeform layer dead code:
+        // theme_css was implemented and reachable, and nothing ever mentioned
+        // it, so the model's entire mental model of "restyling" stopped at the
+        // declarative spec.
         append: [
-          'You can restyle the T.A.I.L.S. interface you are running inside.',
-          'When the user asks for a different look or mood, call mcp__tails-appearance__theme_list first to see the reference presets, then mcp__tails-appearance__theme_preview to show your design, then mcp__tails-appearance__theme_apply once they are happy.',
+          'You can restyle the T.A.I.L.S. interface you are running inside, and you have real room to work: mcp__tails-appearance__theme_preview and __theme_apply compile a declarative spec, __theme_css layers arbitrary hand-written CSS over it for anything the spec cannot express, and __theme_controls publishes live sliders and toggles for the look you just made so the user can tune it without asking you.',
+          'mcp__tails-appearance__theme_list is for reading how the shipped presets are built. It is not a menu: answering a request for a mood with "the closest preset is X" is a failure, not an answer. Compose the look the user asked for, and if a primitive is genuinely missing, say which one.',
           `The current conversation id is ${sessionId}; pass it as sessionId and prefer scope "conversation" unless the user explicitly asks to change their default.`,
         ].join(' '),
       },
@@ -229,13 +360,20 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       settingSources: ['user', 'project', 'local'],
       // Token-level streaming; without it the UI renders a message at a time.
       includePartialMessages: true,
+      // The composer offers the model's guess at the user's next message as
+      // ghost text. Nearly free — the suggestion rides the turn's own prompt
+      // cache — and the CLI suppresses it wherever it would be unwelcome
+      // (first turn, plan mode, after an API error, or if the user turned it
+      // off in their own settings), so there is nothing to gate here.
+      promptSuggestions: true,
       // In-process, so the handlers reach the theme service directly instead of
       // authenticating back into our own HTTP API.
       mcpServers: { 'tails-appearance': appearanceMcpServer },
-      // Listing and previewing a look are reversible and visible, so they run
-      // unprompted. `theme_apply` is deliberately not here: changing the app's
-      // permanent appearance should be the user's call, so it falls through to
-      // the permission gate.
+      // Every appearance tool runs unprompted; see the comment on the constant
+      // for why the two that used to be gated no longer are. What guards the
+      // user is that the freeform layer is never persisted and the panic key is
+      // handled in the main process — not a modal in the middle of a design
+      // conversation the user started.
       allowedTools: APPEARANCE_ALLOWED_TOOLS,
       // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
       // each turn, so any live mode change would be discarded anyway.
@@ -259,10 +397,26 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         sessionsRepository.assignProviderSessionId(sessionId, providerSessionId);
         session.providerSessionId = providerSessionId;
         send(createMessage('session_created', sessionId, { content: providerSessionId }));
+        // The transcript now exists, which is what makes this conversation
+        // eligible for the sidebar at all.
+        publishSessionsChanged(sessionId);
+      }
+
+      // A suggestion that outlived its turn — the user has already sent the
+      // next message — would be offered as a reply to the wrong thing.
+      if (event?.type === 'prompt_suggestion' && sessionTurnTokens.get(sessionId) !== turnToken) {
+        continue;
       }
 
       for (const normalized of normalizeSdkMessage(message, sessionId)) {
         send(normalized);
+      }
+
+      if (event?.type === 'result') {
+        // The turn is over on screen here, not when the iterator ends. What
+        // follows is only the suggestion, and it must not hold the spinner.
+        finishTurn();
+        drainTimer = setTimeout(() => abortController.abort(), SUGGESTION_DRAIN_MS);
       }
     }
   } catch (error) {
@@ -275,10 +429,11 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       }));
     }
   } finally {
+    if (drainTimer) clearTimeout(drainTimer);
     // The one guaranteed terminal event. Without this in a `finally`, any
-    // throw above leaves the client's spinner running forever.
-    send(createCompleteMessage(sessionId, exitCode));
-    sessionsRepository.touchSession(sessionId);
+    // throw above leaves the client's spinner running forever. A turn that
+    // reached its `result` has already sent it.
+    finishTurn();
 
     for (const [requestId, parked] of parkedPermissions) {
       if (parked.sessionId !== sessionId) continue;
@@ -396,6 +551,10 @@ function createPermissionGate(sessionId: string): CanUseTool {
     // Approving a plan has to leave plan mode as well, or every edit the plan
     // describes is immediately blocked by the mode that produced it.
     if (decision.planMode) {
+      // The session really is in a different mode from here on, so the
+      // tracked mode has to move with it or the composer would keep offering
+      // "Plan first" for a conversation that left plan mode minutes ago.
+      sessionPermissionModes.set(sessionId, decision.planMode);
       return {
         behavior: 'allow',
         updatedInput: toolInput,

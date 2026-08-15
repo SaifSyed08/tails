@@ -1,4 +1,5 @@
 import type { NormalizedMessage } from '@/shared/types.js';
+import { createMessage } from '@/shared/utils.js';
 
 type Listener = (event: NormalizedMessage) => void;
 
@@ -22,3 +23,16 @@ export const appBroadcast = {
     for (const listener of listeners) listener(event);
   },
 };
+
+/**
+ * Announces that the conversation list changed.
+ *
+ * Lives here rather than in the sessions service because both the service and
+ * the chat runtime need it, and routing the runtime through the service to
+ * reach it would be an import cycle. The sidebar re-reads on this event; it is
+ * what makes a rename, a pin, or a message landing in another window reorder
+ * the list without a poll.
+ */
+export function publishSessionsChanged(sessionId = ''): void {
+  appBroadcast.publish(createMessage('sessions_changed', sessionId));
+}

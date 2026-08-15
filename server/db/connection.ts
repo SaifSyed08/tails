@@ -18,8 +18,10 @@ let connection: Database.Database | null = null;
  * The schema, applied on every boot.
  *
  * Every statement is `IF NOT EXISTS`, so this doubles as the migration path
- * for the shapes that only ever gain tables. Column changes will need real
- * migrations later; there are none yet.
+ * for the shapes that only ever gain tables. Columns added after a release
+ * cannot go here — SQLite has no `ADD COLUMN IF NOT EXISTS` — so they are
+ * listed here for fresh databases and re-applied by `ensureColumn` below for
+ * existing ones.
  */
 const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -31,11 +33,23 @@ CREATE TABLE IF NOT EXISTS sessions (
   title TEXT NOT NULL DEFAULT 'New chat',
   cwd TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  pinned_at DATETIME,
+  archived_at DATETIME
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider_session_id);
+
+-- Conversations Claude Code owns that the user deleted from our sidebar.
+-- Their transcripts live under ~/.claude, which this app treats as read-only,
+-- so "delete" cannot mean "unlink the file". A tombstone is the honest
+-- alternative: it keeps the chat out of the merged list without touching
+-- someone else's data.
+CREATE TABLE IF NOT EXISTS hidden_provider_sessions (
+  provider_session_id TEXT PRIMARY KEY,
+  hidden_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS generated_themes (
   id TEXT PRIMARY KEY,
@@ -60,6 +74,24 @@ CREATE TABLE IF NOT EXISTS theme_bindings (
 `;
 
 /**
+ * Adds a column to an existing table, if it is not already there.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op once the table exists, so a column
+ * added to `SCHEMA_SQL` only reaches databases created after the change. This
+ * closes that gap for the ones created before it.
+ */
+function ensureColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (existing.some((entry) => entry.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+/**
  * Opens the database, creating the directory and schema on first use.
  *
  * Lazily initialised so importing a repository module in a test does not touch
@@ -71,6 +103,8 @@ export function getConnection(): Database.Database {
   fs.mkdirSync(TAILS_HOME, { recursive: true });
   connection = new Database(path.join(TAILS_HOME, 'tails.db'));
   connection.exec(SCHEMA_SQL);
+  ensureColumn(connection, 'sessions', 'pinned_at', 'DATETIME');
+  ensureColumn(connection, 'sessions', 'archived_at', 'DATETIME');
   return connection;
 }
 

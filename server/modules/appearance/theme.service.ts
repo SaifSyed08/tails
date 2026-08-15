@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
 import { themesRepository, type StoredTheme, type ThemeScope } from '@/db/themes.repository.js';
+import { validateControls } from '@/modules/appearance/controls.js';
 import { deriveTokens } from '@/modules/appearance/derive.js';
 import { validateFreeformCss } from '@/modules/appearance/freeform-css.js';
 import { THEME_PRESETS } from '@/modules/appearance/presets.js';
-import { serializeStylesheet } from '@/modules/appearance/serialize.js';
+import { serializeScoped, serializeStylesheet } from '@/modules/appearance/serialize.js';
 import { upgradeSpec, themeSpecSchema, type ThemeSpec } from '@/modules/appearance/theme-spec.js';
 import { appBroadcast } from '@/shared/broadcast.js';
 import { AppError, createMessage } from '@/shared/utils.js';
@@ -57,6 +58,23 @@ export type ResolvedAppearance = {
 
 /** Built-in presets are addressed as `preset:<id>` so ids never collide with UUIDs. */
 const PRESET_PREFIX = 'preset:';
+
+/**
+ * The last look each scope was shown, so "keep this one" has something to keep.
+ *
+ * In memory rather than in the database, and that is the whole point: a preview
+ * is explicitly *not* saved, so without this there is no path from "the agent
+ * showed me something I like" to "it is in my list" that does not involve
+ * asking the agent to generate it again and hoping for the same result.
+ * Regenerating is not the same operation — the spec is deterministic but the
+ * model is not — so the thing the user saw has to be the thing that gets saved.
+ *
+ * Keyed by scope key (the conversation id, or '' for global) and bounded by the
+ * number of conversations open in one process lifetime, which is small. Lost on
+ * restart, which costs the user nothing they had not already been told: an
+ * unsaved preview does not survive a reload either.
+ */
+const lastShown = new Map<string, { spec: ThemeSpec | null; themeId: string | null }>();
 
 const readPresetSpec = (themeId: string): ThemeSpec | null => {
   if (!themeId.startsWith(PRESET_PREFIX)) return null;
@@ -130,6 +148,7 @@ export const themeService = {
    */
   previewTheme(rawSpec: unknown, sessionId = '') {
     const compiled = this.compile(rawSpec);
+    lastShown.set(sessionId, { spec: compiled.spec, themeId: null });
 
     appBroadcast.publish(createMessage('appearance_changed', sessionId, {
       appearance: {
@@ -172,6 +191,7 @@ export const themeService = {
     // dangling binding that silently falls through to the default.
     const resolved = this.resolveThemeId(themeId, scope);
     themesRepository.setBinding(scope, scopeKey, themeId);
+    lastShown.set(scopeKey, { spec: null, themeId });
 
     appBroadcast.publish(createMessage('appearance_changed', scopeKey, {
       // Spread first so the explicit binding scope wins over the resolved one.
@@ -351,6 +371,195 @@ export const themeService = {
         name: 'Custom CSS',
         css: '',
         pinnedMode: null,
+      },
+    }));
+  },
+
+  /**
+   * Shows two or three candidate looks side by side, without applying any.
+   *
+   * The answer to "let me see it before the app changes". The obvious reading
+   * of that request is a generated image; this is deliberately not that. An
+   * image would be an approximation of a look this module can already render
+   * exactly, it would have to come from somewhere (and nothing here may name a
+   * URL), and it would go stale the moment the spec was tweaked. What each
+   * variant produces instead is its real stylesheet, scoped to a class, so the
+   * client can paint a scaled miniature of the actual app chrome in the
+   * candidate theme. It is a preview rather than a picture of one.
+   *
+   * Nothing is stored and nothing is bound — deciding is the user's next move,
+   * usually through `AskUserQuestion`, and the agent applies the winner.
+   */
+  proposeVariants(
+    variants: { label: string; note?: string; spec: unknown }[],
+    sessionId = '',
+  ): { variants: { label: string; name: string; contrast: unknown }[] } {
+    if (variants.length < 2) {
+      throw new AppError('A proposal needs at least two variants — the point is the comparison.', {
+        code: 'THEME_PROPOSAL_INVALID',
+        statusCode: 422,
+      });
+    }
+
+    // Compiled before anything is broadcast, so a bad second variant fails the
+    // whole call instead of showing the user one miniature and an empty frame.
+    const compiled = variants.map((variant, index) => ({
+      label: variant.label,
+      note: variant.note ?? '',
+      className: `t-proposal-${index}`,
+      compiled: this.compile(variant.spec),
+    }));
+
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'proposal',
+        scope: 'preview',
+        scopeKey: sessionId,
+        themeId: 'proposal',
+        name: 'Proposed looks',
+        css: '',
+        pinnedMode: null,
+        variants: compiled.map((entry) => ({
+          label: entry.label,
+          note: entry.note,
+          className: entry.className,
+          name: entry.compiled.spec.name,
+          summary: entry.compiled.spec.summary,
+          css: serializeScoped(entry.compiled.derived, entry.className),
+        })),
+      },
+    }));
+
+    return {
+      variants: compiled.map((entry) => ({
+        label: entry.label,
+        name: entry.compiled.spec.name,
+        contrast: entry.compiled.contrast,
+      })),
+    };
+  },
+
+  /** Takes the comparison off screen without choosing anything. */
+  clearProposal(sessionId = ''): void {
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'proposal',
+        scope: 'preview',
+        scopeKey: sessionId,
+        themeId: 'proposal',
+        name: '',
+        css: '',
+        pinnedMode: null,
+        variants: [],
+      },
+    }));
+  },
+
+  /**
+   * Keeps the look currently on screen, under a name, in the user's own list.
+   *
+   * The counterpart to preview being free. A preview is deliberately not
+   * written down, which is what makes "try something" cost nothing — and which
+   * also means that, until this existed, the only route from "I like that" to
+   * "it is mine" was asking the agent to make it again. That is not the same
+   * operation: the spec is deterministic, the model is not, and what came back
+   * the second time was a near miss the user then had to argue with.
+   *
+   * A theme that was applied rather than previewed is already stored, so this
+   * renames it and flips its origin to `saved` — the existing promotion path,
+   * reused rather than duplicated, so a kept look is the same kind of row
+   * whichever way it got there.
+   */
+  keepCurrent(name: string, sessionId = ''): StoredTheme {
+    const trimmed = name.trim().slice(0, 40);
+    if (!trimmed) {
+      throw new AppError('Give the look a name.', { code: 'THEME_NAME_REQUIRED', statusCode: 400 });
+    }
+
+    const entry = lastShown.get(sessionId) ?? lastShown.get('');
+    if (!entry) {
+      throw new AppError(
+        'There is no look to keep yet — nothing has been previewed or applied in this window.',
+        { code: 'THEME_NOTHING_TO_KEEP', statusCode: 409 },
+      );
+    }
+
+    // A built-in preset is already permanent and cannot be renamed, so keeping
+    // one means taking a copy the user owns rather than editing the shipped
+    // reference out from under every other conversation.
+    const presetSpec = entry.themeId ? readPresetSpec(entry.themeId) : null;
+    const spec = presetSpec ?? entry.spec;
+
+    if (!spec && entry.themeId) {
+      return this.renameTheme(entry.themeId, trimmed);
+    }
+    if (!spec) {
+      throw new AppError('That look can no longer be reconstructed.', {
+        code: 'THEME_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    return this.saveTheme({ ...spec, name: trimmed }, 'saved');
+  },
+
+  /**
+   * Publishes the live controls for the look currently on screen.
+   *
+   * A third layer beside `theme` and `css`, and ephemeral like the second: the
+   * panel is a property of the look the agent just made, not of the user's
+   * account, and a slider that outlived the theme it adjusts would be a knob
+   * wired to nothing. It is never written to the database and it never appears
+   * in `/resolve`, so a reload clears it exactly as a reload clears the CSS
+   * layer.
+   *
+   * Every value the controls can write is checked here, before the broadcast,
+   * rather than in the renderer. The renderer sets custom properties straight
+   * onto the document; if it were also the thing deciding whether they were
+   * allowed, the check and the use would be the same code and neither would be
+   * a boundary.
+   */
+  publishControls(raw: unknown, sessionId = ''): { controls: number } {
+    const result = validateControls(raw);
+    if (!result.ok) {
+      throw new AppError('The control set was rejected.', {
+        code: 'THEME_CONTROLS_INVALID',
+        statusCode: 422,
+        details: result.issues,
+      });
+    }
+
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'controls',
+        scope: 'preview',
+        scopeKey: sessionId,
+        themeId: 'controls',
+        name: result.payload.title,
+        // Empty on purpose: the controls layer adopts no stylesheet of its own.
+        // It writes individual custom properties as the user drags, which is
+        // the whole reason it repaints without a round trip.
+        css: '',
+        pinnedMode: null,
+        controls: result.payload.controls,
+      },
+    }));
+
+    return { controls: result.payload.controls.length };
+  },
+
+  /** Removes the control panel, leaving whatever it was adjusting in place. */
+  clearControls(sessionId = ''): void {
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'controls',
+        scope: 'preview',
+        scopeKey: sessionId,
+        themeId: 'controls',
+        name: '',
+        css: '',
+        pinnedMode: null,
+        controls: [],
       },
     }));
   },

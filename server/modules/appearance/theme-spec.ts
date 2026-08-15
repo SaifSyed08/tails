@@ -4,7 +4,7 @@ import {
   CONTRAST_TARGET_NAMES,
   SURFACE_ANCHOR_NAMES,
 } from '@/modules/appearance/palette.js';
-import { surfacesMapSchema } from '@/modules/appearance/surface-recipe.js';
+import { colorRefSchema, surfacesMapSchema } from '@/modules/appearance/surface-recipe.js';
 
 /**
  * The authored theme surface — everything a model may decide about how the app
@@ -22,16 +22,40 @@ import { surfacesMapSchema } from '@/modules/appearance/surface-recipe.js';
  * survives: hue, chroma and structure cannot combine into something unreadable.
  */
 
-/** Bundled font stacks. A free-form family name would either hit the network or silently fall back. */
+/**
+ * The named font stacks a theme may choose between.
+ *
+ * A closed set rather than a free-form family name, for the same reason
+ * textures are app-owned: an arbitrary name either hits the network via
+ * `@font-face` or falls back to something nobody chose.
+ *
+ * **Nothing here is bundled.** No font file ships with the app and there is no
+ * `@font-face` anywhere in it, so every one of these is a *preference list* and
+ * what the user actually sees is the first entry installed on their machine.
+ * That is fine, and it is also the thing that made generated themes look worse
+ * than the default: the original stacks led with faces that exist on almost no
+ * Windows install (Inter, Poppins, Optima, Gill Sans, Futura) and then fell
+ * through to whatever was left. One of them — `slab` — named `'Courier Bold'`,
+ * which is not a family at all in any font system, so it was dead weight in the
+ * list.
+ *
+ * So each stack now has to reach a real, fully hinted face on a stock Windows
+ * 11 and a stock macOS before it reaches the generic. The aspirational names
+ * stay at the front for machines that do have them; what changed is that the
+ * *last reachable* entry is a deliberate choice rather than an accident. Where
+ * two stacks could fall through to the same face they are given different
+ * Windows-shipped ones, because two "different" type choices resolving to the
+ * same font is a knob that does nothing.
+ */
 export const FONT_FAMILIES = {
-  'system-sans': "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  grotesk: "'Inter', 'Helvetica Neue', Arial, sans-serif",
-  geometric: "'Poppins', 'Century Gothic', system-ui, sans-serif",
-  humanist: "'Optima', 'Gill Sans', 'Segoe UI', sans-serif",
+  'system-sans': "system-ui, -apple-system, 'Segoe UI Variable Text', 'Segoe UI', Roboto, sans-serif",
+  grotesk: "'Inter', 'Inter Variable', 'Helvetica Neue', Helvetica, Arial, sans-serif",
+  geometric: "'Poppins', 'Century Gothic', 'Avenir Next', Futura, 'Trebuchet MS', sans-serif",
+  humanist: "'Optima', 'Gill Sans', 'Gill Sans MT', Corbel, 'Segoe UI', sans-serif",
   serif: "Georgia, 'Iowan Old Style', 'Times New Roman', serif",
-  slab: "'Rockwell', 'Courier Bold', Georgia, serif",
-  display: "'Futura', 'Trebuchet MS', system-ui, sans-serif",
-  mono: "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace",
+  slab: "'Rockwell', 'Roboto Slab', 'Bookman Old Style', Cambria, Georgia, serif",
+  display: "'Futura', 'Franklin Gothic Medium', 'Trebuchet MS', 'Segoe UI', sans-serif",
+  mono: "ui-monospace, 'Cascadia Mono', 'Cascadia Code', 'SF Mono', Consolas, 'Source Code Pro', Menlo, monospace",
 } as const;
 
 export type FontFamilyName = keyof typeof FONT_FAMILIES;
@@ -136,6 +160,21 @@ export const themeSpecV2Schema = z.object({
 
   density: densitySchema,
   motion: motionSchema,
+
+  interaction: z.object({
+    caretColor: colorRefSchema.optional()
+      .describe('The text insertion caret. Omit for the accent colour. This is the smallest change with the largest effect on whether a look feels *inhabited*: a phosphor-green caret is most of what sells a terminal.'),
+    caretShape: z.enum(['auto', 'bar', 'block', 'underscore']).default('auto')
+      .describe('Caret geometry. "block" is the fat terminal cursor and "underscore" is the DOS one. Blink rate is the operating system\'s and cannot be set from here — a look that needs a specific blink needs a different primitive, not this one. Needs Chromium 139+, which the desktop app is; elsewhere it degrades to a bar.'),
+    selectionFill: colorRefSchema.optional()
+      .describe('Background of selected text. Omit for the accent at low alpha. Keep it translucent — an opaque selection hides the glyphs it is meant to highlight.'),
+    selectionInk: colorRefSchema.optional()
+      .describe('Colour of selected text itself. Omit to leave the text its own colour, which is usually right when the fill is translucent.'),
+    cursor: z.enum(['auto', 'default', 'crosshair', 'cell', 'copy', 'progress', 'help'])
+      .default('auto')
+      .describe('The mouse pointer over the application body. "auto" is almost always correct. `cursor` inherits, so anything else here changes the pointer over every surface that has not set its own — a crosshair is a strong, committed choice and a slightly hostile one.'),
+  }).strict().default({ caretShape: 'auto', cursor: 'auto' })
+    .describe('Caret, text selection and pointer. Small surface, disproportionate effect: these are the details that separate a themed app from a recoloured one, and none of them were reachable before.'),
 
   surfaces: surfacesMapSchema.default({})
     .describe('Per-surface recipes. Every key is optional and inherits, field by field, from `default`, which itself inherits from a plain bordered panel. This map is where a look is actually invented: two themes with the same palette and different surfaces are two different products, while two themes with different palettes and no surfaces are the same product in two colours.'),

@@ -25,11 +25,28 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'question_request'
   | 'plan_request'
+  | 'prompt_suggestion'
   // Gateway
   | 'chat_subscribed'
   | 'session_created'
+  | 'sessions_changed'
   | 'appearance_changed'
   | 'protocol_error';
+
+/**
+ * An attachment as the transcript remembers it.
+ *
+ * The bytes are deliberately optional: a chip needs a name and a type, and
+ * only an image small enough to be worth inlining carries `previewUrl`. That
+ * keeps a history load of a conversation with a 12MB screenshot from becoming
+ * a 12MB JSON response.
+ */
+export type MessageAttachment = {
+  name: string;
+  mediaType: string;
+  /** `data:` URL, images only and only under the inline cap. */
+  previewUrl?: string;
+};
 
 /**
  * The single envelope every event travels in.
@@ -48,6 +65,8 @@ export type NormalizedMessage = {
 
   role?: 'user' | 'assistant';
   content?: string;
+  /** `text` (user) only — the files that were sent with this message. */
+  attachments?: MessageAttachment[];
 
   toolName?: string;
   toolInput?: unknown;
@@ -68,6 +87,8 @@ export type NormalizedMessage = {
   exitCode?: number;
   /** `status` only — a short machine-readable label plus optional detail. */
   statusCode?: string;
+  /** `chat_subscribed` only — the mode this conversation is really running in. */
+  permissionMode?: string;
 
   /** `appearance_changed` payload; see AppearanceBroadcast. */
   appearance?: unknown;
@@ -95,7 +116,10 @@ export type ChatSession = {
   title: string;
   cwd: string;
   createdAt: string;
+  /** Last message, not last viewed. Only a run may move it. */
   updatedAt: string;
+  pinnedAt: string | null;
+  archivedAt: string | null;
 };
 
 /** A row in the sidebar's conversation list. */
@@ -103,9 +127,12 @@ export type SessionListItem = {
   id: string;
   title: string;
   cwd: string;
+  /** Last message, not last viewed — the sidebar's sort key. */
   updatedAt: string;
   /** True when this came from Claude Code's own history rather than our DB. */
   external: boolean;
+  pinned: boolean;
+  archived: boolean;
 };
 
 // ---------------------------

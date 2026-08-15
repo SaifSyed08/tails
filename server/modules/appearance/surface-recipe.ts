@@ -208,6 +208,40 @@ export const overlayRecipeSchema = z.object({
     .describe('Overlay strength 0-1. Default 0.12. Lighting is convincing at low values and plastic above ~0.35.'),
 }).strict();
 
+export const AMBIENT_KINDS = ['none', 'drift', 'clouds', 'grid', 'pulse'] as const;
+
+export type AmbientKind = (typeof AMBIENT_KINDS)[number];
+
+/**
+ * Slow background movement — the primitive that used to be missing entirely.
+ *
+ * "Rose gold with slowly drifting clouds behind the chat" had no word in this
+ * vocabulary, so the only way to reach it was hand-written CSS, and a look that
+ * needs the escape hatch to express its central idea is a gap in the spec
+ * rather than a limit on the engine.
+ *
+ * It is deliberately *ambient* rather than general animation. There is no
+ * keyframe authoring here and no way to move a control: the app owns four
+ * motions, they all run on a decoration layer nobody can click, and the
+ * renderer's global reduced-motion rule stops all of them dead while leaving
+ * the image in place — which is the right degradation, because the gradient was
+ * always the look and the movement was always the garnish.
+ */
+export const ambientRecipeSchema = z.object({
+  kind: z.enum(AMBIENT_KINDS).optional()
+    .describe('Which ambient motion sits behind this surface. Default "none". "drift" is a wide colour field sliding slowly across; "clouds" is two soft radial masses passing each other, which is the one that reads as weather; "grid" is a technical lattice scrolling diagonally; "pulse" is a single glow breathing in place. This inherits like texture does, so setting it on `default` puts it behind the whole app — including every card — and a part that should stay still needs `ambient: { kind: "none" }` of its own.'),
+  hue: z.number().int().min(0).max(360).optional()
+    .describe('Hue for the moving colour, 0-360. Omit to use the accent hue. Setting it 30-60 degrees off the accent is what stops an ambient field reading as a wash of the button colour.'),
+  strength: z.number().min(0).max(1).optional()
+    .describe('How present the movement is, 0-1. Default 0.12. Ambience is convincing below about 0.25 and becomes a screensaver above it — this is peripheral motion, and the moment the user watches it instead of the text it has failed.'),
+  speed: z.number().min(2).max(240).optional()
+    .describe('Seconds for one full cycle. Default 60. Under about 20 seconds the movement is noticeable rather than ambient; 60-120 is the range where someone senses the screen is alive without ever catching it moving.'),
+  scale: z.number().min(0.5).max(4).optional()
+    .describe('Size multiplier for the moving shapes. Default 1. Larger is softer and slower-reading because each mass covers more of the screen.'),
+  blend: z.enum(BLEND_MODES).optional()
+    .describe('How the ambient layer blends into the fill beneath it. Default "screen" on dark grounds and "multiply" on light ones is the usual instinct; "soft-light" is the safest choice for a look that has to work in both ramps.'),
+}).strict();
+
 export const inkRecipeSchema = z.object({
   tier: z.number().int().min(0).max(12).optional()
     .describe('Force the body-text tier on this surface. Omit — the default — to let the solver pick the lowest tier that clears the theme contrast target, which is what keeps every surface legible. A forced tier is still raised if it fails the target.'),
@@ -240,6 +274,7 @@ export const surfaceRecipeSchema = z.object({
     .describe('Backdrop filter for translucent surfaces, or null for none. Default null. Only meaningful when the fill carries alpha.'),
   texture: textureRecipeSchema.optional(),
   overlay: overlayRecipeSchema.optional(),
+  ambient: ambientRecipeSchema.optional(),
   ink: inkRecipeSchema.optional(),
 }).strict();
 
@@ -327,6 +362,14 @@ export type ResolvedSurfaceRecipe = {
   backdrop: { blur: number; saturate: number; brightness: number; refraction: number } | null;
   texture: { kind: TextureKind; opacity: number; scale: number; blend: BlendMode };
   overlay: { kind: OverlayKind; angle: number; strength: number };
+  ambient: {
+    kind: AmbientKind;
+    hue: number | null;
+    strength: number;
+    speed: number;
+    scale: number;
+    blend: BlendMode;
+  };
   ink: { tier: number | null; mutedTier: number | null; glow: number };
 };
 
@@ -363,6 +406,7 @@ export const BASELINE_RECIPE: ResolvedSurfaceRecipe = {
   backdrop: null,
   texture: { kind: 'none', opacity: 0.05, scale: 1, blend: 'overlay' },
   overlay: { kind: 'none', angle: 145, strength: 0.12 },
+  ambient: { kind: 'none', hue: null, strength: 0.12, speed: 60, scale: 1, blend: 'soft-light' },
   ink: { tier: null, mutedTier: null, glow: 0 },
 };
 
@@ -446,6 +490,14 @@ export function mergeRecipe(
       kind: patch.overlay?.kind ?? base.overlay.kind,
       angle: patch.overlay?.angle ?? base.overlay.angle,
       strength: patch.overlay?.strength ?? base.overlay.strength,
+    },
+    ambient: {
+      kind: patch.ambient?.kind ?? base.ambient.kind,
+      hue: patch.ambient?.hue ?? base.ambient.hue,
+      strength: patch.ambient?.strength ?? base.ambient.strength,
+      speed: patch.ambient?.speed ?? base.ambient.speed,
+      scale: patch.ambient?.scale ?? base.ambient.scale,
+      blend: patch.ambient?.blend ?? base.ambient.blend,
     },
     ink: {
       tier: patch.ink?.tier ?? base.ink.tier,

@@ -4,8 +4,11 @@ export type SessionListItem = {
   id: string;
   title: string;
   cwd: string;
+  /** Last message, not last viewed — the sidebar's sort key. */
   updatedAt: string;
   external: boolean;
+  pinned: boolean;
+  archived: boolean;
 };
 
 export type ChatSession = {
@@ -15,6 +18,8 @@ export type ChatSession = {
   cwd: string;
   createdAt: string;
   updatedAt: string;
+  pinnedAt: string | null;
+  archivedAt: string | null;
 };
 
 /**
@@ -38,7 +43,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listSessions: (limit = 50) => request<SessionListItem[]>(`/sessions?limit=${limit}`),
+  listSessions: (limit = 50, archived = false) =>
+    request<SessionListItem[]>(`/sessions?limit=${limit}${archived ? '&archived=1' : ''}`),
+
+  /**
+   * Mints a conversation the server has not written down.
+   *
+   * A chat is persisted on its first message, not when it is opened, so this
+   * returns only the id and folder the UI needs to have somewhere to type.
+   */
+  draftSession: () => request<ChatSession>('/sessions/draft'),
 
   createSession: (input: { cwd?: string; title?: string } = {}) =>
     request<ChatSession>('/sessions', { method: 'POST', body: JSON.stringify(input) }),
@@ -68,6 +82,18 @@ export const api = {
     request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'PATCH',
       body: JSON.stringify({ cwd }),
+    }),
+
+  setSessionPinned: (sessionId: string, pinned: boolean) =>
+    request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
+    }),
+
+  setSessionArchived: (sessionId: string, archived: boolean) =>
+    request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ archived }),
     }),
 
   listThemes: () => request<ThemeSummary[]>('/appearance/themes'),

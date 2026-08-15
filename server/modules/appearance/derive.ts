@@ -22,7 +22,11 @@ import {
   type ResolvedSurfaceRecipe,
   type SurfacePart,
 } from '@/modules/appearance/surface-recipe.js';
-import { readOverlayPaint, readTexturePaint } from '@/modules/appearance/textures.js';
+import {
+  readAmbientPaint,
+  readOverlayPaint,
+  readTexturePaint,
+} from '@/modules/appearance/textures.js';
 import {
   FONT_FAMILIES,
   upgradeSpec,
@@ -53,6 +57,16 @@ export type ThemeTokens = {
   surfaces: Record<string, Record<string, string>>;
   /** Per-tone custom properties, keyed by `data-tails-surface` value. */
   tones: Record<string, Record<string, string>>;
+  /**
+   * Caret, selection and pointer tokens.
+   *
+   * A separate group from `lengths` because every value in it is a solved
+   * colour and therefore differs between the two ramps, while `lengths` is
+   * derived once and shared. Optional in the type for the same reason
+   * `surfaces` and `tones` are: a token blob cached before this group existed
+   * must still serialize.
+   */
+  interaction?: Record<string, string>;
 };
 
 export type DerivedTheme = {
@@ -649,10 +663,34 @@ function buildSurfaceTokens(
     recipe.overlay.kind, recipe.overlay.angle, recipe.overlay.strength, tint,
   );
 
+  const ambientHue = wrapHue(recipe.ambient.hue ?? ramp.accentHue);
+  const ambient = readAmbientPaint(
+    recipe.ambient.kind,
+    ambientHue,
+    recipe.ambient.strength,
+    recipe.ambient.speed,
+    recipe.ambient.scale,
+    // Ambient colour rides the accent saturation with a floor under it, because
+    // a `neutral` palette would otherwise produce grey clouds, which read as a
+    // rendering fault rather than as weather. Lightness follows the ramp: on a
+    // dark page the moving mass has to be brighter than the ground to be seen
+    // at all, and on a light one it has to be darker.
+    (hue, alpha) => formatColor({
+      h: wrapHue(hue),
+      s: Math.max(ramp.accentSaturation * 0.85, 45),
+      l: ramp.ladder.direction > 0 ? 62 : 52,
+    }, alpha),
+  );
+
   const refraction = recipe.backdrop?.refraction ?? 0;
   const backdrop = recipe.backdrop
     ? [
-      `blur(${recipe.backdrop.blur}px)`,
+      // The blur is the one derived scalar published as a live knob: it is the
+      // number a user actually wants to drag on a glass look, and wrapping it
+      // in a `calc()` against an undeclared property costs nothing (the
+      // fallback is 1) while letting `theme_controls` retune every glass
+      // surface in the app from a single `:root` write.
+      `blur(calc(${recipe.backdrop.blur}px * var(--t-backdrop-scale, 1)))`,
       `saturate(${recipe.backdrop.saturate})`,
       `brightness(${recipe.backdrop.brightness})`,
       // Refraction has no CSS primitive in Chromium 140. Half of it lands as a
@@ -707,6 +745,13 @@ function buildSurfaceTokens(
       't-overlay-image': overlay?.image ?? 'none',
       't-overlay-opacity': overlay ? '1' : '0',
       't-overlay-blend': overlay?.blend ?? 'normal',
+      't-ambient-image': ambient?.image ?? 'none',
+      't-ambient-size': ambient?.size ?? 'auto',
+      't-ambient-blend': ambient ? recipe.ambient.blend : 'normal',
+      // `none` rather than a zero-duration animation: an animation-name that
+      // resolves to nothing still creates an animation the compositor tracks,
+      // and the whole point of the ambient layer is that it is free when unused.
+      't-ambient-animation': ambient?.animation ?? 'none',
       't-ink': formatColor(ink),
       't-ink-muted': formatColor(inkMuted),
       't-ink-shadow': recipe.ink.glow > 0
@@ -762,6 +807,38 @@ function buildToneTokens(ramp: Ramp, colors: Record<string, Hsl>): Record<string
       't-fill-color': formatColor(accent),
       't-ink': formatColor(colors['primary-foreground']),
     },
+  };
+}
+
+/**
+ * Caret, selection and pointer.
+ *
+ * Solved per ramp rather than shared, because every default here is a colour:
+ * a caret that is the accent in the light ramp and the *same* accent in the
+ * dark one is a caret that disappears in one of them.
+ *
+ * `--t-selection-ink` defaults to `currentColor` rather than to a solved
+ * colour. A translucent selection fill leaves the glyph readable in its own
+ * ink, and forcing a colour there is how selections end up less legible than
+ * the text they are highlighting.
+ */
+function buildInteractionTokens(
+  spec: ThemeSpecV2,
+  ramp: Ramp,
+  colors: Record<string, Hsl>,
+): Record<string, string> {
+  const resolve = (ref: ColorRef | undefined, fallback: string): string => {
+    if (!ref) return fallback;
+    const { color, alpha } = resolveColorRef(ref, ramp);
+    return formatColor(color, alpha);
+  };
+
+  return {
+    't-caret-color': resolve(spec.interaction.caretColor, formatColor(colors.primary)),
+    't-caret-shape': spec.interaction.caretShape,
+    't-selection-fill': resolve(spec.interaction.selectionFill, formatColor(colors.primary, 0.28)),
+    't-selection-ink': resolve(spec.interaction.selectionInk, 'currentColor'),
+    't-cursor': spec.interaction.cursor,
   };
 }
 
@@ -840,7 +917,13 @@ export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
     }
 
     return {
-      tokens: { colors, ...shared, surfaces, tones: buildToneTokens(ramp, colors) } as ThemeTokens,
+      tokens: {
+        colors,
+        ...shared,
+        surfaces,
+        tones: buildToneTokens(ramp, colors),
+        interaction: buildInteractionTokens(spec, ramp, colors),
+      } as ThemeTokens,
       adjusted,
       minRatio,
     };
