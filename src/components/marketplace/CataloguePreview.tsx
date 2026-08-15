@@ -35,8 +35,18 @@ type CataloguePreviewProps = {
   className?: string;
 };
 
-/** The strip is one row, so the whole thing is the animation. */
-const STRIP_FPS = 12;
+/**
+ * How many of the strip's opening frames are the idle loop.
+ *
+ * From the published layout: row 0 is six frames, and — unlike the
+ * spritesheet, where v2's idle gains a seventh "Neutral look" cell — the strip
+ * is built from the six-frame variant in both versions. That is why a v1 strip
+ * is 57 frames and a v2 strip is 73 rather than 74.
+ */
+const STRIP_IDLE_FRAMES = 6;
+
+/** Their player's speed: `duration = max(frames * 260ms, 1400ms)`. */
+const CODEX_FRAME_MS = 260;
 
 export function CataloguePreview({ entry, size, hovered, className }: CataloguePreviewProps) {
   const reduced = useReducedMotion();
@@ -67,7 +77,14 @@ export function CataloguePreview({ entry, size, hovered, className }: CatalogueP
 
   if (wantsStrip && strip && stripGrid) {
     const box = resolveCellBox(stripGrid, size);
-    const seconds = box.columns / STRIP_FPS;
+    // Only the idle segment. The strip is every frame of every row in one line
+    // — 57 of them for a v1 sheet, 73 for a v2 — so playing it as one loop
+    // marches through running, waving, jumping and the rest at twelve frames a
+    // second, which is what made these previews look like they were flickering.
+    // Row 0 comes first in the concatenation, so the idle loop is simply the
+    // opening frames.
+    const frames = Math.min(STRIP_IDLE_FRAMES, box.columns);
+    const seconds = (frames * CODEX_FRAME_MS) / 1000;
 
     return (
       <div
@@ -83,9 +100,9 @@ export function CataloguePreview({ entry, size, hovered, className }: CatalogueP
           // final frame rather than one cell past it, so the loop never shows
           // the empty space beyond the strip.
           ['--sprite-x-from' as string]: '0px',
-          ['--sprite-x-to' as string]: `${-(box.columns - 1) * box.cellWidth}px`,
-          animation: box.columns > 1
-            ? `tails-sprite-x ${seconds}s steps(${box.columns}, jump-none) infinite`
+          ['--sprite-x-to' as string]: `${-(frames - 1) * box.cellWidth}px`,
+          animation: frames > 1
+            ? `tails-sprite-x ${seconds}s steps(${frames}, jump-none) infinite`
             : undefined,
         }}
         role="img"

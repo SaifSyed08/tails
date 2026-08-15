@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+import {
+  CODEX_FPS,
+  codexSheetRows,
+  codexVersionFromGrid,
+  isCodexGrid,
+} from '@/modules/pets/codex-layout.js';
+
 /**
  * The pet definition surface.
  *
@@ -101,12 +108,51 @@ export type FrameRange = z.infer<typeof frameRangeSchema>;
  * alternative — requiring all four and inventing three of them — would bake a
  * guess into the data file where nobody would ever question it again.
  */
-export const petStatesSchema = z.object({
-  idle: frameRangeSchema,
-  walk: frameRangeSchema.optional(),
-  talk: frameRangeSchema.optional(),
-  sleep: frameRangeSchema.optional(),
-}).strict();
+/**
+ * The animations a pet can have.
+ *
+ * The first eleven are the Codex convention, read from codex-pets.net's own
+ * bundle and listed in `codex-layout.ts` — a sheet has nine of them, or eleven
+ * for `spriteVersionNumber: 2`. They are the real vocabulary: a Codex sheet is
+ * not "an idle row and some spare rows", it is a labelled set of animations,
+ * and treating it as the former is why this app could only ever show one of
+ * them.
+ *
+ * `walk`, `talk` and `sleep` are kept because earlier manifests could declare
+ * them and because callers ask for them by name. They are aliases, resolved
+ * against the real states at render time rather than stored — see
+ * `resolveStateName` in the renderer.
+ */
+export const PET_STATE_NAMES = [
+  'idle',
+  'running-right',
+  'running-left',
+  'waving',
+  'jumping',
+  'failed',
+  'waiting',
+  'running',
+  'review',
+  'look-right-side',
+  'look-left-side',
+  'walk',
+  'talk',
+  'sleep',
+] as const;
+
+export type PetStateName = (typeof PET_STATE_NAMES)[number];
+
+export const petStatesSchema = z.object(
+  Object.fromEntries(
+    PET_STATE_NAMES.map((name) => [
+      name,
+      name === 'idle' ? frameRangeSchema : frameRangeSchema.optional(),
+    ]),
+  ) as { idle: typeof frameRangeSchema } & Record<
+    Exclude<PetStateName, 'idle'>,
+    z.ZodOptional<typeof frameRangeSchema>
+  >,
+).strict();
 
 export type PetStates = z.infer<typeof petStatesSchema>;
 
@@ -136,9 +182,6 @@ export const thinkingPhrasesSchema = z.array(
 
 export type ThinkingPhrases = z.infer<typeof thinkingPhrasesSchema>;
 
-export const PET_STATE_NAMES = ['idle', 'walk', 'talk', 'sleep'] as const;
-
-export type PetStateName = (typeof PET_STATE_NAMES)[number];
 
 /**
  * How a pet should sound, if speech is ever wired up.
@@ -238,14 +281,36 @@ export const PET_MANIFEST_NAME = 'pet.json';
 export const MAX_SPRITE_BYTES = 8 * 1024 * 1024;
 
 /**
- * The starting `states` for a sheet nobody has annotated.
+ * The `states` for a sheet whose manifest does not declare any.
  *
- * Only the first row is claimed, and only for `idle`. In both spritesheets we
- * examined, row 0 is a standing/idle cycle — but "the first row is idle" is an
- * observation about two files, not a documented rule, so the other three states
- * are left unset for the user to assign rather than guessed at.
+ * Which is nearly all of them: neither the local Codex manifests nor the ones
+ * inside catalogue downloads carry a `states` block, so this function was the
+ * only thing deciding what a pet could do — and it used to answer "idle, the
+ * whole of row 0". That was wrong twice over. Row 0 is six or seven frames,
+ * not eight, so the extra cells were empty and the pet blinked; and the other
+ * eight or ten rows are real, labelled animations that nothing could reach.
+ *
+ * For a sheet matching the published layout, every row is named. For anything
+ * else the old conservative guess stands: one row, one state, and the frame
+ * editor to correct it.
  */
-export function buildDefaultStates(grid: FrameGrid): PetStates {
+export function buildDefaultStates(grid: FrameGrid, spriteVersionNumber?: number): PetStates {
+  if (isCodexGrid(grid)) {
+    const version = spriteVersionNumber ?? codexVersionFromGrid(grid);
+    const states = {} as PetStates;
+
+    for (const row of codexSheetRows(version)) {
+      const start = row.row * grid.columns;
+      states[row.name as PetStateName] = {
+        start,
+        end: start + row.frames - 1,
+        fps: CODEX_FPS,
+      };
+    }
+
+    return states;
+  }
+
   return { idle: { start: 0, end: Math.max(0, grid.columns - 1) } };
 }
 

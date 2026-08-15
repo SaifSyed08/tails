@@ -15,14 +15,11 @@ import {
   petDefinitionSchema,
   petFileSchema,
   petIdSchema,
-  PET_STATE_NAMES,
   petStatesSchema,
   spritePathSchema,
   thinkingPhrasesSchema,
   type FrameGrid,
-  type FrameRange,
   type PetDefinition,
-  type PetStateName,
   type PetFile,
   type PetStates,
 } from '@/modules/pets/pet-spec.js';
@@ -104,17 +101,6 @@ export type InstalledPet = {
    * component to reuse rather than re-derive.
    */
   preview: { frame: number; column: number; row: number };
-  /**
-   * The frames each state should actually play, once the sheet has been
-   * measured — the same states with their blank tails removed.
-   *
-   * Empty until a renderer has posted a measurement. Every surface should
-   * prefer `playable[state] ?? definition.states[state]` and none of them
-   * should trim anything themselves; see `resolvePlayableStates`.
-   */
-  playable: Partial<Record<PetStateName, FrameRange>>;
-  /** False when nothing has measured this sheet yet, which is the cue to do it. */
-  hasCellUsage: boolean;
   /**
    * A theme id this pet brings to a conversation, or null.
    *
@@ -228,56 +214,6 @@ function toIsoTimestamp(raw: string | null | undefined): string | null {
 }
 
 /**
- * The frames each state should actually play.
- *
- * ## Why this lives on the server
- *
- * Codex rows are ragged: the sheets on this machine use 6 and 7 of their 8
- * first-row cells, and a state that claims the whole row therefore ends in
- * blank frames — the pet vanishes for a frame, once per loop. The fix is to
- * stop at the last cell with artwork.
- *
- * That decision used to be made in the renderer, which meant it was made in
- * *each* renderer: the marketplace trimmed and the desktop window did not, so
- * the same bug was fixed once and shipped twice. The trim is one rule, so it
- * belongs in one place, and this is the only place both renderers already read
- * from. The browser still does the measuring — nothing here can decode a
- * WebP — but it posts the measurement back and asks no further questions.
- *
- * Multi-row ranges are returned untouched: they are played by sweeping whole
- * rows, and shortening the last row would desynchronise the two axes into a
- * worse artefact than the one being fixed.
- */
-function resolvePlayableStates(
-  grid: FrameGrid,
-  states: PetStates,
-  usage: string | null,
-): Partial<Record<PetStateName, FrameRange>> {
-  if (!usage || usage.length !== grid.columns * grid.rows) return {};
-
-  const playable: Partial<Record<PetStateName, FrameRange>> = {};
-
-  for (const name of PET_STATE_NAMES) {
-    const range = states[name];
-    if (!range) continue;
-
-    if (Math.floor(range.start / grid.columns) !== Math.floor(range.end / grid.columns)) {
-      playable[name] = range;
-      continue;
-    }
-
-    let end = range.end;
-    // Never down to nothing: a range whose cells are all blank is a mis-cut
-    // grid, and playing its first frame keeps that visible rather than
-    // silently substituting a frame from somewhere else.
-    while (end > range.start && usage[end] === '0') end -= 1;
-    playable[name] = end === range.end ? range : { ...range, end };
-  }
-
-  return playable;
-}
-
-/**
  * Which frame stands in for the whole pet.
  *
  * The first frame of `idle`, clamped into the grid. Clamping is the point: a
@@ -381,7 +317,8 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
   const grid: FrameGrid = override?.frame ?? file.data.frame ?? inferred.grid;
   const gridBasis: PetGridBasis = override?.frame || file.data.frame ? 'authored' : inferred.basis;
 
-  let states: PetStates = override?.states ?? file.data.states ?? buildDefaultStates(grid);
+  let states: PetStates = override?.states ?? file.data.states
+    ?? buildDefaultStates(grid, file.data.spriteVersionNumber);
   const outOfRange = findOutOfRangeStates(grid, states);
   if (outOfRange.length > 0) {
     warnings.push(`${outOfRange[0].message} Falling back to the default idle range.`);
@@ -418,8 +355,6 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     spriteSize: size ? { width: size.width, height: size.height } : null,
     gridBasis,
     preview: describePreviewFrame(grid, states),
-    playable: resolvePlayableStates(grid, states, override?.cellUsage ?? null),
-    hasCellUsage: Boolean(override?.cellUsage),
     assignedTheme: override?.assignedTheme ?? null,
     thinkingPhrases: override?.thinkingPhrases ?? [],
     installedAt: toIsoTimestamp(override?.installedAt),
@@ -505,7 +440,7 @@ function installPet(file: PetFile, spriteBytes: Buffer, spriteFileName: string):
     spriteVersionNumber: file.spriteVersionNumber,
     spritesheetPath: spriteName.data,
     frame: grid,
-    states: file.states ?? buildDefaultStates(grid),
+    states: file.states ?? buildDefaultStates(grid, file.spriteVersionNumber),
     personality: file.personality,
     voice: file.voice,
   });
@@ -1043,44 +978,6 @@ export const petsService = {
       contentType: spriteContentType(pet.definition.spritesheetPath),
       byteLength: stats.size,
     };
-  },
-
-  /**
-   * Records a renderer's measurement of which cells hold artwork.
-   *
-   * The one thing the server cannot work out for itself: it reads image headers
-   * and never decodes a pixel, while any browser showing the pet has already
-   * decoded the whole sheet. So the measurement comes back over HTTP and every
-   * surface — including the desktop window, which is a separate document with
-   * no bundler — gets its trimmed ranges from `listPets` afterwards.
-   *
-   * Validated strictly: the string is one character per cell, and a length that
-   * does not match the grid means it was measured against a different layout
-   * and is worthless.
-   */
-  saveCellUsage(id: string, body: unknown): InstalledPet {
-    const pet = requirePet(id);
-    const input = readRecord(body);
-    const usage = input && readString(input.usage);
-
-    if (!usage || !/^[01]+$/.test(usage)) {
-      throw new AppError('Cell usage must be a string of 0s and 1s, one per frame.', {
-        code: 'PET_USAGE_INVALID',
-        statusCode: 400,
-      });
-    }
-
-    const expected = pet.definition.frame.columns * pet.definition.frame.rows;
-    if (usage.length !== expected) {
-      throw new AppError(
-        `That measurement covers ${usage.length} cells; this pet's grid has ${expected}.`,
-        { code: 'PET_USAGE_MISMATCH', statusCode: 409 },
-      );
-    }
-
-    petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
-    petsRepository.saveCellUsage(pet.definition.id, usage);
-    return requirePet(id);
   },
 
   /**

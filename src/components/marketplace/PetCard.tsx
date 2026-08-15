@@ -52,9 +52,10 @@ export function PetCard({
   const [hovered, setHovered] = useState(false);
   const reduced = useReducedMotion();
   const { definition } = pet;
-  // Hovering plays the walk cycle when the pet has one; `PetSprite` falls
-  // back to idle by itself for the many sheets that label only one state.
-  const showcase = hovered ? 'walk' : 'idle';
+  // Hovering makes the pet acknowledge you. `waving` is the row Codex sheets
+  // use for exactly that, and `PetSprite` falls back for sheets that have no
+  // such row rather than freezing.
+  const showcase = hovered ? 'waving' : 'idle';
 
   return (
     <article

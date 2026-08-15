@@ -26,14 +26,31 @@ export type FrameRange = {
   fps?: number;
 };
 
-export type PetStates = {
-  idle: FrameRange;
-  walk?: FrameRange;
-  talk?: FrameRange;
-  sleep?: FrameRange;
-};
+export type PetStates = { idle: FrameRange } & Partial<Record<PetStateName, FrameRange>>;
 
-export const PET_STATE_NAMES = ['idle', 'walk', 'talk', 'sleep'] as const;
+/**
+ * The animations a Codex sheet actually has.
+ *
+ * The first eleven are the published convention (see the server's
+ * `codex-layout.ts`); `walk`, `talk` and `sleep` are legacy aliases that
+ * `resolveStateName` maps onto real states rather than anything stored.
+ */
+export const PET_STATE_NAMES = [
+  'idle',
+  'running-right',
+  'running-left',
+  'waving',
+  'jumping',
+  'failed',
+  'waiting',
+  'running',
+  'review',
+  'look-right-side',
+  'look-left-side',
+  'walk',
+  'talk',
+  'sleep',
+] as const;
 
 export type PetStateName = (typeof PET_STATE_NAMES)[number];
 
@@ -76,18 +93,6 @@ export type InstalledPet = {
    * no fallback for a range that points past the end.
    */
   preview: { frame: number; column: number; row: number };
-  /**
-   * The frames each state should actually play — the declared ranges with
-   * their blank tails removed, decided by the server.
-   *
-   * Prefer `playable[state] ?? definition.states[state]` and never trim
-   * anything locally: the desktop pet window is a separate document, and a rule
-   * applied in one renderer and not the other is how the pet ended up blinking
-   * on the desktop but not in the app.
-   */
-  playable: Partial<Record<PetStateName, FrameRange>>;
-  /** False when no renderer has measured this sheet yet. `PetSprite` fixes that. */
-  hasCellUsage: boolean;
   /**
    * A theme this pet brings to a conversation it is assigned to, or null.
    *
@@ -136,6 +141,8 @@ export type CatalogueEntry = {
   kind: string | null;
   ownerHandle: string | null;
   uploadedAt: string | null;
+  /** 1 or 2. Decides the row count and the filmstrip's frame layout. */
+  spriteVersionNumber: number | null;
   views: number | null;
   downloads: number | null;
   likes: number | null;
@@ -248,19 +255,6 @@ export const petsApi = {
     request<InstalledPet>('/import', {
       method: 'POST',
       body: JSON.stringify({ definition, image }),
-    }),
-
-  /**
-   * Reports which cells of a pet's sheet hold artwork, one character per frame.
-   *
-   * Measured in a browser because only a browser can decode the sheet, and sent
-   * to the server because the server is the only place both renderers read
-   * from. See `sprite-usage.ts`.
-   */
-  reportCellUsage: (id: string, usage: string) =>
-    request<InstalledPet>(`/${encodeURIComponent(id)}/cell-usage`, {
-      method: 'POST',
-      body: JSON.stringify({ usage }),
     }),
 
   /**

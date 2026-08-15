@@ -90,22 +90,6 @@ export function renderDesktopWindowHtml(): string {
 
   #pet.mirrored { transform: scaleX(-1); }
 
-  /* The carried-pet motion for sheets with no walk row. Transform only, so it
-     never costs a layout, and spelled out twice rather than composed, because a
-     second transform would replace the mirror instead of adding to it. */
-  #pet.bobbing { animation-name: tails-sprite-x, tails-pet-bob; }
-  #pet.bobbing.mirrored { animation-name: tails-sprite-x, tails-pet-bob-mirrored; }
-
-  @keyframes tails-pet-bob {
-    0%, 100% { transform: translateY(0) rotate(-2deg); }
-    50% { transform: translateY(-6px) rotate(2deg); }
-  }
-
-  @keyframes tails-pet-bob-mirrored {
-    0%, 100% { transform: scaleX(-1) translateY(0) rotate(-2deg); }
-    50% { transform: scaleX(-1) translateY(-6px) rotate(2deg); }
-  }
-
   @keyframes tails-sprite-x {
     from { background-position-x: var(--sprite-x-from); }
     to { background-position-x: var(--sprite-x-to); }
@@ -139,11 +123,13 @@ const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
 
 let current = null;      // the pet payload currently rendered
-let ranges = null;       // the idle/walk ranges the server decided
 let box = null;          // its cell geometry
 let mask = null;         // union alpha mask of the played frames, at cell resolution
 let dragging = false;
 let pointerOver = false;
+let playing = null;      // the state name currently animating
+let petRect = null;      // cached sprite box; invalidated on resize and re-render
+let facing = 'right';
 
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -167,68 +153,43 @@ function resolveCellBox(grid, displayHeight) {
 }
 
 /**
- * Scans the sheet once: which cell pixels are opaque, per frame.
+ * The opaque pixels of the frames we draw, in cell coordinates.
  *
- * Returns both the per-frame emptiness (for trimming a ragged row's blank tail)
- * and the union mask over the played range (for hit-testing). Same alpha
- * threshold and stride as the app, so both surfaces agree about where the pet
- * is.
+ * Used only to decide when the window may take a click. It reads one cell at a
+ * time rather than pulling the whole sheet into memory: a v2 sheet is
+ * 1536x2288, so the old whole-canvas "getImageData" allocated fourteen
+ * megabytes and scanned three and a half million pixels to answer a question
+ * about six of them.
+ *
+ * Frame counts come from the published layout now, so nothing here is
+ * measuring what to play — only where the pet is.
  */
-function scanSheet(image, grid) {
+function buildHitMask(image, grid, range) {
   const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
+  const cellWidth = Math.round(image.naturalWidth / grid.columns);
+  const cellHeight = Math.round(image.naturalHeight / grid.rows);
+  canvas.width = cellWidth;
+  canvas.height = cellHeight;
+
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) return null;
 
-  context.drawImage(image, 0, 0);
-  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  const bytes = new Uint8Array(cellWidth * cellHeight);
 
-  const cellWidth = canvas.width / grid.columns;
-  const cellHeight = canvas.height / grid.rows;
-  const used = [];
+  for (let frame = range.start; frame <= range.end; frame += 1) {
+    const originX = (frame % grid.columns) * cellWidth;
+    const originY = Math.floor(frame / grid.columns) * cellHeight;
 
-  for (let index = 0; index < grid.columns * grid.rows; index += 1) {
-    const originX = Math.round((index % grid.columns) * cellWidth);
-    const originY = Math.round(Math.floor(index / grid.columns) * cellHeight);
-    let filled = false;
+    context.clearRect(0, 0, cellWidth, cellHeight);
+    context.drawImage(image, originX, originY, cellWidth, cellHeight, 0, 0, cellWidth, cellHeight);
+    const { data } = context.getImageData(0, 0, cellWidth, cellHeight);
 
-    for (let y = 0; y < cellHeight && !filled; y += 4) {
-      const row = (originY + y) * canvas.width * 4;
-      for (let x = 0; x < cellWidth; x += 4) {
-        if (data[row + (originX + x) * 4 + 3] > 8) { filled = true; break; }
-      }
-    }
-    used.push(filled);
-  }
-
-  return { data, canvas, cellWidth, cellHeight, used };
-}
-
-/** The union of opaque pixels across a run of frames, in cell coordinates. */
-function buildMask(scan, grid, start, end) {
-  const width = Math.round(scan.cellWidth);
-  const height = Math.round(scan.cellHeight);
-  const bytes = new Uint8Array(width * height);
-
-  for (let frame = start; frame <= end; frame += 1) {
-    const originX = Math.round((frame % grid.columns) * scan.cellWidth);
-    const originY = Math.round(Math.floor(frame / grid.columns) * scan.cellHeight);
-
-    for (let y = 0; y < height; y += 1) {
-      const row = (originY + y) * scan.canvas.width * 4;
-      for (let x = 0; x < width; x += 1) {
-        if (scan.data[row + (originX + x) * 4 + 3] > 8) bytes[y * width + x] = 1;
-      }
+    for (let index = 0; index < bytes.length; index += 1) {
+      if (data[index * 4 + 3] > 8) bytes[index] = 1;
     }
   }
 
-  return { bytes, width, height };
-}
-
-/** One character per cell, the shape the server stores and trims against. */
-function toUsageString(used) {
-  return used.map(function (filled) { return filled ? '1' : '0'; }).join('');
+  return { bytes, width: cellWidth, height: cellHeight };
 }
 
 function applyAnimation(grid, range) {
@@ -271,27 +232,54 @@ function applyAnimation(grid, range) {
 }
 
 /**
- * What a pet does while it is being carried.
+ * Which animation to play, by name.
  *
- * A real walk cycle if the sheet has one. Most do not — Codex labels a single
- * state, so the walk range is the idle one — and a pet that keeps standing
- * perfectly still while being dragged across the screen looks frozen rather
- * than picked up. So the fallback is motion this page can honestly produce: the
- * idle loop played faster, and a small bob-and-tilt on the sprite itself.
- * Nothing invents frames that are not in the artwork.
+ * Codex sheets carry nine or eleven labelled rows, so this is a lookup rather
+ * than a trick: dragging plays the real "running-left" or "running-right" row —
+ * drawn facing that way by the artist — and hovering plays "waving". The
+ * previous version of this function mirrored the idle loop and added a bob,
+ * which was an elaborate way of not knowing those rows existed.
+ *
+ * The fallbacks only matter for a sheet that is not a Codex sheet and has just
+ * an idle row; mirroring is kept for that case alone, so a one-row pet still
+ * turns around when carried.
  */
-function startWalking() {
-  if (!current || !ranges) return;
+const STATE_FALLBACKS = {
+  'running-left': ['running', 'running-right', 'idle'],
+  'running-right': ['running', 'running-left', 'idle'],
+  waving: ['review', 'look-right-side', 'idle'],
+  idle: [],
+};
 
-  const hasWalk = !sameRange(ranges.walk, ranges.idle);
-  if (hasWalk) {
-    applyAnimation(current.definition.frame, ranges.walk);
-    return;
+function rangeFor(name) {
+  if (!current) return null;
+  const states = current.definition.states || {};
+  if (states[name]) return { name: name, range: states[name] };
+
+  const alternatives = STATE_FALLBACKS[name] || [];
+  for (const candidate of alternatives) {
+    if (states[candidate]) return { name: candidate, range: states[candidate] };
   }
+  return states.idle ? { name: 'idle', range: states.idle } : null;
+}
 
-  const fps = (ranges.idle.fps || current.definition.frame.fps || 8) * 1.6;
-  applyAnimation(current.definition.frame, { ...ranges.idle, fps: fps });
-  if (!reduced) pet.classList.add('bobbing');
+/**
+ * Plays a state, and mirrors only when the sheet has no directional row of its
+ * own to use instead.
+ */
+function playState(name) {
+  const resolved = rangeFor(name);
+  if (!resolved || !current) return;
+
+  const wantedLeft = name === 'running-left';
+  const gotDirectional = resolved.name === 'running-left' || resolved.name === 'running-right';
+  const mirror = wantedLeft && !gotDirectional;
+
+  pet.classList.toggle('mirrored', mirror);
+  if (playing === resolved.name && !mirror) return;
+
+  playing = resolved.name;
+  applyAnimation(current.definition.frame, resolved.range);
 }
 
 function loadImage(url) {
@@ -303,46 +291,31 @@ function loadImage(url) {
   });
 }
 
-/** Renders a pet, or nothing. Reports both to the shell. */
-/** The ranges to play, as decided by the server. This page trims nothing. */
-function readRanges(payload) {
-  const states = payload.definition.states;
-  const playable = payload.playable || {};
-  const idle = playable.idle || states.idle;
-  // A pet with no walk row is the common case — most Codex sheets label only
-  // one state — and an identical walk range is how the drag code knows to move the pet
-  // itself instead of pretending a second animation exists.
-  const walk = playable.walk || states.walk || idle;
-  return { idle: idle, walk: walk };
-}
-
 const sameRange = (left, right) => Boolean(left) && Boolean(right)
   && left.start === right.start && left.end === right.end && left.fps === right.fps;
 
+/** Renders a pet, or nothing. Reports both to the shell. */
 async function render(next) {
   if (!next) {
     current = null;
-    ranges = null;
+    playing = null;
     mask = null;
+    petRect = null;
     pet.style.display = 'none';
     bridge.reportVisibility(false);
     return;
   }
 
   const grid = next.definition.frame;
-  const nextRanges = readRanges(next);
+  const idle = next.definition.states.idle;
   const changed = !current || current.definition.id !== next.definition.id
     || current.spriteUrl !== next.spriteUrl;
   // Re-applying an animation restarts it, so a poll that changed nothing must
-  // not touch it — that is what made the pet stutter every few seconds, and
-  // what quietly put the untrimmed range back after the first scan.
-  const rangesChanged = !ranges || !sameRange(ranges.idle, nextRanges.idle)
-    || !sameRange(ranges.walk, nextRanges.walk);
+  // not touch it. That is what made the pet hitch every few seconds.
+  const statesChanged = current && !sameRange(current.definition.states.idle, idle);
 
   current = next;
-  ranges = nextRanges;
   box = resolveCellBox(grid, PET_HEIGHT);
-
   pet.style.display = 'block';
 
   if (changed) {
@@ -351,36 +324,24 @@ async function render(next) {
       Math.ceil(box.cellWidth) + PADDING * 2,
       Math.ceil(box.cellHeight) + PADDING * 2,
     );
+    bridge.reportVisibility(true);
   }
 
-  if (changed || rangesChanged) {
-    if (!dragging) applyAnimation(grid, nextRanges.idle);
+  if ((changed || statesChanged) && !dragging && !pointerOver) {
+    playing = null;
+    playState('idle');
   }
-
-  bridge.reportVisibility(true);
 
   if (!changed && mask) return;
 
-  // The scan is what makes the window clickable in the right places, so a
+  petRect = null;
+
+  // The mask is what makes the window clickable in the right places, so a
   // failure here is not cosmetic: fall back to the sprite's whole box rather
   // than leaving the pet ungrabbable.
   try {
     const image = await loadImage(next.spriteUrl);
-    const scan = scanSheet(image, grid);
-    if (!scan) throw new Error('no canvas');
-
-    mask = buildMask(scan, grid, nextRanges.idle.start, nextRanges.idle.end);
-
-    // This window is often the only thing on screen showing the pet, so it
-    // reports the measurement too. The server then hands the trimmed ranges to
-    // every surface, including the marketplace.
-    if (!next.hasCellUsage) {
-      fetch('/api/pets/' + encodeURIComponent(next.definition.id) + '/cell-usage', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ usage: toUsageString(scan.used) }),
-      }).then(function () { void poll(); }).catch(function () {});
-    }
+    mask = buildHitMask(image, grid, idle);
   } catch {
     mask = null;
   }
@@ -390,7 +351,12 @@ async function render(next) {
 function isOverPet(clientX, clientY) {
   if (!box) return false;
 
-  const rect = pet.getBoundingClientRect();
+  // Cached: this runs on every forwarded mouse move, and the sprite only moves
+  // when the window resizes or the pet changes. Reading layout per move is a
+  // forced synchronous reflow sixty times a second for a number that did not
+  // change.
+  if (!petRect) petRect = pet.getBoundingClientRect();
+  const rect = petRect;
   if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
     return false;
   }
@@ -419,6 +385,10 @@ function setPointerOver(next) {
   if (pointerOver === next) return;
   pointerOver = next;
   bridge.reportPointerOverPet(next);
+
+  // The pet notices you. "waving" is the row Codex sheets have for it, and a
+  // sheet without one keeps its idle rather than inventing a gesture.
+  if (!dragging) playState(next ? 'waving' : 'idle');
 }
 
 document.addEventListener('mousemove', (event) => {
@@ -437,7 +407,7 @@ pet.addEventListener('mousedown', (event) => {
 
   dragging = true;
   pet.classList.add('dragging');
-  startWalking();
+  playState(facing === 'left' ? 'running-left' : 'running-right');
 
   // No coordinates: the shell works out the grab offset from the cursor and the
   // window position, both of which it can read in one coordinate system. The
@@ -454,8 +424,7 @@ document.addEventListener('mouseup', () => {
   if (!dragging) return;
   dragging = false;
   pet.classList.remove('dragging');
-  pet.classList.remove('bobbing');
-  if (ranges) applyAnimation(current.definition.frame, ranges.idle);
+  playState('idle');
   bridge.endDrag();
   setPointerOver(false);
 });
@@ -466,7 +435,11 @@ document.addEventListener('contextmenu', (event) => {
   bridge.openMenu(current.definition.id);
 });
 
-bridge.onFacing((facing) => pet.classList.toggle('mirrored', facing === 'left'));
+bridge.onFacing((next) => {
+  facing = next;
+  // A real row per direction, so this is a state change and not a flip.
+  if (dragging) playState(next === 'left' ? 'running-left' : 'running-right');
+});
 bridge.onRefresh(() => void poll());
 
 /**
@@ -489,7 +462,10 @@ async function poll() {
 }
 
 void poll();
-setInterval(() => void poll(), POLL_MS);
+setInterval(() => {
+  // Never mid-drag: a poll that lands during a gesture can only cost frames.
+  if (!dragging) void poll();
+}, POLL_MS);
 </script>
 </body>
 </html>`;

@@ -41,7 +41,9 @@
      * every surface `text-primary` actually lands on — the page, a white card,
      * and `--muted`, which is darker than the page and is therefore the binding
      * one — while still carrying white ink at 5.3:1. That ceiling is 35%
-     * lightness at full saturation. The dark ramp has no such squeeze and gets
+     * lightness at full saturation — 34 once `--chrome` joined the surfaces it
+     * has to stay legible on, since the rail is darker than the page and is
+     * therefore the new binding one. The dark ramp has no such squeeze and gets
      * the bright amber the request was actually about, which is what the app
      * opens as.
      *
@@ -51,7 +53,7 @@
      * slightly red-leaning orange. 18 degrees clear of one, 20 of the other,
      * asserted in `default-ramp.test.ts`.
      */
-    --primary: 26 100% 35%;
+    --primary: 26 100% 34%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 240 5% 94%;
@@ -79,7 +81,27 @@
 
     --border: 240 6% 88%;
     --input: 240 6% 88%;
-    --ring: 26 100% 35%;
+    --ring: 26 100% 34%;
+
+    /**
+     * The chrome tone — the sidebar rail and the title bar.
+     *
+     * The default look had the rail, the header and the chat all resolving to
+     * `--background`, so the two largest regions on screen were separated by a
+     * 1px hairline and nothing else. Every shipped preset was held to a
+     * measured 1.15:1 minimum here; the floor was not, and had the identical
+     * defect the presets had just been fixed for.
+     *
+     * One tonal step, not a panel: 1.16:1 against the page. Enough that the
+     * boundary is carried by the fill rather than by the outline, subtle enough
+     * that it still reads as one application.
+     *
+     * The rail and the title bar share it deliberately. They meet at the corner
+     * and form a single L-shaped frame around the reading surface, which is one
+     * legible idea; toning only the rail would leave the header/chat edge
+     * hairline-only and put a seam in the middle of the frame.
+     */
+    --chrome: 40 14% 91%;
 
     --radius: 0.625rem;
     --space-unit: 0.25rem;
@@ -152,10 +174,13 @@
     --background: 240 10% 6%;
     --foreground: 40 15% 95%;
 
-    --card: 240 8% 9%;
+    /* Lifted from 9% to 13%. A card at 9% on a 6% page is 1.06:1 — the same
+       hairline-only boundary the rail had, on the surface the composer, tool
+       rows and plan cards all use. At 13% it is 1.17:1 and the fill carries it. */
+    --card: 240 8% 13%;
     --card-foreground: 40 15% 95%;
 
-    --popover: 240 8% 9%;
+    --popover: 240 8% 13%;
     --popover-foreground: 40 15% 95%;
 
     /* The dark ramp was already dark-ink-on-light-accent and has room for the
@@ -191,6 +216,13 @@
     --border: 240 5% 20%;
     --input: 240 5% 20%;
     --ring: 26 100% 58%;
+
+    /* The dark page stays at 6%: `electron/main.js` paints the window
+       `#0f0f11` to match it, and a mismatch is a visible flash on every
+       launch. So the chrome lifts away from the page rather than the page
+       moving, which is also the direction the request asked for — the rail
+       becoming grey rather than black. */
+    --chrome: 240 9% 13%;
   }
 
   /**
@@ -296,7 +328,7 @@
      floor only has to be right for the built-in look. */
   [data-tails-part='sidebar'],
   [data-tails-part='header'] {
-    --t-fill-color: hsl(var(--background));
+    --t-fill-color: hsl(var(--chrome));
     --t-ink: hsl(var(--foreground));
     --t-radius: 0;
   }

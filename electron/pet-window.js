@@ -30,7 +30,7 @@ import path from 'node:path';
 /** Fallback size before the page reports the sprite's real box. */
 const DEFAULT_SIZE = { width: 160, height: 180 };
 
-/** How often the drag loop samples the cursor. One frame at 60Hz. */
+/** Gap between drag frames. One frame at 60Hz, measured from the end of the last. */
 const DRAG_INTERVAL_MS = 16;
 
 /** How often to check that an interactive window still has the pointer over it. */
@@ -59,6 +59,8 @@ let watchdogTimer = null;
 let dragTimer = null;
 let dragOffset = null;
 let dragSize = null;
+let lastPosition = null;
+let lastFacing = null;
 let lastDragX = null;
 let saveTimer = null;
 
@@ -204,8 +206,18 @@ function startDrag() {
   lastDragX = cursor.x;
   setInteractive(true);
 
-  dragTimer = setInterval(() => {
-    if (!isAlive()) return stopDrag();
+  /**
+   * A self-scheduling frame, not `setInterval`.
+   *
+   * `setPosition` on a transparent always-on-top window is a synchronous
+   * compositor call, and when one takes longer than the interval, `setInterval`
+   * queues the next tick immediately — so the loop falls behind by a little
+   * more every frame and the pet trails further from the cursor the longer the
+   * drag goes on. Scheduling the next frame only after this one finishes makes
+   * a slow frame cost one frame, not a growing backlog.
+   */
+  const step = () => {
+    if (!isAlive() || !dragOffset) return stopDrag();
 
     const cursor = screen.getCursorScreenPoint();
     // Absolute, every frame: the window is placed where the cursor says it
@@ -218,23 +230,40 @@ function startDrag() {
       dragSize.height,
     );
 
-    petWindow.setPosition(next.x, next.y);
+    // Skipped when nothing moved: a stationary hand should not cost sixty
+    // compositor calls a second, and this is also what keeps the one-pixel
+    // rounding step from being re-applied over and over.
+    if (next.x !== lastPosition.x || next.y !== lastPosition.y) {
+      petWindow.setPosition(next.x, next.y);
+      lastPosition = next;
+    }
 
     // Face the way it is being thrown. The threshold keeps a hand that is
     // holding still from flickering the sprite back and forth.
     if (Math.abs(cursor.x - lastDragX) > 2) {
-      petWindow.webContents.send('pet:facing', cursor.x < lastDragX ? 'left' : 'right');
+      const direction = cursor.x < lastDragX ? 'left' : 'right';
+      if (direction !== lastFacing) {
+        petWindow.webContents.send('pet:facing', direction);
+        lastFacing = direction;
+      }
       lastDragX = cursor.x;
     }
+
+    dragTimer = setTimeout(step, DRAG_INTERVAL_MS);
     return undefined;
-  }, DRAG_INTERVAL_MS);
+  };
+
+  lastPosition = { x: originX, y: originY };
+  step();
 }
 
 function stopDrag() {
-  if (dragTimer) clearInterval(dragTimer);
+  if (dragTimer) clearTimeout(dragTimer);
   dragTimer = null;
   dragOffset = null;
   dragSize = null;
+  lastPosition = null;
+  lastFacing = null;
   lastDragX = null;
   schedulePersist();
 }

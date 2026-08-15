@@ -6,7 +6,13 @@ import test from 'node:test';
 import zlib from 'node:zlib';
 
 import { CODEX_SPRITE_CELL, inferFrameGrid, readImageSize } from '@/modules/pets/sprite-metrics.js';
-import { petDefinitionSchema, spritePathSchema } from '@/modules/pets/pet-spec.js';
+import { buildDefaultStates, petDefinitionSchema, spritePathSchema } from '@/modules/pets/pet-spec.js';
+import {
+  CODEX_FPS,
+  codexSheetRows,
+  codexStripFrameCount,
+  codexStripIdleFrames,
+} from '@/modules/pets/codex-layout.js';
 import { isSafeEntryName, listZipEntries, readZipEntry } from '@/modules/pets/zip.js';
 
 /**
@@ -284,41 +290,68 @@ test('the pet library', async (t) => {
     });
 
     /**
-     * The blank-frame trim, which is now the server's job.
+     * The published Codex layout, applied.
      *
-     * It used to be the renderer's, which meant it was each renderer's: the
-     * marketplace trimmed and the always-on-top window did not, so the pet
-     * blinked on the desktop and not in the app. A browser still supplies the
-     * measurement — nothing here can decode a WebP — but the rule is applied
-     * once, here, and every surface reads the result.
+     * Neither the local manifests nor the catalogue's carry a `states` block, so
+     * this synthesis is the only thing deciding what a pet can do. It used to
+     * answer "idle, all eight cells of row 0", which was wrong twice: row 0 is
+     * six or seven frames, so the rest were blank and the pet flickered, and the
+     * other eight or ten labelled rows were unreachable.
      */
-    await t.test('trims blank frames off a state, from a measurement', () => {
-      const before = petsService.getPet('sonic-art');
-      assert.equal(before.hasCellUsage, false);
-      assert.deepEqual(before.playable, {}, 'nothing to say until something has measured it');
+    await t.test('synthesises every state a Codex sheet has', () => {
+      // The fixture is 8x2 — not a Codex shape — so it keeps the conservative
+      // single-row guess.
+      const oddSheet = petsService.getPet('testpet');
+      assert.equal(Object.keys(oddSheet.definition.states).length, 1);
 
-      // Row 0 of the real sheet holds artwork in 7 of its 8 cells; the rest of
-      // the fixture's rows are full.
-      const usage = '11111110'.padEnd(8 * 2, '1');
-      const measured = petsService.saveCellUsage('sonic-art', { usage });
+      const v1 = buildDefaultStates(
+        { width: 192, height: 208, columns: 8, rows: 9, fps: 8 },
+        1,
+      );
+      const v2 = buildDefaultStates(
+        { width: 192, height: 208, columns: 8, rows: 11, fps: 8 },
+        2,
+      );
 
-      assert.equal(measured.hasCellUsage, true);
-      assert.deepEqual(measured.definition.states.idle, { start: 0, end: 7 }, 'the declared range is untouched');
-      assert.deepEqual(measured.playable.idle, { start: 0, end: 6 }, 'the played range stops at the artwork');
+      assert.equal(Object.keys(v1).length, 9, 'v1 has nine rows');
+      assert.equal(Object.keys(v2).length, 11, 'v2 adds the two look-around rows');
 
-      // It survives a rescan, so the desktop window gets it on its next poll.
-      assert.deepEqual(petsService.listPets().pets
-        .find((pet) => pet.definition.id === 'sonic-art')?.playable.idle, { start: 0, end: 6 });
+      // Row 0 is six frames, and seven on a v2 sheet — the seventh is the
+      // "Neutral look" cell, which is real artwork.
+      assert.deepEqual(v1.idle, { start: 0, end: 5, fps: CODEX_FPS });
+      assert.deepEqual(v2.idle, { start: 0, end: 6, fps: CODEX_FPS });
 
-      // A measurement of a different grid is worthless, not "close enough".
-      assert.throws(() => petsService.saveCellUsage('sonic-art', { usage: '1111' }), /grid has 16/);
-      assert.throws(() => petsService.saveCellUsage('sonic-art', { usage: 'banana!!' }), /0s and 1s/);
+      // The directional runs are separate rows, which is what makes dragging
+      // work without mirroring anything.
+      assert.deepEqual(v1['running-right'], { start: 8, end: 15, fps: CODEX_FPS });
+      assert.deepEqual(v1['running-left'], { start: 16, end: 23, fps: CODEX_FPS });
+      assert.deepEqual(v2['look-left-side'], { start: 80, end: 87, fps: CODEX_FPS });
 
-      // An all-blank range keeps its first frame rather than collapsing to
-      // nothing: a mis-cut grid should stay visible, not silently play a frame
-      // from somewhere else.
-      petsService.saveCellUsage('sonic-art', { usage: '00000000'.padEnd(16, '1') });
-      assert.deepEqual(petsService.getPet('sonic-art').playable.idle, { start: 0, end: 0 });
+      // Every range stays inside its own row: a state that spilled over would
+      // play the start of the next animation.
+      for (const [name, range] of Object.entries(v2)) {
+        assert.equal(
+          Math.floor(range.start / 8),
+          Math.floor(range.end / 8),
+          `${name} should not cross a row boundary`,
+        );
+      }
+    });
+
+    /**
+     * The filmstrip and the spritesheet are cut differently.
+     *
+     * Their bundle has two selectors: the sheet gives v2 a seven-frame idle,
+     * the strip does not. Measuring the real images confirms it — v1 previews
+     * are 57 frames and v2 previews are 73, not 74.
+     */
+    await t.test('counts filmstrip frames the way the catalogue builds them', () => {
+      assert.equal(codexStripFrameCount(1), 57);
+      assert.equal(codexStripFrameCount(2), 73);
+      assert.equal(codexStripIdleFrames(1), 6);
+      assert.equal(codexStripIdleFrames(2), 6, 'the strip keeps the six-frame idle in both versions');
+
+      assert.equal(codexSheetRows(2)[0].frames, 7, 'the sheet does not');
     });
 
     await t.test('names one representative frame, always inside the sheet', () => {

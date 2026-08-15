@@ -57,6 +57,8 @@ export type CatalogueEntry = {
   /** The uploader's handle. Shown as-is; the site's display name is not verified by us. */
   ownerHandle: string | null;
   uploadedAt: string | null;
+  /** 1 or 2 — the sheet layout, which decides how the filmstrip is cut. */
+  spriteVersionNumber: number | null;
   views: number | null;
   downloads: number | null;
   likes: number | null;
@@ -152,6 +154,7 @@ const remoteEntrySchema = z.object({
   ownerHandle: z.string().max(80).optional().nullable(),
   ownerName: z.string().max(80).optional().nullable(),
   ownerShadowbanned: z.boolean().optional(),
+  spriteVersionNumber: z.number().optional().nullable(),
   uploadedAt: z.string().max(64).optional().nullable(),
   viewCount: z.number().optional().nullable(),
   downloadCount: z.number().optional().nullable(),
@@ -246,6 +249,7 @@ export function createRemoteCatalogue(
     kind: raw.kind ?? null,
     ownerHandle: raw.ownerHandle ?? raw.ownerName ?? null,
     uploadedAt: raw.uploadedAt ?? null,
+    spriteVersionNumber: typeof raw.spriteVersionNumber === 'number' ? raw.spriteVersionNumber : null,
     views: typeof raw.viewCount === 'number' ? raw.viewCount : null,
     downloads: typeof raw.downloadCount === 'number' ? raw.downloadCount : null,
     likes: typeof raw.likeCount === 'number' ? raw.likeCount : null,

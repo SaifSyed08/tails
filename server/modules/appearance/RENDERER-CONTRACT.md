@@ -565,6 +565,41 @@ renderer contract's: this file already catches a token *emitted and never read*,
 and the new one catches a token *read and inert*, which is indistinguishable
 from working by every means except measuring it.
 
+**Adjacent regions separate by fill, not by outline.** The rail, the title bar
+and the chat area all resolved to `--background`, so the two largest regions on
+screen were divided by a 1px hairline and nothing else — the exact defect the
+preset gate had just been written to catch, in the one theme the gate did not
+cover. The floor now has a third role, `--chrome`, one tonal step off the page
+(1.16:1 in both ramps) and shared by the sidebar and the header so they read as
+a single L-shaped frame around the reading surface. Dark `--card` lifted from 9%
+to 13% for the same reason, giving 1.17:1 against the page.
+
+The bar is `REGION_SEPARATION` in `tests/bars.ts`, imported by both the preset
+test and the floor test so the default cannot drift out of the standard it
+enforces on the model. It is deliberately low: this is a "two surfaces, not one"
+floor, not a legibility one, and a separation that reads as two applications
+stapled together is worse than the flatness it replaced.
+
+The dark ramp is deliberately two levels rather than three: the chat is the
+recessed well, and the chrome and the cards share one raised level at 13%. With
+the page pinned at 6% a third distinct level lands around 21%, which is
+`--border` territory and reads as a light theme with the lights off. So in dark,
+the composer's edge against the rail is carried by the rail's own border — which
+at 1.48:1 is the strongest border contrast in the app.
+
+This is also the answer to the `border on background` shortfall. A boundary
+carried by a tonal step does not depend on its outline being visible in
+isolation, so the 3:1 requirement stops applying in the way that mattered. Two
+edges still rest on the border: a card on the page in the *light* ramp
+(`--card` is pure white on a 98% page, 1.04:1), and the card/chrome edge in dark
+described above. The exemption is scoped to exactly those, with the reason
+neither was closed.
+
+**Changing the dark `--background` is not free.** `electron/main.js` paints the
+window `#0f0f11` to match it, so a mismatch is a visible flash on every launch.
+That is why the dark chrome lifts away from the page rather than the page
+moving down.
+
 **A role used as small text is held to text contrast, not to 3:1.** The accent
 and the three semantic roles are all solved in `buildRamp` against
 `target.text`, because `text-primary` is a link colour and `text-destructive` is

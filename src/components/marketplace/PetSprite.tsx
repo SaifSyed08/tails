@@ -1,6 +1,6 @@
 import type { InstalledPet, PetStateName } from './marketplace-api';
+import { resolveStateRange } from './pet-states';
 import { SpritePreview } from './SpritePreview';
-import { useReportCellUsage } from './sprite-usage';
 
 /**
  * A pet, at a size, playing a state, facing a direction.
@@ -10,10 +10,11 @@ import { useReportCellUsage } from './sprite-usage';
  * sheet is cut into cells, how the loop avoids the empty cell past the end — is
  * settled once underneath, so a caller supplies intent and nothing else.
  *
- * A pet that has no `walk` row falls back to `idle` rather than freezing or
- * playing something arbitrary: most Codex sheets have exactly one labelled
- * state, and a companion that stops moving when asked to walk looks broken in a
- * way that "it walks on the spot" does not.
+ * A Codex sheet has nine or eleven labelled animations — `running-left`,
+ * `waving`, `jumping` and the rest — so asking for one by name is the whole
+ * interface. `resolveStateName` handles the two awkward cases: the legacy
+ * `walk`/`talk`/`sleep` aliases, and sheets that are not Codex sheets and have
+ * only an idle row.
  */
 
 export type PetFacing = 'right' | 'left';
@@ -42,20 +43,11 @@ export function PetSprite({
   fps,
   className,
 }: PetSpriteProps) {
-  // Drawing a pet is also how the app measures it: the first surface to render
-  // a sheet posts back which cells hold artwork, and every surface afterwards —
-  // including the desktop window — gets trimmed ranges from the server.
-  useReportCellUsage(pet);
-
   const { definition } = pet;
-  // The trimmed range when the sheet has been measured, the declared one until
-  // then. Never trimmed here; that rule lives on the server.
-  // Optional-chained: a payload from an older server, or a cached one from
-  // before `playable` existed, must degrade to the declared ranges rather than
-  // throw. This component is on every surface, so a crash here is the whole
-  // marketplace, not one pet.
-  const range = pet.playable?.[state] ?? definition.states[state]
-    ?? pet.playable?.idle ?? definition.states.idle;
+  // Frame counts come from the pet's own states, which the server synthesises
+  // from the published Codex layout. Nothing is measured, trimmed or guessed
+  // here; an unknown state resolves to a real one rather than to nothing.
+  const range = resolveStateRange(pet, state);
 
   return (
     <SpritePreview

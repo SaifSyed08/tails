@@ -13,6 +13,8 @@ import {
 import { SURFACE_ANCHOR_NAMES, type ContrastTarget } from '@/modules/appearance/palette.js';
 import { THEME_PRESETS } from '@/modules/appearance/presets.js';
 import { serializeStylesheet } from '@/modules/appearance/serialize.js';
+
+import { REGION_SEPARATION } from './bars.js';
 import { SURFACE_PARTS } from '@/modules/appearance/surface-recipe.js';
 import {
   themeSpecSchema,
@@ -96,17 +98,6 @@ test('every shipped preset passes contrast in both ramps at its own target', () 
   }
 });
 
-/**
- * How far apart the rail and the transcript have to read.
- *
- * 1.15:1 is deliberately low as contrast ratios go — this is not a legibility
- * floor, it is a "these are two different planes" floor, and anything much
- * above it starts dictating that the sidebar be a dark rail in every theme.
- * Below it the two surfaces merge: the presets were shipping at 1.000, exactly
- * identical, which is what prompted the requirement.
- */
-const SIDEBAR_SEPARATION = 1.15;
-
 test('the sidebar reads as a different plane from the chat, in every preset', () => {
   // "Noticeably different" is exactly the kind of requirement that silently
   // regresses — nothing type-checks it, nothing lints it, and a preset author
@@ -122,8 +113,8 @@ test('the sidebar reads as a different plane from the chat, in every preset', ()
 
       const ratio = contrastRatio(ramp.effectiveFills.sidebar, ramp.effectiveFills.page);
       assert.ok(
-        ratio >= SIDEBAR_SEPARATION,
-        `${id} ${label}: the sidebar sits at ${ratio.toFixed(3)}:1 against the chat, which needs to be at least ${SIDEBAR_SEPARATION}:1. Give the preset a \`sidebar\` recipe with a fill a tier or two along the \`surface\` role.`,
+        ratio >= REGION_SEPARATION,
+        `${id} ${label}: the sidebar sits at ${ratio.toFixed(3)}:1 against the chat, which needs to be at least ${REGION_SEPARATION}:1. Give the preset a \`sidebar\` recipe with a fill a tier or two along the \`surface\` role.`,
       );
     }
   }

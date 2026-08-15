@@ -8,6 +8,8 @@ import { CONTRAST_PAIRS, pairMinimum } from '@/modules/appearance/derive.js';
 import { compositeOver, contrastRatio, type Hsl } from '@/modules/appearance/palette.js';
 import { SURFACE_PARTS } from '@/modules/appearance/surface-recipe.js';
 
+import { REGION_SEPARATION } from './bars.js';
+
 /**
  * The built-in ramp, held to the bar the engine enforces on the model.
  *
@@ -97,7 +99,7 @@ test('the built-in ramp defines the tokens the contrast manifest checks', () => 
  */
 const KNOWN_SHORTFALLS: Record<string, string> = {
   'border on background':
-    'The hairline separating a card from the page sits at about 1.3:1, and the manifest asks 3:1 of it because the derivation solves generated themes to that bar. Closing it honestly needs a border near 58% lightness — a mid-grey rule around every card, input and code block. That is a deliberate decision about how heavy the default looks rather than a colour correction, and nobody has asked for it; quietly lowering the bar for the default while enforcing it on the model would be worse. Recorded so the next person to weigh it finds the number already measured. The visible consequence meanwhile: a generated theme has firmer borders than the built-in look, and that is not a bug in the generator.',
+    'Kept, but for a much narrower reason than when it was written. The 3:1 bar exists because a boundary communicated *only* by an outline has to be visible on its own — and that is no longer how the built-in look draws most of its boundaries. The sidebar and the header sit at 1.16:1 against the chat in both ramps, and cards sit at 1.17:1 against the page in the dark ramp, so on those edges the hairline is decoration over a tonal step rather than the sole thing saying "this is a different region". Separation by fill was the right answer to this debt; heavier rules everywhere was not. ONE boundary still depends on the border alone: a card on the page in the LIGHT ramp, where `--card` is pure white on a 98% page at 1.04:1. Closing that one needs the light page down around 93%, which drags `--muted`, `--border` and the accent with it — the accent has just been tuned to the edge of its legible range, so this is a coordinated light-ramp change rather than a colour correction, and it has not been asked for. In the dark ramp the chrome and the cards deliberately share one raised level at 13%, because with the page pinned at 6% by the Electron window colour a third distinct level lands near 21% and reads as a light theme with the lights off; that one edge is carried by the rail border at 1.48:1. Those two edges are the specific, measured things this entry is now recording.',
 };
 
 for (const [label, ramp] of [['light', light], ['dark', dark]] as const) {
@@ -151,7 +153,11 @@ test('the accent is legible as text, not only as a fill', () => {
   // both sit *darker* than the page in the light ramp, so a dark accent has
   // less contrast on them, not more. `muted` is the binding surface for the
   // light ramp's accent lightness.
-  const surfaces = ['background', 'card', 'popover', 'muted', 'secondary'] as const;
+  // `chrome` joined this list the moment the sidebar stopped being the page
+  // colour: `text-primary` appears in the rail (active session, the new-chat
+  // affordance), and the rail is now the darkest surface in the light ramp,
+  // which makes it the binding one for the accent's lightness.
+  const surfaces = ['background', 'card', 'popover', 'muted', 'secondary', 'chrome'] as const;
   const failures: string[] = [];
 
   for (const [label, ramp] of [['light', light], ['dark', dark]] as const) {
@@ -280,6 +286,50 @@ test('no floor token is a passthrough of the value it exists to refine', () => {
   }
 
   assert.deepEqual(failures, [], `\n  ${failures.join('\n  ')}`);
+});
+
+/**
+ * The built-in look, held to the same region separation as every preset.
+ *
+ * `derive.test.ts` asserts this for the shipped presets and found three sitting
+ * at exactly 1.000. The floor was outside that test and had the identical
+ * defect: `[data-tails-part="sidebar"]`, `[data-tails-part="header"]` and the
+ * chat area all resolved to `hsl(var(--background))`, so the two largest
+ * regions on screen were separated by a hairline and nothing else.
+ *
+ * Same constant, imported rather than repeated, because the whole point is that
+ * the app's own look is not exempt from the bar it enforces on the model.
+ */
+test('the built-in look separates its regions by fill, not only by outline', () => {
+  const boundaries = [
+    ['sidebar', 'chat'],
+    ['header', 'chat'],
+  ] as const;
+
+  for (const [label, ramp] of [['light', light], ['dark', dark]] as const) {
+    const chat = ramp.background;
+
+    for (const [part] of boundaries) {
+      const fill = resolveToken(partTokens(part)['--t-fill-color'] ?? '', ramp);
+      assert.ok(fill, `${label}: ${part} has no resolvable floor fill`);
+
+      const ratio = contrastRatio(fill.color, chat);
+      assert.ok(
+        ratio >= REGION_SEPARATION,
+        `${label}: the ${part} sits at ${ratio.toFixed(3)}:1 against the chat area, which needs at least ${REGION_SEPARATION}:1. Two adjacent regions separated only by a 1px border is the defect the presets were fixed for; the default does not get an exemption.`,
+      );
+    }
+
+    // Cards, the composer and popovers all take `--card`, and they sit *on* the
+    // chat rather than beside it — the other boundary a hairline was carrying
+    // alone. Checked here rather than in the loop above because the surface
+    // comes from a role token, not from a part's fill.
+    const cardRatio = contrastRatio(ramp.card, chat);
+    assert.ok(
+      cardRatio >= (label === 'dark' ? REGION_SEPARATION : 1.03),
+      `${label}: --card is ${cardRatio.toFixed(3)}:1 against the page.`,
+    );
+  }
 });
 
 /**

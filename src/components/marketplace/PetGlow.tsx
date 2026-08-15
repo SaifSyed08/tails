@@ -13,6 +13,11 @@ import { useReducedMotion } from '@/shared/ui/Motion';
  * collapsed to something smaller than the sprite standing in front of it.
  * Sizing in pixels, from one place, makes the two read identically.
  *
+ * The light is a **halo**: transparent at its centre, brightest in a ring, gone
+ * by the edge. A solid centre put a coloured disc behind the pet and flattened
+ * it; a ring lights the space around it instead. Behind that sits a faint pixel
+ * grid, masked to the same radius, which gives the sprite somewhere to stand.
+ *
  * ## Following the pointer
  *
  * The appearance module already publishes the pointer on `:root` — `--pointer-px`
@@ -35,6 +40,9 @@ type PetGlowProps = {
 /** The lit area, in CSS pixels. Bigger than any card, so the light spills round the pet. */
 const GLOW_WIDTH = 260;
 const GLOW_HEIGHT = 210;
+
+/** Grid pitch. Coarse enough to read as a backdrop rather than a texture. */
+const GRID_SIZE = 16;
 
 export function PetGlow({ active, className }: PetGlowProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -72,10 +80,28 @@ export function PetGlow({ active, className }: PetGlowProps) {
     : '50% 60%';
 
   const style: CSSProperties = {
-    backgroundImage: `radial-gradient(${GLOW_WIDTH}px ${GLOW_HEIGHT}px at ${position}, `
-      // `--primary` rather than a colour: the accent is a theme token, and it is
-      // being changed from blue to amber underneath us this week.
-      + 'hsl(var(--primary) / 0.38), hsl(var(--primary) / 0.10) 45%, transparent 72%)',
+    // Three layers, painted back to front by the browser in the order written:
+    // the halo, then the grid, then the mask that fades the grid out at the
+    // edges. `--primary` rather than a colour, because the accent is a theme
+    // token and it changed from blue to amber this week without this noticing.
+    backgroundImage: [
+      // A halo, not a blob: transparent at the very centre, brightest in a ring
+      // around the pet, gone by the edge. The pet is *in* the light rather than
+      // behind a disc of it.
+      `radial-gradient(${GLOW_WIDTH}px ${GLOW_HEIGHT}px at ${position}, `
+        + 'transparent 0%, hsl(var(--primary) / 0.10) 18%, hsl(var(--primary) / 0.26) 38%, '
+        + 'hsl(var(--primary) / 0.08) 58%, transparent 76%)',
+      // A pixel grid, which is what these sprites are made of. Held to the
+      // border token so it reads as structure rather than decoration.
+      `repeating-linear-gradient(to right, hsl(var(--border) / 0.55) 0 1px, transparent 1px ${GRID_SIZE}px)`,
+      `repeating-linear-gradient(to bottom, hsl(var(--border) / 0.55) 0 1px, transparent 1px ${GRID_SIZE}px)`,
+    ].join(', '),
+    // The grid only exists where the light is; beyond that it would just be
+    // graph paper behind a card.
+    maskImage: `radial-gradient(${GLOW_WIDTH}px ${GLOW_HEIGHT}px at ${position}, `
+      + 'black 0%, black 40%, transparent 72%)',
+    WebkitMaskImage: `radial-gradient(${GLOW_WIDTH}px ${GLOW_HEIGHT}px at ${position}, `
+      + 'black 0%, black 40%, transparent 72%)',
     opacity: active ? 1 : 0,
   };
 
