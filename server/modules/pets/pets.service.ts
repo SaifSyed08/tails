@@ -23,6 +23,7 @@ import {
   type PetFile,
   type PetStates,
 } from '@/modules/pets/pet-spec.js';
+import { CODEX_FPS, isCodexGrid } from '@/modules/pets/codex-layout.js';
 import { petsRepository, type PetSource } from '@/modules/pets/pets.repository.js';
 import {
   createRemoteCatalogue,
@@ -214,6 +215,84 @@ function toIsoTimestamp(raw: string | null | undefined): string | null {
 }
 
 /**
+ * Removes values a previous version of this installer wrote into a manifest.
+ *
+ * Before the Codex layout was known, `installPet` saved the whole resolved
+ * definition — including the states it had just synthesised and the frame rate
+ * it had just defaulted. Those became authored data, and since an explicit
+ * `states` block correctly beats synthesis, every pet installed then is pinned
+ * to the bug that was current on the day it arrived. Fixing the table could
+ * never reach them.
+ *
+ * The repair is deliberately narrow. It only strips what is positively
+ * identifiable as our own past output:
+ *
+ * - a `states` block that is *exactly* one `idle` spanning the full width of a
+ *   row, with nothing else in it — the shape the old `buildDefaultStates`
+ *   produced, and one no real Codex manifest carries (neither the local files
+ *   nor a fresh catalogue download declares `states` at all);
+ * - a frame rate of exactly 8, the old default, on a sheet that follows the
+ *   Codex layout, whose real rate is 3.85.
+ *
+ * Anything else — a hand-edited range, a different frame count, a second state,
+ * a non-Codex sheet — is left alone, because at that point it is somebody's
+ * work rather than our residue. Only `~/.tails/pets` is ever rewritten.
+ */
+function repairSynthesisedManifest(directory: string, source: PetSource, raw: unknown): unknown {
+  if (source !== 'tails') return raw;
+
+  const record = readRecord(raw);
+  const frame = record && readRecord(record.frame);
+  if (!record || !frame) return raw;
+
+  const columns = Number(frame.columns);
+  const rows = Number(frame.rows);
+  const isCodex = isCodexGrid({
+    width: Number(frame.width),
+    height: Number(frame.height),
+    columns,
+    rows,
+  });
+  if (!isCodex) return raw;
+
+  const states = readRecord(record.states);
+  const idle = states && readRecord(states.idle);
+  const isOldSynthesis = Boolean(
+    states
+    && idle
+    && Object.keys(states).length === 1
+    && Object.keys(idle).length === 2
+    && idle.start === 0
+    && idle.end === columns - 1,
+  );
+
+  const hasDefaultedFps = frame.fps === DEFAULT_SPRITE_FPS;
+  if (!isOldSynthesis && !hasDefaultedFps) return raw;
+
+  const repaired: Record<string, unknown> = { ...record };
+  if (isOldSynthesis) delete repaired.states;
+  if (hasDefaultedFps) {
+    const rest = { ...frame };
+    delete rest.fps;
+    repaired.frame = rest;
+  }
+
+  try {
+    fs.writeFileSync(
+      path.join(directory, PET_MANIFEST_NAME),
+      `${JSON.stringify(repaired, null, 2)}\n`,
+      'utf8',
+    );
+  } catch {
+    // A read-only or full disk is not a reason to fail discovery: the in-memory
+    // repair below is what the app actually renders from, and the write is only
+    // so the next launch does not have to do it again.
+  }
+
+  return repaired;
+}
+
+/**
  * Which frame stands in for the whole pet.
  *
  * The first frame of `idle`, clamped into the grid. Clamping is the point: a
@@ -281,7 +360,11 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     };
   }
 
-  const file = petFileSchema.safeParse(raw);
+  // Before anything reads it: a manifest we wrote in an earlier version may be
+  // carrying our own synthesised states, which would then outrank the layout
+  // table for the rest of the pet's life.
+  const manifest = repairSynthesisedManifest(directory, source, raw);
+  const file = petFileSchema.safeParse(manifest);
   if (!file.success) {
     const first = file.error.issues[0];
     return {
@@ -314,8 +397,19 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     : { basis: 'single-frame' as const, grid: { width: 64, height: 64, columns: 1, rows: 1, fps: 8 } };
 
   const override = petsRepository.getRecord(file.data.id);
-  const grid: FrameGrid = override?.frame ?? file.data.frame ?? inferred.grid;
+  const chosenGrid: FrameGrid = override?.frame ?? file.data.frame ?? inferred.grid;
   const gridBasis: PetGridBasis = override?.frame || file.data.frame ? 'authored' : inferred.basis;
+
+  // The frame rate is derived too, unless somebody actually chose one. A Codex
+  // sheet plays at 260ms a frame; the schema's generic default of 8fps is
+  // nearly twice that and is what a manifest gets when it says nothing.
+  // Read from the repaired manifest, not the raw one: an fps we ourselves wrote
+  // and have just stripped is not a declaration by anybody.
+  const declaresFps = Boolean(override?.frame)
+    || typeof readRecord(readRecord(manifest)?.frame)?.fps === 'number';
+  const grid: FrameGrid = declaresFps || !isCodexGrid(chosenGrid)
+    ? chosenGrid
+    : { ...chosenGrid, fps: CODEX_FPS };
 
   let states: PetStates = override?.states ?? file.data.states
     ?? buildDefaultStates(grid, file.data.spriteVersionNumber);
@@ -449,6 +543,49 @@ function installPet(file: PetFile, spriteBytes: Buffer, spriteFileName: string):
     throw toValidationError('That pet did not match the schema.', definition.error.issues);
   }
 
+  /**
+   * What actually goes on disk: what we were given, never what we worked out.
+   *
+   * The manifest above is validated as a *whole* pet — states and all — because
+   * that is how we check the thing is installable. But writing that back out
+   * would freeze today's derivations into tomorrow's data. It already did:
+   * pets installed before the Codex layout was known carry
+   * `states: {idle: 0-7}` and `fps: 8`, and because an explicit `states` block
+   * legitimately wins over synthesis, those pets could never be fixed by fixing
+   * the synthesis.
+   *
+   * So `states` is written only when the publisher supplied one, the frame only
+   * when it was authored — by the source manifest or by the catalogue's own
+   * validation report — and never with the frame rate, which is ours. The rest
+   * are transcribed facts (a name, an owner, a description), not computed ones,
+   * and those are fine to keep.
+   */
+  const authoredFrame = file.frame;
+  const manifest = {
+    id: definition.data.id,
+    displayName: definition.data.displayName,
+    ...(definition.data.description ? { description: definition.data.description } : {}),
+    ...(definition.data.kind ? { kind: definition.data.kind } : {}),
+    ...(definition.data.author ? { author: definition.data.author } : {}),
+    ...(definition.data.spriteVersionNumber === undefined
+      ? {}
+      : { spriteVersionNumber: definition.data.spriteVersionNumber }),
+    spritesheetPath: definition.data.spritesheetPath,
+    ...(authoredFrame
+      ? {
+        frame: {
+          width: authoredFrame.width,
+          height: authoredFrame.height,
+          columns: authoredFrame.columns,
+          rows: authoredFrame.rows,
+        },
+      }
+      : {}),
+    ...(file.states ? { states: file.states } : {}),
+    ...(definition.data.personality ? { personality: definition.data.personality } : {}),
+    ...(definition.data.voice ? { voice: definition.data.voice } : {}),
+  };
+
   const targetDir = resolveInside(TAILS_PETS_DIR, definition.data.id);
   if (fs.existsSync(targetDir)) {
     throw new AppError(`A pet called "${definition.data.id}" is already installed.`, {
@@ -461,7 +598,7 @@ function installPet(file: PetFile, spriteBytes: Buffer, spriteFileName: string):
   fs.writeFileSync(path.join(targetDir, spriteName.data), spriteBytes);
   fs.writeFileSync(
     path.join(targetDir, PET_MANIFEST_NAME),
-    `${JSON.stringify(definition.data, null, 2)}\n`,
+    `${JSON.stringify(manifest, null, 2)}\n`,
     'utf8',
   );
 

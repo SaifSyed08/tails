@@ -354,6 +354,99 @@ test('the pet library', async (t) => {
       assert.equal(codexSheetRows(2)[0].frames, 7, 'the sheet does not');
     });
 
+    /**
+     * Installing must not write down anything we worked out.
+     *
+     * The installer used to save the whole resolved definition, so the states
+     * it had just synthesised and the frame rate it had just defaulted became
+     * authored data — and since an explicit `states` block correctly beats
+     * synthesis, those pets were pinned to whichever version installed them.
+     * Fixing the layout table could not reach them.
+     *
+     * The check that matters is the **second** read, not the first: at install
+     * time the wrong value and the right value look identical. This installs,
+     * then re-reads, then re-reads again through a full rescan.
+     */
+    await t.test('installs a pet without writing derived values to disk', () => {
+      const sourceDir = path.join(root, 'incoming', 'fresh');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sourceDir, 'pet.json'),
+        JSON.stringify({ id: 'fresh', displayName: 'Fresh', spritesheetPath: 'spritesheet.webp' }),
+      );
+      // A real Codex shape: 1536x1872 is 8x9 cells of 192x208.
+      fs.writeFileSync(path.join(sourceDir, 'spritesheet.webp'), webpHeader(1536, 1872));
+
+      const installed = petsService.importFromPath(sourceDir);
+      assert.equal(Object.keys(installed.definition.states).length, 9);
+
+      const written = JSON.parse(
+        fs.readFileSync(path.join(installed.directory, 'pet.json'), 'utf8'),
+      );
+      assert.equal('states' in written, false, 'synthesised states must not be persisted');
+      assert.equal('frame' in written, false, 'an inferred grid must not be persisted either');
+      assert.deepEqual(Object.keys(written).sort(), ['displayName', 'id', 'spritesheetPath']);
+
+      // Re-read, and re-read after a rescan: the states have to come from the
+      // layout table every time, not from whatever install happened to think.
+      assert.equal(Object.keys(petsService.getPet('fresh').definition.states).length, 9);
+      const rescanned = petsService.listPets().pets.find((pet) => pet.definition.id === 'fresh');
+      assert.equal(Object.keys(rescanned?.definition.states ?? {}).length, 9);
+      assert.deepEqual(rescanned?.definition.states.idle, { start: 0, end: 5, fps: CODEX_FPS });
+      assert.equal(rescanned?.definition.frame.fps, CODEX_FPS, 'the frame rate is derived too');
+    });
+
+    /**
+     * And the pets installed before that was true have to be repaired, because
+     * their manifests already carry the old synthesis.
+     */
+    await t.test('strips an earlier version of our own synthesis from a manifest', () => {
+      const write = (id: string, extra: Record<string, unknown>) => {
+        const directory = path.join(process.env.TAILS_HOME!, 'pets', id);
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, 'pet.json'), JSON.stringify({
+          id,
+          displayName: id,
+          spritesheetPath: 'spritesheet.webp',
+          frame: { width: 192, height: 208, columns: 8, rows: 9, fps: 8 },
+          ...extra,
+        }, null, 2));
+        fs.writeFileSync(path.join(directory, 'spritesheet.webp'), webpHeader(1536, 1872));
+        return path.join(directory, 'pet.json');
+      };
+
+      // Exactly what the old installer produced.
+      const stale = write('stale', { states: { idle: { start: 0, end: 7 } } });
+      // Something a person could have written: a shorter idle and a second state.
+      const authored = write('authored', {
+        states: { idle: { start: 0, end: 3 }, waving: { start: 24, end: 27 } },
+      });
+
+      const library = petsService.listPets();
+
+      const repaired = library.pets.find((pet) => pet.definition.id === 'stale');
+      assert.equal(Object.keys(repaired?.definition.states ?? {}).length, 9, 'the table takes over');
+      assert.deepEqual(repaired?.definition.states.idle, { start: 0, end: 5, fps: CODEX_FPS });
+
+      // The frame rate has to come from the table on the *same* pass that
+      // strips it, not one launch later.
+      assert.equal(repaired?.definition.frame.fps, CODEX_FPS);
+
+      const onDisk = JSON.parse(fs.readFileSync(stale, 'utf8'));
+      assert.equal('states' in onDisk, false, 'the residue is removed from the file');
+      assert.equal('fps' in onDisk.frame, false, 'including the defaulted frame rate');
+      assert.equal(onDisk.frame.columns, 8, 'the rest of the manifest is untouched');
+
+      // Hand-authored work is left exactly alone, file and all.
+      const kept = library.pets.find((pet) => pet.definition.id === 'authored');
+      assert.deepEqual(kept?.definition.states.idle, { start: 0, end: 3 });
+      assert.equal(Object.keys(kept?.definition.states ?? {}).length, 2);
+      assert.deepEqual(
+        JSON.parse(fs.readFileSync(authored, 'utf8')).states,
+        { idle: { start: 0, end: 3 }, waving: { start: 24, end: 27 } },
+      );
+    });
+
     await t.test('names one representative frame, always inside the sheet', () => {
       const pet = petsService.getPet('sonic');
       const lastFrame = pet.definition.frame.columns * pet.definition.frame.rows - 1;
