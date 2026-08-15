@@ -2,6 +2,7 @@ import { query, type CanUseTool, type Options, type PermissionResult } from '@an
 import { randomUUID } from 'node:crypto';
 
 import { sessionsRepository } from '@/db/sessions.repository.js';
+import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appearance/appearance.tools.js';
 import { normalizeSdkMessage } from '@/modules/chat/normalize.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import type { NormalizedMessage, PermissionDecision } from '@/shared/types.js';
@@ -102,12 +103,30 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       // the SDK rather than merging into it, so a bare object would strip PATH
       // and the subprocess would fail to spawn.
       env: { ...process.env } as Record<string, string>,
-      systemPrompt: { type: 'preset', preset: 'claude_code' },
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        // The agent has to be told this capability exists, and told to reach
+        // for the reference presets before inventing a look from nothing.
+        append: [
+          'You can restyle the T.A.I.L.S. interface you are running inside.',
+          'When the user asks for a different look or mood, call mcp__tails-appearance__theme_list first to see the reference presets, then mcp__tails-appearance__theme_preview to show your design, then mcp__tails-appearance__theme_apply once they are happy.',
+          `The current conversation id is ${sessionId}; pass it as sessionId and prefer scope "conversation" unless the user explicitly asks to change their default.`,
+        ].join(' '),
+      },
       tools: { type: 'preset', preset: 'claude_code' },
       // 'project' is required for CLAUDE.md files to load.
       settingSources: ['user', 'project', 'local'],
       // Token-level streaming; without it the UI renders a message at a time.
       includePartialMessages: true,
+      // In-process, so the handlers reach the theme service directly instead of
+      // authenticating back into our own HTTP API.
+      mcpServers: { 'tails-appearance': appearanceMcpServer },
+      // Listing and previewing a look are reversible and visible, so they run
+      // unprompted. `theme_apply` is deliberately not here: changing the app's
+      // permanent appearance should be the user's call, so it falls through to
+      // the permission gate.
+      allowedTools: APPEARANCE_ALLOWED_TOOLS,
       canUseTool: createPermissionGate(sessionId),
       ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
       ...(process.env.TAILS_CLAUDE_PATH

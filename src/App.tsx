@@ -3,8 +3,30 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatView } from '@/components/chat/ChatView';
 import { Intro } from '@/components/intro/Intro';
 import { Sidebar } from '@/components/sidebar/Sidebar';
+import { AppearanceProvider, useAppearance } from '@/contexts/AppearanceContext';
 import { WebSocketProvider } from '@/contexts/WebSocketContext';
 import { api, type SessionListItem } from '@/lib/api';
+
+/**
+ * The "the app is restyling itself" affordance.
+ *
+ * Shown during `preparing`, which is the gap between the agent deciding on a
+ * look and the transition running. A spinner would say "wait"; this says
+ * "watch".
+ */
+function RestylingChip() {
+  const { phase, incomingName } = useAppearance();
+  if (phase === 'idle') return null;
+
+  return (
+    <div className="pointer-events-none fixed left-1/2 top-4 z-40 -translate-x-1/2">
+      <div className="animate-rise-in flex items-center gap-2 rounded-full border border-border bg-card/90 px-3 py-1.5 text-xs shadow-lg backdrop-blur">
+        <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+        Restyling{incomingName ? ` — ${incomingName}` : ''}
+      </div>
+    </div>
+  );
+}
 
 /** Whether the intro has been disabled in settings. */
 const INTRO_DISABLED_KEY = 'tails.introDisabled';
@@ -70,7 +92,9 @@ export default function App() {
 
   return (
     <WebSocketProvider>
+      <AppearanceProvider sessionId={sessionId}>
       {showIntro ? <Intro onDone={() => setShowIntro(false)} /> : null}
+      <RestylingChip />
 
       <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
         <Sidebar
@@ -100,6 +124,7 @@ export default function App() {
           />
         </main>
       </div>
+      </AppearanceProvider>
     </WebSocketProvider>
   );
 }

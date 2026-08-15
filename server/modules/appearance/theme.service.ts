@@ -1,0 +1,245 @@
+import { randomUUID } from 'node:crypto';
+
+import { themesRepository, type StoredTheme, type ThemeScope } from '@/db/themes.repository.js';
+import { deriveTokens } from '@/modules/appearance/derive.js';
+import { serializeStylesheet } from '@/modules/appearance/serialize.js';
+import { THEME_PRESETS, themeSpecSchema, type ThemeSpec } from '@/modules/appearance/theme-spec.js';
+import { appBroadcast } from '@/shared/broadcast.js';
+import { AppError, createMessage } from '@/shared/utils.js';
+
+/**
+ * How many themes one user may keep.
+ *
+ * Rejecting at the cap rather than evicting is deliberate twice over: an agent
+ * in a loop must not be able to fill the database, and a look the user saved
+ * must not disappear because the agent generated eleven variants.
+ */
+const MAX_THEMES = 100;
+
+export type ThemeSummary = {
+  id: string;
+  name: string;
+  summary: string;
+  spec: ThemeSpec;
+  builtIn: boolean;
+};
+
+export type ResolvedAppearance = {
+  themeId: string;
+  name: string;
+  css: string;
+  /** Set when the theme pins a colour mode, disabling the user's toggle. */
+  pinnedMode: 'light' | 'dark' | null;
+  scope: ThemeScope | 'builtin';
+};
+
+/** Built-in presets are addressed as `preset:<id>` so ids never collide with UUIDs. */
+const PRESET_PREFIX = 'preset:';
+
+const readPresetSpec = (themeId: string): ThemeSpec | null => {
+  if (!themeId.startsWith(PRESET_PREFIX)) return null;
+  return THEME_PRESETS[themeId.slice(PRESET_PREFIX.length)] ?? null;
+};
+
+/** Formats validation failures the way the widget schema does: dotted paths. */
+const toValidationError = (issues: { path: PropertyKey[]; message: string }[]): AppError =>
+  new AppError('The theme did not match the schema.', {
+    code: 'THEME_INVALID',
+    statusCode: 422,
+    details: issues.map((issue) => ({
+      path: issue.path.map(String).join('.') || 'root',
+      message: issue.message,
+    })),
+  });
+
+export const themeService = {
+  /** Built-in presets plus the user's saved themes. */
+  listThemes(): ThemeSummary[] {
+    const presets: ThemeSummary[] = Object.entries(THEME_PRESETS).map(([id, spec]) => ({
+      id: `${PRESET_PREFIX}${id}`,
+      name: spec.name,
+      summary: spec.summary,
+      spec,
+      builtIn: true,
+    }));
+
+    const saved: ThemeSummary[] = themesRepository.listThemes().map((theme) => ({
+      id: theme.id,
+      name: theme.name,
+      summary: theme.summary ?? '',
+      spec: theme.spec,
+      builtIn: false,
+    }));
+
+    return [...presets, ...saved];
+  },
+
+  /**
+   * Validates and derives a spec without storing anything.
+   *
+   * The preview path. Returns the stylesheet so the caller can apply it
+   * immediately and the contrast report so the model learns what was adjusted.
+   */
+  compile(rawSpec: unknown) {
+    const parsed = themeSpecSchema.safeParse(rawSpec);
+    if (!parsed.success) throw toValidationError(parsed.error.issues);
+
+    const derived = deriveTokens(parsed.data);
+    return {
+      spec: parsed.data,
+      derived,
+      css: serializeStylesheet(derived),
+      contrast: {
+        minRatio: Math.round(derived.minRatio * 100) / 100,
+        adjusted: derived.adjusted,
+      },
+    };
+  },
+
+  /**
+   * Shows a theme without storing or binding it.
+   *
+   * The ephemeral layer, above every persisted binding: it lives only in the
+   * renderer and disappears on reload. This is what makes "let me try
+   * something" free — nothing to undo, nothing to clean up.
+   */
+  previewTheme(rawSpec: unknown, sessionId = '') {
+    const compiled = this.compile(rawSpec);
+
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'theme',
+        scope: 'preview',
+        scopeKey: sessionId,
+        themeId: 'preview',
+        name: compiled.spec.name,
+        css: compiled.css,
+        pinnedMode: compiled.spec.mode === 'adaptive' ? null : compiled.spec.mode,
+      },
+    }));
+
+    return compiled;
+  },
+
+  /** Stores a theme, returning it with its derived tokens. */
+  saveTheme(rawSpec: unknown, origin: 'generated' | 'saved' = 'generated'): StoredTheme {
+    const { spec, derived } = this.compile(rawSpec);
+
+    if (themesRepository.countThemes() >= MAX_THEMES) {
+      throw new AppError(
+        `You already have ${MAX_THEMES} saved looks. Delete one before saving another.`,
+        { code: 'THEME_LIMIT_REACHED', statusCode: 409 },
+      );
+    }
+
+    return themesRepository.saveTheme({ id: randomUUID(), spec, tokens: derived, origin });
+  },
+
+  /**
+   * Binds a theme to a scope and tells every open window.
+   *
+   * The broadcast rather than the return value is the delivery mechanism, so
+   * the settings UI, the agent tool, and a preset click all travel the same
+   * path and cannot drift apart.
+   */
+  applyTheme(themeId: string, scope: ThemeScope, scopeKey = ''): ResolvedAppearance {
+    // Resolve before binding so a bad id fails loudly instead of leaving a
+    // dangling binding that silently falls through to the default.
+    const resolved = this.resolveThemeId(themeId, scope);
+    themesRepository.setBinding(scope, scopeKey, themeId);
+
+    appBroadcast.publish(createMessage('appearance_changed', scopeKey, {
+      // Spread first so the explicit binding scope wins over the resolved one.
+      appearance: { ...resolved, layer: 'theme', scope, scopeKey },
+    }));
+
+    return resolved;
+  },
+
+  /** Turns a theme id into renderable CSS, whether it is a preset or saved. */
+  resolveThemeId(themeId: string, scope: ThemeScope | 'builtin' = 'global'): ResolvedAppearance {
+    const presetSpec = readPresetSpec(themeId);
+    if (presetSpec) {
+      const derived = deriveTokens(presetSpec);
+      return {
+        themeId,
+        name: presetSpec.name,
+        css: serializeStylesheet(derived),
+        pinnedMode: presetSpec.mode === 'adaptive' ? null : presetSpec.mode,
+        scope,
+      };
+    }
+
+    const stored = themesRepository.getTheme(themeId);
+    if (!stored) {
+      throw new AppError('That look no longer exists.', { code: 'THEME_NOT_FOUND', statusCode: 404 });
+    }
+
+    return {
+      themeId,
+      name: stored.name,
+      // Rendered from the cached tokens, not re-derived, so a schema change
+      // never retroactively restyles something the user saved.
+      css: serializeStylesheet(stored.tokens),
+      pinnedMode: stored.spec.mode === 'adaptive' ? null : stored.spec.mode,
+      scope,
+    };
+  },
+
+  /**
+   * The precedence ladder: session binding, then global, then the built-in base.
+   *
+   * A deleted theme falls through rather than erroring — the conversation must
+   * still open — and its orphaned binding is swept on the way past.
+   */
+  resolveAppearance(sessionId?: string): ResolvedAppearance | null {
+    const candidates: { scope: ThemeScope; key: string }[] = [
+      ...(sessionId ? [{ scope: 'session' as const, key: sessionId }] : []),
+      { scope: 'global' as const, key: '' },
+    ];
+
+    for (const candidate of candidates) {
+      const themeId = themesRepository.getBinding(candidate.scope, candidate.key);
+      if (!themeId) continue;
+
+      try {
+        return this.resolveThemeId(themeId, candidate.scope);
+      } catch {
+        themesRepository.clearBinding(candidate.scope, candidate.key);
+      }
+    }
+
+    // Nothing bound: the stylesheet in index.css is the floor, and needs no
+    // override to be correct.
+    return null;
+  },
+
+  /**
+   * Removes a binding and tells the windows what to fall back to.
+   *
+   * An empty `css` is the signal to drop the override entirely and let the
+   * built-in stylesheet show through — the floor needs no rules of its own.
+   */
+  unbind(scope: ThemeScope, scopeKey = ''): void {
+    themesRepository.clearBinding(scope, scopeKey);
+    const fallback = this.resolveAppearance();
+
+    appBroadcast.publish(createMessage('appearance_changed', scopeKey, {
+      appearance: {
+        ...(fallback ?? {
+          themeId: 'builtin', name: 'Default', css: '', pinnedMode: null, scope: 'builtin' as const,
+        }),
+        layer: 'theme',
+        scope,
+        scopeKey,
+      },
+    }));
+  },
+
+  deleteTheme(themeId: string): { id: string } {
+    if (!themesRepository.deleteTheme(themeId)) {
+      throw new AppError('That look no longer exists.', { code: 'THEME_NOT_FOUND', statusCode: 404 });
+    }
+    return { id: themeId };
+  },
+};

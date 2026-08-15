@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { getConnection } from '@/db/connection.js';
+import { createAppearanceRouter } from '@/modules/appearance/appearance.routes.js';
 import { attachChatGateway } from '@/modules/chat/chat-gateway.js';
 import { createSessionsRouter } from '@/modules/sessions/sessions.routes.js';
 import { AppError } from '@/shared/utils.js';
@@ -26,6 +27,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/sessions', createSessionsRouter());
+app.use('/api/appearance', createAppearanceRouter());
 
 // In production the built client is served from the same origin, so the app
 // and its API share cookies, websockets, and CSP with no special casing.

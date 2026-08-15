@@ -4,6 +4,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { resolvePermission, runChatTurn } from '@/modules/chat/claude-runtime.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
+import { appBroadcast } from '@/shared/broadcast.js';
 import type { ClientMessage, NormalizedMessage } from '@/shared/types.js';
 import { createMessage, readRecord, readString } from '@/shared/utils.js';
 
@@ -74,12 +75,17 @@ export function attachChatGateway(server: Server): WebSocketServer {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const sockets = new Set<WebSocket>();
 
-  runRegistry.subscribe((event) => {
+  const broadcastToAll = (event: NormalizedMessage) => {
     const payload = JSON.stringify(event);
     for (const socket of sockets) {
       if (socket.readyState === socket.OPEN) socket.send(payload);
     }
-  });
+  };
+
+  runRegistry.subscribe(broadcastToAll);
+  // App-wide events — an appearance change — reach every open window, which is
+  // what lets a restyle apply to the settings window and the chat at once.
+  appBroadcast.subscribe(broadcastToAll);
 
   wss.on('connection', (socket) => {
     sockets.add(socket);

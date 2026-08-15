@@ -1,0 +1,114 @@
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+
+import { useWebSocket } from '@/contexts/WebSocketContext';
+import { applyTheme, type AppearancePayload } from '@/theme/applyTheme';
+
+/** What the app is doing about its own appearance right now. */
+export type AppearancePhase = 'idle' | 'preparing' | 'applying';
+
+type AppearanceApi = {
+  phase: AppearancePhase;
+  /** Name of the look being applied, for the in-chat affordance. */
+  incomingName: string | null;
+};
+
+const AppearanceContext = createContext<AppearanceApi>({ phase: 'idle', incomingName: null });
+
+type AppearanceProviderProps = {
+  sessionId: string | null;
+  children: React.ReactNode;
+};
+
+/**
+ * Applies theme changes pushed from the server.
+ *
+ * Two phases, because the point is that the app visibly answers the user
+ * rather than silently mutating. `preparing` starts the moment a change is
+ * announced and covers font loading; `applying` is the transition itself.
+ */
+export function AppearanceProvider({ sessionId, children }: AppearanceProviderProps) {
+  const { subscribe } = useWebSocket();
+  const [phase, setPhase] = useState<AppearancePhase>('idle');
+  const [incomingName, setIncomingName] = useState<string | null>(null);
+
+  // Guards against two overlapping transitions, which is the main source of a
+  // theme change that feels janky rather than deliberate.
+  const applyingRef = useRef(false);
+  const queuedRef = useRef<AppearancePayload | null>(null);
+
+  useEffect(() => {
+    const run = async (payload: AppearancePayload) => {
+      if (applyingRef.current) {
+        // Keep only the newest; superseded looks are never worth showing.
+        queuedRef.current = payload;
+        return;
+      }
+
+      applyingRef.current = true;
+      setIncomingName(payload.name);
+      setPhase('preparing');
+
+      // A beat on `preparing` so the affordance is perceivable even when fonts
+      // are already cached; without it the phase flickers past unseen.
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      setPhase('applying');
+      await applyTheme(payload);
+
+      setPhase('idle');
+      setIncomingName(null);
+      applyingRef.current = false;
+
+      const queued = queuedRef.current;
+      queuedRef.current = null;
+      if (queued) void run(queued);
+    };
+
+    return subscribe((message) => {
+      if (message.kind !== 'appearance_changed') return;
+
+      const payload = message.appearance as (AppearancePayload & {
+        layer?: string;
+        scope?: string;
+        scopeKey?: string;
+      }) | undefined;
+      if (!payload || payload.layer !== 'theme') return;
+
+      // A conversation-scoped change belongs only to that conversation's
+      // window; a global one applies everywhere.
+      const isForThisWindow = payload.scope !== 'session'
+        || !payload.scopeKey
+        || payload.scopeKey === sessionId;
+      if (!isForThisWindow) return;
+
+      void run(payload);
+    });
+  }, [subscribe, sessionId]);
+
+  // Resolve the persisted look on mount and whenever the conversation changes,
+  // so reopening a chat restores the appearance it was given.
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetch(`/api/appearance/resolve${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((resolved: AppearancePayload | null) => {
+        if (cancelled || !resolved?.css) return;
+        void applyTheme(resolved);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  return (
+    <AppearanceContext.Provider value={{ phase, incomingName }}>
+      {children}
+    </AppearanceContext.Provider>
+  );
+}
+
+export function useAppearance(): AppearanceApi {
+  return useContext(AppearanceContext);
+}
