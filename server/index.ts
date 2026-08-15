@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { getConnection } from '@/db/connection.js';
 import { createAppearanceRouter } from '@/modules/appearance/appearance.routes.js';
 import { attachChatGateway } from '@/modules/chat/chat-gateway.js';
+import { createPetsRouter } from '@/modules/pets/index.js';
 import { createSessionsRouter } from '@/modules/sessions/sessions.routes.js';
+import { attachTerminalGateway } from '@/modules/terminal/terminal-gateway.js';
 import { AppError } from '@/shared/utils.js';
 
 const PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
@@ -50,6 +52,7 @@ app.get('/health', (_req, res) => {
 
 app.use('/api/sessions', createSessionsRouter());
 app.use('/api/appearance', createAppearanceRouter());
+app.use('/api/pets', createPetsRouter());
 
 // In production the built client is served from the same origin, so the app
 // and its API share cookies, websockets, and CSP with no special casing.
@@ -97,6 +100,7 @@ app.use((
 
 const server = http.createServer(app);
 attachChatGateway(server);
+attachTerminalGateway(server);
 
 getConnection();
 

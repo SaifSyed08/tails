@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { sessionsRepository } from '@/db/sessions.repository.js';
 import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appearance/appearance.tools.js';
+import { expandLocalCommand } from '@/modules/chat/commands.service.js';
 import { normalizeSdkMessage } from '@/modules/chat/normalize.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import type { AskUserQuestion, NormalizedMessage, PermissionDecision } from '@/shared/types.js';
@@ -92,10 +93,22 @@ export function resolvePermission(requestId: string, decision: PermissionDecisio
   return true;
 }
 
+/**
+ * The permission modes exposed in the UI.
+ *
+ * Deliberately a subset of the SDK's set. `bypassPermissions` and `dontAsk`
+ * are omitted because both resolve permissions *before* `canUseTool` fires,
+ * which would silently stop questions and plans reaching the user — the exact
+ * failure this app just finished fixing.
+ */
+export const SELECTABLE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan'] as const;
+export type SelectablePermissionMode = typeof SELECTABLE_PERMISSION_MODES[number];
+
 type RunChatTurnInput = {
   sessionId: string;
   prompt: string;
   cwd: string;
+  permissionMode?: SelectablePermissionMode;
 };
 
 /**
@@ -107,7 +120,7 @@ type RunChatTurnInput = {
  * the run terminates with a `complete` no matter how it ends.
  */
 export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
-  const { sessionId, prompt, cwd } = input;
+  const { sessionId, prompt, cwd, permissionMode } = input;
 
   const session = sessionsRepository.getSession(sessionId);
   if (!session) {
@@ -129,9 +142,11 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   const send = (message: NormalizedMessage) => runRegistry.record(sessionId, message);
   let exitCode = 0;
 
-  // Echo the user's own message into the sequenced stream so a reconnecting
-  // client replays the full exchange, not just the reply.
+  // Echo what the user actually typed, not the expanded form — seeing
+  // `/personalize` turn into a paragraph of instructions in your own
+  // transcript is disorienting.
   send(createMessage('text', sessionId, { role: 'user', content: prompt }));
+  const modelPrompt = expandLocalCommand(prompt);
 
   try {
     const options: Options = {
@@ -165,6 +180,9 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       // permanent appearance should be the user's call, so it falls through to
       // the permission gate.
       allowedTools: APPEARANCE_ALLOWED_TOOLS,
+      // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
+      // each turn, so any live mode change would be discarded anyway.
+      ...(permissionMode ? { permissionMode } : {}),
       canUseTool: createPermissionGate(sessionId),
       ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
       ...(process.env.TAILS_CLAUDE_PATH
@@ -172,7 +190,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         : {}),
     };
 
-    const instance = query({ prompt, options });
+    const instance = query({ prompt: modelPrompt, options });
 
     for await (const message of instance) {
       const event = readRecord(message);

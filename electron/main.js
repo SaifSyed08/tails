@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, Menu, nativeImage, shell } from 'electron';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -120,6 +120,29 @@ function createSplash() {
   void splashWindow.loadFile(path.join(APP_ROOT, 'electron', 'splash', 'index.html'));
 }
 
+/**
+ * Wipes any generated theme, from the main process.
+ *
+ * The recovery path has to live outside the themed document. A stylesheet can
+ * hide a button, invert two buttons, or lay a transparent overlay over one —
+ * but it cannot intercept a keystroke, and it cannot reach into another
+ * process. So the panic key is handled here and the reset works by *deleting*
+ * the sheet rather than trying to out-specify it, because specificity and
+ * `!important` are games the theme can play too.
+ */
+const PANIC_RESET_SCRIPT = `(() => {
+  document.adoptedStyleSheets = [];
+  document.getElementById('tails-theme-preboot')?.remove();
+  document.getElementById('tails-theme')?.remove();
+  try { localStorage.removeItem('tails.themeCss'); } catch {}
+  fetch('/api/appearance/unbind', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scope: 'global' }),
+  }).catch(() => {});
+  return true;
+})()`;
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -130,13 +153,40 @@ function createMainWindow() {
     // Matches the app's dark `--background`, so there is no white flash between
     // the window appearing and the first paint.
     backgroundColor: '#0f0f11',
-    titleBarStyle: 'hiddenInset',
+    icon: readAppIcon(),
+    // No OS title bar. The app draws its own header instead, so nothing looks
+    // like stock Windows chrome bolted onto the UI. On Windows/Linux the
+    // caption buttons are kept as a themable overlay rather than reimplemented,
+    // because hand-rolled window controls never quite behave correctly (snap
+    // layouts, double-click-to-maximise, accessibility).
+    titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 14, y: 14 } }
+      : {
+        titleBarOverlay: {
+          color: '#00000000',
+          symbolColor: '#a1a1aa',
+          height: 44,
+        },
+      }),
     webPreferences: {
       preload: path.join(APP_ROOT, 'electron', 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
     },
+  });
+
+  // Fires in the main process before the page sees the event, so a theme
+  // cannot swallow it.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const isPanic = input.type === 'keyDown'
+      && input.control && input.alt && input.shift
+      && input.key.toLowerCase() === 't';
+    if (!isPanic) return;
+
+    event.preventDefault();
+    void mainWindow?.webContents.executeJavaScript(PANIC_RESET_SCRIPT).catch(() => {});
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -161,9 +211,62 @@ function createMainWindow() {
   void mainWindow.loadURL(APP_URL);
 }
 
+/**
+ * Loads the app icon, tolerating its absence.
+ *
+ * Without this Electron ships its own default icon, which is the "outdated
+ * React logo" in the taskbar and Alt-Tab.
+ */
+function readAppIcon() {
+  const iconPath = path.join(APP_ROOT, 'electron', 'assets', 'icon.png');
+  const icon = nativeImage.createFromPath(iconPath);
+  return icon.isEmpty() ? undefined : icon;
+}
+
+/**
+ * Replaces the default application menu.
+ *
+ * The stock menu is where File/Edit/View comes from, and it looks like a
+ * Windows 10 app bolted to the top of the UI. On macOS a menu is mandatory, so
+ * a minimal one is kept there; elsewhere it is removed entirely. Either way the
+ * appearance reset gets an accelerator, since the OS menu is chrome a theme can
+ * never restyle.
+ */
+function installApplicationMenu() {
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Reset appearance',
+          accelerator: 'CmdOrCtrl+Alt+Shift+T',
+          click: () => void mainWindow?.webContents.executeJavaScript(PANIC_RESET_SCRIPT).catch(() => {}),
+        },
+        { type: 'separator' },
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    { role: 'windowMenu' },
+  ]));
+}
+
 async function bootstrap() {
   await app.whenReady();
 
+  installApplicationMenu();
   createSplash();
 
   try {

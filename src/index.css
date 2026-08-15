@@ -116,6 +116,115 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
+
+  /**
+   * Themed scrollbars.
+   *
+   * The stock Chromium scrollbar is the single most obvious "this is a web page
+   * in a window" tell, and it ignores the theme entirely. Styled through the
+   * same tokens as everything else so a generated theme moves it too.
+   */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.28);
+    border-radius: 999px;
+    /* Transparent border + background-clip insets the thumb without needing a
+       track colour, so it reads as floating rather than as a channel. */
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.45);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Firefox equivalent, harmless in Chromium. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.28) transparent;
+  }
+}
+
+@layer components {
+  /**
+   * Markdown rendered by the assistant.
+   *
+   * This class was referenced by the chat view long before it existed, so every
+   * code block was falling back to browser-default `<pre>` styling. Defined
+   * here in terms of tokens rather than as a Tailwind typography plugin so a
+   * generated theme restyles assistant output along with everything else.
+   */
+  .prose-tails {
+    @apply text-[0.9375rem] leading-relaxed;
+  }
+
+  .prose-tails > * + * {
+    @apply mt-3;
+  }
+
+  .prose-tails h1 { @apply font-display text-lg font-semibold tracking-tight; }
+  .prose-tails h2 { @apply font-display text-base font-semibold tracking-tight; }
+  .prose-tails h3 { @apply text-sm font-semibold; }
+
+  .prose-tails p { @apply whitespace-pre-wrap; }
+
+  .prose-tails a {
+    @apply text-primary underline underline-offset-2;
+  }
+
+  .prose-tails ul { @apply list-disc space-y-1 pl-5; }
+  .prose-tails ol { @apply list-decimal space-y-1 pl-5; }
+
+  .prose-tails blockquote {
+    @apply border-l-2 border-border pl-3 text-muted-foreground;
+  }
+
+  .prose-tails code {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.8125em];
+  }
+
+  .prose-tails pre {
+    @apply overflow-x-auto rounded-lg border border-border bg-muted/60 p-3;
+  }
+
+  /* A fenced block already has padding from its `pre`; the inner `code` must
+     not add a second background on top of it. */
+  .prose-tails pre code {
+    @apply bg-transparent p-0 text-xs;
+  }
+
+  .prose-tails table {
+    @apply w-full border-collapse text-sm;
+  }
+
+  .prose-tails th,
+  .prose-tails td {
+    @apply border-b border-border px-2 py-1 text-left align-top;
+  }
+
+  .prose-tails hr { @apply border-border; }
+
+  /**
+   * Window-drag regions.
+   *
+   * With the OS title bar hidden the app has to declare its own drag surface,
+   * and every interactive control inside it has to opt back out or it becomes
+   * unclickable.
+   */
+  .app-drag { -webkit-app-region: drag; }
+  .app-no-drag { -webkit-app-region: no-drag; }
 }
 
 @layer utilities {

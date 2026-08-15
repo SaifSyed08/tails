@@ -1,14 +1,15 @@
-import { ArrowUp, Brain, Square } from 'lucide-react';
+import { Brain } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { Composer, type PermissionMode } from '@/components/chat/Composer';
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
 import { PlanCard } from '@/components/chat/PlanCard';
 import { QuestionCard } from '@/components/chat/QuestionCard';
+import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
-import { cn } from '@/lib/utils';
 import { Reveal } from '@/shared/ui/Motion';
 import type { ChatRow } from '@/types/chat';
 
@@ -85,9 +86,11 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     rows, busy, pendingPermissions, pendingPrompts, error,
     sendMessage, abort, answerPermission, answerQuestion, answerPlan,
   } = useChatSession(sessionId);
-  const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true);
+  // Per-conversation rather than global: "plan first" is usually something you
+  // want for one piece of work, not as a standing preference.
+  const [mode, setMode] = useState<PermissionMode>('default');
 
   // Follow the stream only while the user is already at the bottom; yanking
   // them down while they're reading earlier output is the classic chat-UI sin.
@@ -104,13 +107,10 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     pinnedToBottomRef.current = distanceFromBottom < 80;
   };
 
-  const submit = () => {
-    const content = draft.trim();
-    if (!content || busy) return;
-    setDraft('');
+  const submit = (content: string) => {
     pinnedToBottomRef.current = true;
     onFirstMessage?.(content);
-    sendMessage(content, cwd);
+    sendMessage(content, cwd, mode);
   };
 
   return (
@@ -135,6 +135,10 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
           {rows.map((row) => (
             <Row key={row.id} row={row} />
           ))}
+
+          {/* Only while nothing is streaming — once tokens are arriving the
+              text itself is the progress indicator. */}
+          {busy && rows[rows.length - 1]?.type !== 'assistant' ? <ThinkingIndicator /> : null}
 
           {error ? (
             <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -171,49 +175,16 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
               onAnswer={answerPermission}
             />
           ))}
-
-          <div className="flex items-end gap-2 rounded-2xl border border-border bg-card p-2 transition-shadow duration-quick ease-standard focus-within:ring-2 focus-within:ring-ring">
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              rows={1}
-              placeholder="Ask T.A.I.L.S. anything…"
-              aria-label="Message"
-              className="max-h-48 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
-            />
-            {busy ? (
-              <button
-                type="button"
-                onClick={abort}
-                aria-label="Stop"
-                className="rounded-lg bg-muted p-2 text-muted-foreground transition-colors duration-quick hover:bg-accent"
-              >
-                <Square className="size-4" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={!draft.trim()}
-                aria-label="Send"
-                className={cn(
-                  'rounded-lg p-2 transition-transform duration-instant ease-emphasis active:scale-95',
-                  draft.trim()
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-muted-foreground',
-                )}
-              >
-                <ArrowUp className="size-4" />
-              </button>
-            )}
-          </div>
         </div>
+
+        <Composer
+          sessionId={sessionId}
+          busy={busy}
+          mode={mode}
+          onModeChange={setMode}
+          onSend={submit}
+          onAbort={abort}
+        />
       </div>
     </div>
   );

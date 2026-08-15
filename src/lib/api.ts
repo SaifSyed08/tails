@@ -55,6 +55,21 @@ export const api = {
   deleteSession: (sessionId: string) =>
     request<{ id: string }>(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
 
+  listCommands: (sessionId: string) =>
+    request<SlashCommand[]>(`/sessions/${encodeURIComponent(sessionId)}/commands`),
+
+  renameSession: (sessionId: string, title: string) =>
+    request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+
+  setSessionCwd: (sessionId: string, cwd: string) =>
+    request<ChatSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ cwd }),
+    }),
+
   listThemes: () => request<ThemeSummary[]>('/appearance/themes'),
 
   /** Shows a look without saving or binding it. Reverted by re-resolving. */
@@ -84,6 +99,14 @@ export const api = {
 
   deleteTheme: (themeId: string) =>
     request<{ id: string }>(`/appearance/themes/${encodeURIComponent(themeId)}`, { method: 'DELETE' }),
+};
+
+export type SlashCommand = {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  /** True for commands T.A.I.L.S. adds rather than Claude Code's own. */
+  local: boolean;
 };
 
 export type ThemeSummary = {

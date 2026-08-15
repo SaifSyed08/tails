@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { listSlashCommands } from '@/modules/chat/commands.service.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { readString } from '@/shared/utils.js';
 
@@ -42,10 +43,17 @@ export function createSessionsRouter(): express.Router {
     readString(req.body?.lastActivityAt) ?? undefined,
   )));
 
-  router.patch('/:sessionId', respond((req) => sessionsService.renameSession(
-    String(req.params.sessionId),
-    readString(req.body?.title) ?? 'Untitled',
-  )));
+  router.patch('/:sessionId', respond((req) => {
+    const sessionId = String(req.params.sessionId);
+    const cwd = readString(req.body?.cwd);
+    if (cwd) return sessionsService.setWorkingDirectory(sessionId, cwd);
+    return sessionsService.renameSession(sessionId, readString(req.body?.title) ?? 'Untitled');
+  }));
+
+  router.get('/:sessionId/commands', respond(async (req) => {
+    const session = sessionsService.getSession(String(req.params.sessionId));
+    return listSlashCommands(session.cwd);
+  }));
 
   router.delete('/:sessionId', respond((req) => sessionsService.deleteSession(
     String(req.params.sessionId),

@@ -99,6 +99,16 @@ export const sessionsRepository = {
       .run(providerSessionId, id);
   },
 
+  /**
+   * Repoints a conversation at a different folder.
+   *
+   * Deliberately does not touch `updated_at`: changing where a chat runs is not
+   * a new message, and bumping it would reorder the sidebar for a non-event.
+   */
+  setCwd(id: string, cwd: string): void {
+    getConnection().prepare('UPDATE sessions SET cwd = ? WHERE id = ?').run(cwd, id);
+  },
+
   renameSession(id: string, title: string): void {
     getConnection()
       .prepare('UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')

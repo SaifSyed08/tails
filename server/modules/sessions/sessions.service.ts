@@ -1,5 +1,8 @@
 import { getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { sessionsRepository } from '@/db/sessions.repository.js';
 import { normalizeSdkMessage } from '@/modules/chat/normalize.js';
@@ -33,7 +36,7 @@ export const sessionsService = {
     return sessionsRepository.createSession({
       id: randomUUID(),
       title: input.title ? deriveTitle(input.title) : 'New chat',
-      cwd: input.cwd || process.cwd(),
+      cwd: input.cwd || os.homedir(),
     });
   },
 
@@ -51,7 +54,7 @@ export const sessionsService = {
     return sessionsRepository.createSession({
       id: sessionId,
       title: input.title ? deriveTitle(input.title) : 'New chat',
-      cwd: input.cwd || process.cwd(),
+      cwd: input.cwd || os.homedir(),
     });
   },
 
@@ -166,6 +169,33 @@ export const sessionsService = {
     this.getSession(sessionId);
     sessionsRepository.renameSession(sessionId, deriveTitle(title));
     return this.getSession(sessionId);
+  },
+
+  /**
+   * Changes the folder a conversation runs in.
+   *
+   * Validated here rather than in the route because a non-existent path would
+   * otherwise surface much later, as an opaque spawn failure from the agent
+   * subprocess.
+   */
+  setWorkingDirectory(sessionId: string, cwd: string): ChatSession {
+    this.getSession(sessionId);
+
+    const resolved = path.resolve(cwd);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+      throw new AppError('That folder does not exist.', {
+        code: 'CWD_NOT_FOUND',
+        statusCode: 400,
+      });
+    }
+
+    sessionsRepository.setCwd(sessionId, resolved);
+    return this.getSession(sessionId);
+  },
+
+  /** The folder a brand-new conversation should start in. */
+  defaultWorkingDirectory(): string {
+    return os.homedir();
   },
 
   deleteSession(sessionId: string): { id: string } {

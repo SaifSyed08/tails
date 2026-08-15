@@ -118,7 +118,14 @@ export type SessionListItem = {
  * this set small is what makes the reconnect story tractable.
  */
 export type ClientMessage =
-  | { type: 'chat.send'; sessionId: string; content: string; cwd?: string }
+  | {
+    type: 'chat.send';
+    sessionId: string;
+    content: string;
+    cwd?: string;
+    /** 'default' | 'acceptEdits' | 'plan'; validated by the runtime. */
+    permissionMode?: string;
+  }
   | { type: 'chat.abort'; sessionId: string }
   | { type: 'chat.subscribe'; sessions: { sessionId: string; lastSeq?: number }[] }
   | {

@@ -270,10 +270,10 @@ export function useChatSession(sessionId: string | null) {
     setState((current) => ({ ...current, rows }));
   }, [history, realtime, streamingText]);
 
-  const sendMessage = useCallback((content: string, cwd?: string) => {
+  const sendMessage = useCallback((content: string, cwd?: string, permissionMode?: string) => {
     if (!sessionId || !content.trim()) return;
     setState((current) => ({ ...current, busy: true, error: null }));
-    send({ type: 'chat.send', sessionId, content, cwd });
+    send({ type: 'chat.send', sessionId, content, cwd, permissionMode });
   }, [sessionId, send]);
 
   const abort = useCallback(() => {

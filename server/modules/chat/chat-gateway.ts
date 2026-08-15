@@ -1,7 +1,11 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { resolvePermission, runChatTurn } from '@/modules/chat/claude-runtime.js';
+import {
+  resolvePermission,
+  runChatTurn,
+  SELECTABLE_PERMISSION_MODES,
+} from '@/modules/chat/claude-runtime.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { appBroadcast } from '@/shared/broadcast.js';
@@ -30,7 +34,13 @@ function parseClientMessage(raw: string): ClientMessage | null {
       const sessionId = readString(message.sessionId);
       const content = typeof message.content === 'string' ? message.content : '';
       if (!sessionId || !content.trim()) return null;
-      return { type: 'chat.send', sessionId, content, cwd: readString(message.cwd) ?? undefined };
+      return {
+        type: 'chat.send',
+        sessionId,
+        content,
+        cwd: readString(message.cwd) ?? undefined,
+        permissionMode: readString(message.permissionMode) ?? undefined,
+      };
     }
     case 'chat.abort': {
       const sessionId = readString(message.sessionId);
@@ -207,7 +217,15 @@ async function handleSend(
     // The runtime owns the whole run, including echoing the user's own message
     // into the sequenced stream — starting the run here too would make its
     // `startRun` return null and the turn would never execute.
-    await runChatTurn({ sessionId: session.id, prompt: message.content, cwd: session.cwd });
+    // An unrecognised mode falls through to the SDK default rather than
+    // erroring, so a stale client cannot break a send.
+    const mode = SELECTABLE_PERMISSION_MODES.find((entry) => entry === message.permissionMode);
+    await runChatTurn({
+      sessionId: session.id,
+      prompt: message.content,
+      cwd: session.cwd,
+      permissionMode: mode,
+    });
   } catch (error) {
     send(createMessage('error', message.sessionId, {
       errorCode: 'send_failed',
