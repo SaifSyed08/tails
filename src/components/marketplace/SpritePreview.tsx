@@ -5,7 +5,6 @@ import { useReducedMotion } from '@/shared/ui/Motion';
 
 import type { FrameGrid, FrameRange } from './marketplace-api';
 import { resolveCellBox } from './sprite-geometry';
-import { usePlayableRange } from './sprite-usage';
 
 /**
  * The keyframes every sprite preview shares.
@@ -46,15 +45,6 @@ type SpritePreviewProps = {
    * mirrors it, which is what a pet being dragged leftwards needs.
    */
   facing?: 'right' | 'left';
-  /**
-   * Whether to stop at the last cell that holds artwork.
-   *
-   * On by default: Codex rows are ragged, so a range covering a whole row
-   * usually ends in empty cells and playing them is a visible hole in the loop.
-   * The frame editor turns it off, because there the blank cells are the thing
-   * being diagnosed and hiding them would hide the problem.
-   */
-  trimBlankFrames?: boolean;
   className?: string;
 };
 
@@ -78,10 +68,13 @@ const clamp = (value: number, low: number, high: number) =>
  * way and plays approximately; `describeRangeFit` reports that so the editor
  * can say so rather than leaving the user to wonder.
  *
- * Two things here exist purely to stop the loop showing a cell it should not:
- * the `jump-none` timing (see the comment on the custom properties below) and
- * `trimBlankFrames`, which drops the empty padding at the end of a ragged row.
- * Together they are the fix for pets vanishing for one frame per loop.
+ * It plays exactly the range it is given and trims nothing: which frames are
+ * worth playing is decided once, on the server, from a measurement any renderer
+ * can post back (`sprite-usage.ts`). Callers should pass `pet.playable[state]`,
+ * which `PetSprite` does for them. What this *does* guarantee is that the loop
+ * never addresses a cell outside that range — see the `jump-none` note on the
+ * custom properties below, which is the other half of the fix for pets
+ * vanishing for one frame per loop.
  */
 export function SpritePreview({
   spriteUrl,
@@ -90,7 +83,6 @@ export function SpritePreview({
   height = 96,
   paused = false,
   facing = 'right',
-  trimBlankFrames = true,
   className,
 }: SpritePreviewProps) {
   const reduced = useReducedMotion();
@@ -102,7 +94,7 @@ export function SpritePreview({
     fps: range?.fps,
   };
 
-  const played = usePlayableRange(spriteUrl, grid, requested, trimBlankFrames);
+  const played = requested;
   const start = played.start;
   const end = played.end;
   const frameCount = end - start + 1;

@@ -20,6 +20,7 @@ import { Reveal } from '@/shared/ui/Motion';
 import { readStaggerDelay } from '@/theme/motion';
 
 import { CataloguePreview } from './CataloguePreview';
+import { PetGlow } from './PetGlow';
 import type { CatalogueEntry, CataloguePage } from './marketplace-api';
 import { endPetDrag, startPetDrag } from './pet-drag';
 import { Pill } from './Pill';
@@ -134,16 +135,9 @@ function CatalogueCard({
       )}
     >
       <div className="relative flex h-28 items-center justify-center bg-gradient-to-b from-muted/70 to-transparent">
-        {/* The same stage lighting the installed cards use, so the two shelves
-            respond to the pointer identically. */}
-        <div
-          aria-hidden="true"
-          className={cn(
-            'pointer-events-none absolute inset-0 transition-opacity duration-settle ease-standard',
-            'bg-[radial-gradient(60%_55%_at_50%_60%,hsl(var(--primary)/0.28),transparent_70%)]',
-            hovered ? 'opacity-100' : 'opacity-0',
-          )}
-        />
+        {/* The same component the installed cards use — the two shelves light
+            up identically, and there is one place to change it. */}
+        <PetGlow active={hovered} />
         {entry.posterUrl || entry.stripUrl ? (
           <CataloguePreview entry={entry} size={96} hovered={hovered} />
         ) : (

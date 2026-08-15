@@ -283,6 +283,44 @@ test('the pet library', async (t) => {
       assert.deepEqual(petsService.getPet('testpet').thinkingPhrases, ['gotta go fast…']);
     });
 
+    /**
+     * The blank-frame trim, which is now the server's job.
+     *
+     * It used to be the renderer's, which meant it was each renderer's: the
+     * marketplace trimmed and the always-on-top window did not, so the pet
+     * blinked on the desktop and not in the app. A browser still supplies the
+     * measurement — nothing here can decode a WebP — but the rule is applied
+     * once, here, and every surface reads the result.
+     */
+    await t.test('trims blank frames off a state, from a measurement', () => {
+      const before = petsService.getPet('sonic-art');
+      assert.equal(before.hasCellUsage, false);
+      assert.deepEqual(before.playable, {}, 'nothing to say until something has measured it');
+
+      // Row 0 of the real sheet holds artwork in 7 of its 8 cells; the rest of
+      // the fixture's rows are full.
+      const usage = '11111110'.padEnd(8 * 2, '1');
+      const measured = petsService.saveCellUsage('sonic-art', { usage });
+
+      assert.equal(measured.hasCellUsage, true);
+      assert.deepEqual(measured.definition.states.idle, { start: 0, end: 7 }, 'the declared range is untouched');
+      assert.deepEqual(measured.playable.idle, { start: 0, end: 6 }, 'the played range stops at the artwork');
+
+      // It survives a rescan, so the desktop window gets it on its next poll.
+      assert.deepEqual(petsService.listPets().pets
+        .find((pet) => pet.definition.id === 'sonic-art')?.playable.idle, { start: 0, end: 6 });
+
+      // A measurement of a different grid is worthless, not "close enough".
+      assert.throws(() => petsService.saveCellUsage('sonic-art', { usage: '1111' }), /grid has 16/);
+      assert.throws(() => petsService.saveCellUsage('sonic-art', { usage: 'banana!!' }), /0s and 1s/);
+
+      // An all-blank range keeps its first frame rather than collapsing to
+      // nothing: a mis-cut grid should stay visible, not silently play a frame
+      // from somewhere else.
+      petsService.saveCellUsage('sonic-art', { usage: '00000000'.padEnd(16, '1') });
+      assert.deepEqual(petsService.getPet('sonic-art').playable.idle, { start: 0, end: 0 });
+    });
+
     await t.test('names one representative frame, always inside the sheet', () => {
       const pet = petsService.getPet('sonic');
       const lastFrame = pet.definition.frame.columns * pet.definition.frame.rows - 1;

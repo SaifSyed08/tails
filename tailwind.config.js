@@ -123,12 +123,17 @@ export default {
           '15%': { transform: 'translateY(-0.08em)' },
         },
         // The ambient half: colour only, so it composes with the hop instead
-        // of competing for the same property. Opens and closes on the same
-        // token, so the loop has no seam.
+        // of competing for the same property.
+        //
+        // Two tokens, not a rainbow. `--foreground` is the mode's own ink —
+        // black on light, white on dark, already flipped for us — and
+        // `--primary` is whatever the theme's accent happens to be, so the
+        // word breathes between "the same colour as the sentence" and "the
+        // colour of the app" without inventing a third hue. Opens and closes
+        // on the same token, so the loop has no seam.
         'hue-cycle': {
-          '0%, 100%': { color: 'hsl(var(--primary))' },
-          '33%': { color: 'hsl(var(--positive))' },
-          '66%': { color: 'hsl(var(--warning))' },
+          '0%, 100%': { color: 'hsl(var(--foreground))' },
+          '50%': { color: 'hsl(var(--primary))' },
         },
       },
       animation: {

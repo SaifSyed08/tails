@@ -104,6 +104,18 @@ export function createPetsRouter(): express.Router {
     req.body?.active === false ? null : String(req.params.petId),
   )));
 
+  /**
+   * A renderer reporting which cells of a sheet hold artwork.
+   *
+   * The server cannot decode a WebP; a browser showing the pet already has.
+   * This is how the trim that stops a pet blinking gets decided once, here,
+   * instead of separately in every surface that draws one.
+   */
+  router.post('/:petId/cell-usage', respond((req) => petsService.saveCellUsage(
+    String(req.params.petId),
+    req.body,
+  )));
+
   /** Hiding is the only "remove" available for a pet Codex owns. */
   router.post('/:petId/hidden', respond((req) => petsService.setPetHidden(
     String(req.params.petId),

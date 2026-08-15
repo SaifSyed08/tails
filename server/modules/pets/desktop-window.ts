@@ -13,18 +13,16 @@ import { randomBytes } from 'node:crypto';
  *
  * The animation technique here is the same one `SpritePreview` uses — one cell,
  * the sheet as a background, `steps(n, jump-none)` — because there is no
- * bundler in this document to import the component into. What is **not**
- * duplicated is any *decision*: which frames a state occupies, which frame
- * represents the pet, and which cells are blank all come from the server
- * payload and from the same alpha scan the app does. If those ever diverge, the
- * desktop pet and the in-app pet would animate differently, which is exactly
- * the bug this comment exists to prevent.
+ * bundler in this document to import the component into. Mirrored *mechanism*
+ * is survivable; mirrored *decisions* were not. When this page decided for
+ * itself which frames to play, it drifted from the app within one release and
+ * the pet blinked here and not there.
  *
- * The alpha scan does double duty here: it trims the ragged row's empty tail
- * (the one-frame disappearing act) *and* provides the opaque-pixel mask that
- * decides when the window is clickable. That second use is why it cannot be
- * skipped — without it the window would either swallow clicks across its whole
- * transparent rectangle or never be grabbable at all.
+ * So every decision now arrives in the payload: `playable` says which frames to
+ * play, `preview` says which frame represents the pet. The one thing this page
+ * still works out for itself is the opaque-pixel mask, because that is not a
+ * decision — it is a measurement of where the pointer may grab, and it is
+ * posted back so the server can trim for everyone else too.
  */
 
 /** How often the page re-reads which pet is active. */
@@ -92,6 +90,22 @@ export function renderDesktopWindowHtml(): string {
 
   #pet.mirrored { transform: scaleX(-1); }
 
+  /* The carried-pet motion for sheets with no walk row. Transform only, so it
+     never costs a layout, and spelled out twice rather than composed, because a
+     second transform would replace the mirror instead of adding to it. */
+  #pet.bobbing { animation-name: tails-sprite-x, tails-pet-bob; }
+  #pet.bobbing.mirrored { animation-name: tails-sprite-x, tails-pet-bob-mirrored; }
+
+  @keyframes tails-pet-bob {
+    0%, 100% { transform: translateY(0) rotate(-2deg); }
+    50% { transform: translateY(-6px) rotate(2deg); }
+  }
+
+  @keyframes tails-pet-bob-mirrored {
+    0%, 100% { transform: scaleX(-1) translateY(0) rotate(-2deg); }
+    50% { transform: scaleX(-1) translateY(-6px) rotate(2deg); }
+  }
+
   @keyframes tails-sprite-x {
     from { background-position-x: var(--sprite-x-from); }
     to { background-position-x: var(--sprite-x-to); }
@@ -125,6 +139,7 @@ const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
 
 let current = null;      // the pet payload currently rendered
+let ranges = null;       // the idle/walk ranges the server decided
 let box = null;          // its cell geometry
 let mask = null;         // union alpha mask of the played frames, at cell resolution
 let dragging = false;
@@ -211,12 +226,9 @@ function buildMask(scan, grid, start, end) {
   return { bytes, width, height };
 }
 
-/** Trailing blank cells are padding at the end of a short animation, not frames. */
-function trimBlankTail(range, grid, used) {
-  if (Math.floor(range.start / grid.columns) !== Math.floor(range.end / grid.columns)) return range;
-  let end = range.end;
-  while (end > range.start && used[end] === false) end -= 1;
-  return { ...range, end };
+/** One character per cell, the shape the server stores and trims against. */
+function toUsageString(used) {
+  return used.map(function (filled) { return filled ? '1' : '0'; }).join('');
 }
 
 function applyAnimation(grid, range) {
@@ -258,6 +270,30 @@ function applyAnimation(grid, range) {
   ].join(', ');
 }
 
+/**
+ * What a pet does while it is being carried.
+ *
+ * A real walk cycle if the sheet has one. Most do not — Codex labels a single
+ * state, so the walk range is the idle one — and a pet that keeps standing
+ * perfectly still while being dragged across the screen looks frozen rather
+ * than picked up. So the fallback is motion this page can honestly produce: the
+ * idle loop played faster, and a small bob-and-tilt on the sprite itself.
+ * Nothing invents frames that are not in the artwork.
+ */
+function startWalking() {
+  if (!current || !ranges) return;
+
+  const hasWalk = !sameRange(ranges.walk, ranges.idle);
+  if (hasWalk) {
+    applyAnimation(current.definition.frame, ranges.walk);
+    return;
+  }
+
+  const fps = (ranges.idle.fps || current.definition.frame.fps || 8) * 1.6;
+  applyAnimation(current.definition.frame, { ...ranges.idle, fps: fps });
+  if (!reduced) pet.classList.add('bobbing');
+}
+
 function loadImage(url) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -268,32 +304,59 @@ function loadImage(url) {
 }
 
 /** Renders a pet, or nothing. Reports both to the shell. */
+/** The ranges to play, as decided by the server. This page trims nothing. */
+function readRanges(payload) {
+  const states = payload.definition.states;
+  const playable = payload.playable || {};
+  const idle = playable.idle || states.idle;
+  // A pet with no walk row is the common case — most Codex sheets label only
+  // one state — and an identical walk range is how the drag code knows to move the pet
+  // itself instead of pretending a second animation exists.
+  const walk = playable.walk || states.walk || idle;
+  return { idle: idle, walk: walk };
+}
+
+const sameRange = (left, right) => Boolean(left) && Boolean(right)
+  && left.start === right.start && left.end === right.end && left.fps === right.fps;
+
 async function render(next) {
   if (!next) {
     current = null;
+    ranges = null;
     mask = null;
     pet.style.display = 'none';
     bridge.reportVisibility(false);
     return;
   }
 
+  const grid = next.definition.frame;
+  const nextRanges = readRanges(next);
   const changed = !current || current.definition.id !== next.definition.id
     || current.spriteUrl !== next.spriteUrl;
-  current = next;
+  // Re-applying an animation restarts it, so a poll that changed nothing must
+  // not touch it — that is what made the pet stutter every few seconds, and
+  // what quietly put the untrimmed range back after the first scan.
+  const rangesChanged = !ranges || !sameRange(ranges.idle, nextRanges.idle)
+    || !sameRange(ranges.walk, nextRanges.walk);
 
-  const grid = next.definition.frame;
+  current = next;
+  ranges = nextRanges;
   box = resolveCellBox(grid, PET_HEIGHT);
 
   pet.style.display = 'block';
-  pet.style.backgroundImage = 'url(' + next.spriteUrl + ')';
 
-  const state = next.definition.states.walk ?? next.definition.states.idle;
-  applyAnimation(grid, next.definition.states.idle);
+  if (changed) {
+    pet.style.backgroundImage = 'url(' + next.spriteUrl + ')';
+    bridge.reportSize(
+      Math.ceil(box.cellWidth) + PADDING * 2,
+      Math.ceil(box.cellHeight) + PADDING * 2,
+    );
+  }
 
-  bridge.reportSize(
-    Math.ceil(box.cellWidth) + PADDING * 2,
-    Math.ceil(box.cellHeight) + PADDING * 2,
-  );
+  if (changed || rangesChanged) {
+    if (!dragging) applyAnimation(grid, nextRanges.idle);
+  }
+
   bridge.reportVisibility(true);
 
   if (!changed && mask) return;
@@ -306,14 +369,18 @@ async function render(next) {
     const scan = scanSheet(image, grid);
     if (!scan) throw new Error('no canvas');
 
-    const idle = trimBlankTail(next.definition.states.idle, grid, scan.used);
-    applyAnimation(grid, idle);
+    mask = buildMask(scan, grid, nextRanges.idle.start, nextRanges.idle.end);
 
-    const walk = state === next.definition.states.idle
-      ? idle
-      : trimBlankTail(state, grid, scan.used);
-    current.playable = { idle, walk };
-    mask = buildMask(scan, grid, idle.start, idle.end);
+    // This window is often the only thing on screen showing the pet, so it
+    // reports the measurement too. The server then hands the trimmed ranges to
+    // every surface, including the marketplace.
+    if (!next.hasCellUsage) {
+      fetch('/api/pets/' + encodeURIComponent(next.definition.id) + '/cell-usage', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ usage: toUsageString(scan.used) }),
+      }).then(function () { void poll(); }).catch(function () {});
+    }
   } catch {
     mask = null;
   }
@@ -370,8 +437,14 @@ pet.addEventListener('mousedown', (event) => {
 
   dragging = true;
   pet.classList.add('dragging');
-  if (current?.playable?.walk) applyAnimation(current.definition.frame, current.playable.walk);
-  bridge.startDrag(event.screenX - window.screenX, event.screenY - window.screenY);
+  startWalking();
+
+  // No coordinates: the shell works out the grab offset from the cursor and the
+  // window position, both of which it can read in one coordinate system. The
+  // renderer's screenX is not reliably in the same units as the window's
+  // position, and the error grows with distance from the origin — which is
+  // exactly the drift of a pet that falls behind the further you drag it.
+  bridge.startDrag();
 });
 
 // On the document, not the sprite: the pointer routinely ends a fast drag
@@ -381,7 +454,8 @@ document.addEventListener('mouseup', () => {
   if (!dragging) return;
   dragging = false;
   pet.classList.remove('dragging');
-  if (current?.playable?.idle) applyAnimation(current.definition.frame, current.playable.idle);
+  pet.classList.remove('bobbing');
+  if (ranges) applyAnimation(current.definition.frame, ranges.idle);
   bridge.endDrag();
   setPointerOver(false);
 });

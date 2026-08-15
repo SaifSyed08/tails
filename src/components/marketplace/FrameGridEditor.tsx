@@ -187,9 +187,6 @@ export function FrameGridEditor({ pet, onSave, onCancel }: FrameGridEditorProps)
             grid={grid}
             range={previewRange}
             height={104}
-            // Unlike everywhere else, this preview must show the empty cells at
-            // the end of a ragged row: they are what the editor is for.
-            trimBlankFrames={false}
           />
           <select
             value={previewState}

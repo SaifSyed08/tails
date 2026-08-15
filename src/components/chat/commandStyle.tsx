@@ -2,6 +2,22 @@ import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
 /**
+ * Pulls a colour toward the ink of whichever mode is showing.
+ *
+ * Two jobs at once, which is why every stop below goes through it. It adapts a
+ * fixed hue per mode without a `dark:` variant — `--foreground` is already
+ * near-black on light and near-white on dark — and it buys contrast, because
+ * moving a colour toward the ink moves it away from the background by
+ * definition. Saturated mid-lightness hues are exactly the ones that fail on
+ * both grounds: raw magenta measures 2.75:1 on a white popover, and raw violet
+ * 4.10:1 on a dark one, both under the 4.5:1 these labels need.
+ *
+ * `keep` is how much of the original survives; the remainder is ink.
+ */
+const towardInk = (color: string, keep: number) =>
+  `color-mix(in oklab, ${color} ${keep}%, hsl(var(--foreground)))`;
+
+/**
  * The two commands that get a look of their own.
  *
  * Presentation lives here rather than travelling with the command list: the
@@ -9,36 +25,70 @@ import { useReducedMotion } from '@/shared/ui/Motion';
  * places that never fetched that list — a message read back out of the
  * transcript, for instance.
  *
- * Both gradients are built from theme tokens, so a re-theme moves them, and
- * both loop on a colour they also start on, so the sweep has no seam.
+ * Both gradients loop on the colour they open with, so the sweep has no seam.
  */
 export const COMMAND_STYLES = {
   personalize: {
-    /** Every hue the theme actually owns, in order, closing on the one it opened with. */
+    /*
+      Every hue the theme owns, ordered by hue rather than by token name.
+      Listed as destructive → warning → positive → primary the sweep ran
+      27° → 88° → 153° → 47° and doubled back on itself at the end, which
+      reads as a bounce; in this order it climbs 27° → 47° → 88° → 153° and
+      wraps once, which is what a rainbow is supposed to do. The accent moving
+      to orange is what exposed it — it used to be blue and sat at the far end.
+
+      Only `--destructive` is corrected, and only a little. Pulling every stop
+      toward the ink cleared the numbers comfortably and looked visibly worse —
+      pastel in dark, murky olive in light — so the tokens are otherwise used
+      raw. Dark `--destructive` is the one that needs it: on its own it
+      measures 4.50:1, exactly the AA threshold and one nudge from failing, and
+      reordering makes the green-to-red interpolation dip to 4.39:1. At 92% the
+      whole sweep clears in both ramps — 4.93:1 light, 4.97:1 dark — for 8% of
+      one stop's chroma, which does not read.
+
+      Measured across the interpolation rather than at the stops, because what
+      is on screen at any instant is a blend of two of them.
+    */
     gradient: [
       'linear-gradient(90deg,',
-      'hsl(var(--destructive)),',
+      `${towardInk('hsl(var(--destructive))', 92)},`,
+      'hsl(var(--primary)),',
       'hsl(var(--warning)),',
       'hsl(var(--positive)),',
-      'hsl(var(--primary)),',
-      'hsl(var(--destructive)))',
+      `${towardInk('hsl(var(--destructive))', 92)})`,
     ].join(' '),
     glow: null as string | null,
   },
   ultracode: {
     /*
-      Violet is the point of this one, so the hue is named rather than taken
-      from `--primary` — a theme with an orange primary would otherwise erase
-      the thing being asked for. It is mixed *with* the primary so it still
-      shifts with the theme instead of sitting on top of it as a foreign
-      colour, and mixed in oklab so the midpoint does not go grey.
+      Violet is the point of this one, so the hue is named rather than derived
+      from `--primary` — a theme whose accent is orange would otherwise erase
+      the thing being asked for.
+
+      It used to mix 30% of the accent in, so the token would shift with the
+      theme. That worked while the accent was blue and stopped working the day
+      it became amber: amber and violet are near-complementary, so the oklab
+      midpoint runs through grey — measured, that mix lost 31% of the violet's
+      chroma and dragged its hue 307° → 322°, which is muddy rather than
+      flashy. The accent is gone from the text for that reason. What keeps this
+      theme-responsive is `towardInk`, which is the part that actually differed
+      between light and dark anyway.
+    */
+    /*
+      Asymmetric on purpose: the violet is the identity and keeps more of
+      itself, while the magenta — which is the stop that actually fails, at
+      2.75:1 raw on a white popover — takes the larger correction. Worst point
+      across the sweep is 4.92:1 light, 5.68:1 dark.
     */
     gradient: [
       'linear-gradient(90deg,',
-      'color-mix(in oklab, hsl(var(--primary)) 30%, hsl(276 90% 60%)),',
-      'color-mix(in oklab, hsl(var(--primary)) 20%, hsl(305 95% 66%)),',
-      'color-mix(in oklab, hsl(var(--primary)) 30%, hsl(276 90% 60%)))',
+      `${towardInk('hsl(276 90% 60%)', 80)},`,
+      `${towardInk('hsl(305 95% 66%)', 70)},`,
+      `${towardInk('hsl(276 90% 60%)', 80)})`,
     ].join(' '),
+    // The glow is the one place the raw anchor still shows: it is a diffuse
+    // halo behind the glyphs rather than something anyone reads, so it carries
+    // the full-strength violet the text cannot.
     glow: '0 0 14px color-mix(in oklab, transparent 55%, hsl(288 90% 62%))',
   },
 } as const;

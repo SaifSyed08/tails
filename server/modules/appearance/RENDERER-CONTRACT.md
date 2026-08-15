@@ -549,6 +549,30 @@ surface. Using `--primary` there is wrong on a glass popover or an accent-filled
 bubble, because `--primary` is solved against the page, not against that
 surface.
 
+**A floor value for one of these may not be a passthrough.** `--t-ink`,
+`--t-ink-muted` and `--t-accent-on` all mean "…on *this* surface", so a part
+that inherits the `:root` value unchanged is asserting that its own fill is
+close enough to the page for the page's answer to hold. `bubbleUser` is filled
+with `--primary` and inherited both refinements anyway, which measured
+**1.00:1** for `--t-accent-on` (accent text on the accent fill — the same
+colour) and 1.16:1 for `--t-ink-muted`. A token whose entire purpose is to
+correct for the surface, returning the uncorrected value on the one surface that
+needed it.
+
+`tests/default-ramp.test.ts` now resolves every floor part's effective fill and
+asserts all three clear 4.5:1 against it. That is a different check from the
+renderer contract's: this file already catches a token *emitted and never read*,
+and the new one catches a token *read and inert*, which is indistinguishable
+from working by every means except measuring it.
+
+**A role used as small text is held to text contrast, not to 3:1.** The accent
+and the three semantic roles are all solved in `buildRamp` against
+`target.text`, because `text-primary` is a link colour and `text-destructive` is
+an error message before either is a fill. The manifest carries the matching
+pairs. The practical consequence for an author: a light accent hue (amber,
+yellow, lime) comes back darker than asked for in a light ramp — the hue is
+honoured, the lightness is not negotiable.
+
 ---
 
 ## 8. The freeform CSS layer

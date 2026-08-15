@@ -118,6 +118,20 @@ const CONTRAST_PAIRS: ContrastPair[] = [
   { foreground: 'muted-foreground', background: 'card', kind: 'text' },
   { foreground: 'border', background: 'background', kind: 'nonText' },
   { foreground: 'ring', background: 'background', kind: 'nonText' },
+  // The accent as *text*, not as a fill. Missing until an amber default made
+  // the gap visible: `text-primary` is a link colour in assistant output before
+  // it is anything else, so 3:1 was never the right bar for it. Constructed in
+  // `buildRamp` rather than repaired here, so by the time the solver sees it it
+  // should already pass.
+  { foreground: 'primary', background: 'background', kind: 'text' },
+  { foreground: 'primary', background: 'card', kind: 'text' },
+  // The semantic roles as text, for the same reason. `text-destructive` on the
+  // page is how an error reads; the banner fill is the secondary use, not the
+  // primary one. Constructed in `buildRamp` like the accent, so the solver
+  // should find these already passing.
+  { foreground: 'destructive', background: 'background', kind: 'text' },
+  { foreground: 'warning', background: 'background', kind: 'text' },
+  { foreground: 'positive', background: 'background', kind: 'text' },
 ];
 
 /** The floor a pair must clear under a given contrast target. */
@@ -312,17 +326,42 @@ function buildRamp(spec: ThemeSpecV2, mode: 'light' | 'dark'): Ramp {
     border: solveTier(ladder.toward, surfaceTone(1), background, target.nonText),
   };
 
-  // Walk the accent until it separates from the page. An electric accent on a
-  // near-black page already clears it; a muted one on paper does not, and an
-  // invisible primary button is a functional bug, not a style.
+  // Walk the accent until it is readable *as text* on the page.
+  //
+  // This used to stop at the non-text floor, on the reasoning that the accent
+  // is a button fill and 3:1 is what a fill owes the page it sits on. That was
+  // true of the token and false of the app: `text-primary` colours links in the
+  // assistant's own output, active nav items and a dozen small labels, all of
+  // them well under the large-text threshold. So the accent was solved to 3:1
+  // and then used at a size that needs 4.5:1, and nothing objected because the
+  // manifest had no pair for it — a gate that is reassuring rather than
+  // protective.
+  //
+  // Solved here rather than added as another entry for `solveContrast` to walk,
+  // because this runs *before* `primary-foreground` is chosen. A pair that
+  // moved the accent afterwards would silently undo the ink solved against it,
+  // which is the bug already documented on `ring` below.
+  //
+  // A role used as both a fill and as small text is held to the stricter of the
+  // two. There is no third option that is honest.
   const accentTone = (lightness: number): Hsl =>
     ({ h: accentHue, s: skeleton.accentSaturation, l: lightness });
+  //
+  // The step is `+ direction`, and the sign is worth pausing on because it was
+  // wrong here until an amber accent made the loop run often enough to notice.
+  // `direction` is +1 when the ink pole is white, which means the page is dark
+  // — and separating from a dark page means getting *lighter*. The old
+  // `- direction` walked the accent toward the page on both ramps, so whenever
+  // the loop actually executed it made contrast worse until it ran off the end
+  // of the scale and gave up. It survived review because the starting
+  // lightnesses (62 on a dark page, 45 on a light one) already cleared 3:1 for
+  // almost every hue, so the body practically never ran.
   let steps = 0;
   while (
-    contrastRatio(accentTone(skeleton.accentLightness), background) < target.nonText
+    contrastRatio(accentTone(skeleton.accentLightness), background) < target.text
     && steps < 60
   ) {
-    const next = skeleton.accentLightness - ladder.direction * 2;
+    const next = skeleton.accentLightness + ladder.direction * 2;
     if (next < 0 || next > 100) break;
     skeleton.accentLightness = next;
     steps += 1;
@@ -337,11 +376,19 @@ function buildRamp(spec: ThemeSpecV2, mode: 'light' | 'dark'): Ramp {
     const shifted = wrapHue(hue + spec.palette.statusHueShift);
     let lightness = ladder.direction > 0 ? 58 : 38;
     let walked = 0;
+    // `target.text`, not `target.nonText`, for the same reason the accent walk
+    // above uses it: `text-destructive` is an error message before it is a
+    // banner fill, and `text-warning` is a label. Solving a colour to 3:1 and
+    // then setting body copy in it is the defect this whole pass exists to
+    // close — it was found in the built-in ramp, where dark `--destructive`
+    // sat within a rounding error of the bar in three different places at once.
     while (
-      contrastRatio({ h: shifted, s: statusSaturation, l: lightness }, background) < target.nonText
+      contrastRatio({ h: shifted, s: statusSaturation, l: lightness }, background) < target.text
       && walked < 60
     ) {
-      const next = lightness - ladder.direction * 2;
+      // Same sign correction as the accent walk above: away from the page, not
+      // toward it.
+      const next = lightness + ladder.direction * 2;
       if (next < 0 || next > 100) break;
       lightness = next;
       walked += 1;

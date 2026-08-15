@@ -1,5 +1,6 @@
 import type { InstalledPet, PetStateName } from './marketplace-api';
 import { SpritePreview } from './SpritePreview';
+import { useReportCellUsage } from './sprite-usage';
 
 /**
  * A pet, at a size, playing a state, facing a direction.
@@ -41,8 +42,20 @@ export function PetSprite({
   fps,
   className,
 }: PetSpriteProps) {
+  // Drawing a pet is also how the app measures it: the first surface to render
+  // a sheet posts back which cells hold artwork, and every surface afterwards —
+  // including the desktop window — gets trimmed ranges from the server.
+  useReportCellUsage(pet);
+
   const { definition } = pet;
-  const range = definition.states[state] ?? definition.states.idle;
+  // The trimmed range when the sheet has been measured, the declared one until
+  // then. Never trimmed here; that rule lives on the server.
+  // Optional-chained: a payload from an older server, or a cached one from
+  // before `playable` existed, must degrade to the declared ranges rather than
+  // throw. This component is on every surface, so a crash here is the whole
+  // marketplace, not one pet.
+  const range = pet.playable?.[state] ?? definition.states[state]
+    ?? pet.playable?.idle ?? definition.states.idle;
 
   return (
     <SpritePreview

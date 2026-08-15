@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils';
-import { useReducedMotion } from '@/shared/ui/Motion';
 
 import type { FrameRange, InstalledPet, PetStateName } from './marketplace-api';
+import { PetGlow } from './PetGlow';
 import { PetSprite } from './PetSprite';
 import { SpritePreview } from './SpritePreview';
 
@@ -36,8 +36,6 @@ type PetStageProps = {
 export function PetStage({
   pet, height, state = 'idle', range, glow = false, facing, className,
 }: PetStageProps) {
-  const reduced = useReducedMotion();
-
   return (
     <div
       className={cn(
@@ -45,18 +43,11 @@ export function PetStage({
         className,
       )}
     >
-      {/* Behind the pet, not on it: a radial wash of the accent colour reads as
-          stage lighting, where an outline or a filter on the sprite itself
-          would just look like a selection. Opacity rather than mounting and
-          unmounting, so it fades instead of appearing. */}
-      <div
-        aria-hidden="true"
-        className={cn(
-          'pointer-events-none absolute inset-0 bg-[radial-gradient(60%_55%_at_50%_65%,hsl(var(--primary)/0.28),transparent_70%)]',
-          !reduced && 'transition-opacity duration-settle ease-standard',
-          glow ? 'opacity-100' : 'opacity-0',
-        )}
-      />
+      {/* Behind the pet, not on it: a wash of the accent colour reads as stage
+          lighting, where an outline or a filter on the sprite itself would just
+          look like a selection. Shared with the catalogue cards so both shelves
+          light up the same way. */}
+      <PetGlow active={glow} />
       <div className="absolute inset-x-6 bottom-4 h-px bg-border" aria-hidden="true" />
       {range ? (
         <SpritePreview

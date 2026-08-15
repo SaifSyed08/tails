@@ -481,7 +481,22 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 {command.description}
               </span>
               {command.local ? (
-                <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-primary">
+                /*
+                  Filled with the accent rather than tinted by it. As
+                  `text-primary` on `bg-primary/15` this measured 4.27:1 — the
+                  same hue tinting its own background, so every step of tint
+                  moves the ground *toward* the ink and makes it worse, not
+                  better (at /30 it is 3.40:1). No token value fixes that
+                  either, and `--t-accent-on` resolves to `--primary` on the
+                  built-in ramp, so it would change nothing here.
+
+                  `--primary` against `--primary-foreground` is the one accent
+                  pairing the appearance module's contrast gate asserts for
+                  every generated theme, so this stays legible under a re-theme
+                  rather than only under today's ramp: 5.28:1 light, 7.53:1
+                  dark, against the 4.5:1 that 10px label text needs.
+                */
+                <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-primary-foreground">
                   tails
                 </span>
               ) : null}

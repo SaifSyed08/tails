@@ -58,6 +58,7 @@ let interactive = false;
 let watchdogTimer = null;
 let dragTimer = null;
 let dragOffset = null;
+let dragSize = null;
 let lastDragX = null;
 let saveTimer = null;
 
@@ -182,23 +183,39 @@ function stopWatchdog() {
  * pointer's position *inside* the page barely changes during a drag, so the
  * page cannot see the gesture it is making. Screen coordinates can.
  */
-function startDrag(offset) {
+function startDrag() {
   if (!isAlive() || dragTimer) return;
 
-  dragOffset = offset;
-  lastDragX = screen.getCursorScreenPoint().x;
+  const cursor = screen.getCursorScreenPoint();
+  const [originX, originY] = petWindow.getPosition();
+
+  // Both readings come from Electron, in one coordinate system, once. The
+  // renderer used to supply this from `event.screenX - window.screenX`, whose
+  // error grows with the window's position — which is what made the pet slide
+  // further from the cursor the further it was dragged.
+  dragOffset = { x: cursor.x - originX, y: cursor.y - originY };
+
+  // Cached, not re-read per frame: `getBounds` round-trips through device
+  // pixels, so on a fractionally scaled display it can answer a pixel either
+  // side of what was set, and feeding that back into the clamp is how a drag
+  // develops a wobble.
+  const { width, height } = petWindow.getBounds();
+  dragSize = { width, height };
+  lastDragX = cursor.x;
   setInteractive(true);
 
   dragTimer = setInterval(() => {
     if (!isAlive()) return stopDrag();
 
     const cursor = screen.getCursorScreenPoint();
-    const bounds = petWindow.getBounds();
+    // Absolute, every frame: the window is placed where the cursor says it
+    // should be, never moved by a delta and never derived from where it
+    // currently is. Nothing accumulates, so nothing drifts.
     const next = clampToDisplay(
       cursor.x - dragOffset.x,
       cursor.y - dragOffset.y,
-      bounds.width,
-      bounds.height,
+      dragSize.width,
+      dragSize.height,
     );
 
     petWindow.setPosition(next.x, next.y);
@@ -217,6 +234,7 @@ function stopDrag() {
   if (dragTimer) clearInterval(dragTimer);
   dragTimer = null;
   dragOffset = null;
+  dragSize = null;
   lastDragX = null;
   schedulePersist();
 }
@@ -296,20 +314,22 @@ function installIpc() {
     if (!isAlive()) return;
     const width = Math.max(48, Math.round(Number(payload?.width) || DEFAULT_SIZE.width));
     const height = Math.max(48, Math.round(Number(payload?.height) || DEFAULT_SIZE.height));
-    const [x, y] = petWindow.getPosition();
+
+    // Nothing to do, and doing it anyway would matter: this reads the position
+    // back and writes it again, so an unchanged size still nudged the window
+    // every time the page polled — and mid-drag it fought the drag loop.
+    const bounds = petWindow.getBounds();
+    if (dragTimer || (bounds.width === width && bounds.height === height)) return;
 
     petWindow.setSize(width, height);
     // Re-clamped, because a window that just grew may now hang off the screen.
-    const clamped = clampToDisplay(x, y, width, height);
+    const clamped = clampToDisplay(bounds.x, bounds.y, width, height);
     petWindow.setPosition(clamped.x, clamped.y);
   });
 
   ipcMain.on('pet:interactive', (_event, payload) => setInteractive(Boolean(payload?.over)));
 
-  ipcMain.on('pet:drag-start', (_event, payload) => startDrag({
-    x: Math.round(Number(payload?.offsetX) || 0),
-    y: Math.round(Number(payload?.offsetY) || 0),
-  }));
+  ipcMain.on('pet:drag-start', () => startDrag());
 
   ipcMain.on('pet:drag-end', () => stopDrag());
 

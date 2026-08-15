@@ -1,73 +1,36 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
-import type { FrameGrid, FrameRange } from './marketplace-api';
+import { petsApi, type InstalledPet } from './marketplace-api';
 
 /**
- * Which cells of a spritesheet actually contain artwork.
+ * Measuring which cells of a spritesheet hold artwork.
  *
- * ## Why this exists
+ * ## Why the browser does this and then gives the answer away
  *
- * Codex sheets have **ragged rows**. Measured from the two real sheets on this
- * machine, row 0 — the row every default `idle` state claims in full — uses 7
- * of its 8 cells in one and 6 of 8 in the other. The preview dutifully animated
- * the empty cells, so every loop had a frame where the pet simply vanished.
- * That is the "for a frame they're gone" flicker: not a timing bug, a real
- * empty cell being played.
+ * Codex sheets have ragged rows — the two on this machine use 6 and 7 of their
+ * 8 first-row cells — so a state claiming a whole row ends in empty frames and
+ * the pet vanishes for a frame, once per loop.
  *
- * The server cannot know this. It reads image *headers* to avoid decoding
- * megabytes of lossless WebP per pet, and a header says nothing about alpha.
- * The browser already has a decoder, so the measurement happens here, once per
- * sheet, and is shared by every surface that animates a pet.
+ * Only a browser can see that: the server reads image *headers* to avoid
+ * decoding megabytes of lossless WebP per pet, and a header says nothing about
+ * alpha. But the browser is the wrong place to *decide* what to do about it,
+ * because there is more than one browser here — the marketplace and the
+ * always-on-top desktop window are separate documents, and when the trim lived
+ * in the renderer only one of them got it. The pet blinked on the desktop and
+ * not in the app.
  *
- * ## Why it only trims the end, and only within a row
- *
- * Trailing blank cells are the padding at the end of a short animation. A
- * *multi-row* range is played by sweeping whole rows, so shortening its last
- * row would desynchronise the two axes and produce a worse artefact than the
- * one being fixed — those are left exactly as configured.
- *
- * Nothing here is written back to the pet. It changes what is played, never
- * what is stored, so the frame editor still shows the user's real numbers.
+ * So this measures and posts the result, and the server hands every surface the
+ * trimmed ranges (`pet.playable`). One measurement, one rule, one answer.
  */
-
-export type CellUsage = {
-  columns: number;
-  rows: number;
-  /** Row-major, one flag per cell: true when the cell holds any non-transparent pixel. */
-  used: boolean[];
-};
 
 /** Alpha at or below this counts as empty; lossy encoders leave dust in the gutters. */
 const EMPTY_ALPHA = 8;
 
-/** Sampling stride in pixels. A sprite that reads as blank at every 4th pixel is blank. */
+/** Sampling stride in pixels. A cell that reads as blank at every 4th pixel is blank. */
 const STRIDE = 4;
 
-/**
- * Measurements are cached forever, keyed by sheet and grid.
- *
- * The promise itself is cached, not the result, so twenty cards mounting at
- * once for the same pet share one decode instead of racing twenty.
- */
-const cache = new Map<string, Promise<CellUsage | null>>();
-
-/** Decoding a 2MB sheet blocks the main thread briefly; two at a time keeps the grid interactive. */
-const MAX_CONCURRENT = 2;
-let running = 0;
-const waiting: (() => void)[] = [];
-
-async function withSlot<T>(work: () => Promise<T>): Promise<T> {
-  if (running >= MAX_CONCURRENT) {
-    await new Promise<void>((resolve) => waiting.push(resolve));
-  }
-  running += 1;
-  try {
-    return await work();
-  } finally {
-    running -= 1;
-    waiting.shift()?.();
-  }
-}
+/** Ids already measured — or attempted — this session, so a gallery decodes each sheet once. */
+const reported = new Set<string>();
 
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -79,12 +42,16 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 }
 
 /**
- * Scans a sheet's alpha channel cell by cell.
+ * Scans a sheet's alpha channel, one character per cell.
  *
- * Resolves to null on any failure — a preview that cannot be measured plays the
- * configured range, which is exactly what it did before this existed.
+ * Returns null on any failure. A pet that cannot be measured keeps playing its
+ * declared ranges, which is exactly what it did before any of this existed.
  */
-async function measure(spriteUrl: string, columns: number, rows: number): Promise<CellUsage | null> {
+export async function measureCellUsage(
+  spriteUrl: string,
+  columns: number,
+  rows: number,
+): Promise<string | null> {
   try {
     const image = await loadImage(spriteUrl);
     const width = image.naturalWidth;
@@ -100,12 +67,12 @@ async function measure(spriteUrl: string, columns: number, rows: number): Promis
     context.drawImage(image, 0, 0);
     const { data } = context.getImageData(0, 0, width, height);
 
-    // Cell size comes from the real image rather than from the grid's declared
-    // pixel size, so a grid whose cell dimensions are slightly off still scans
-    // the right regions.
+    // Cell size from the real image rather than from the grid's declared pixel
+    // size, so a grid whose cell dimensions are slightly off still scans the
+    // right regions.
     const cellWidth = width / columns;
     const cellHeight = height / rows;
-    const used: boolean[] = [];
+    let usage = '';
 
     for (let row = 0; row < rows; row += 1) {
       for (let column = 0; column < columns; column += 1) {
@@ -123,77 +90,40 @@ async function measure(spriteUrl: string, columns: number, rows: number): Promis
           }
         }
 
-        used.push(filled);
+        usage += filled ? '1' : '0';
       }
     }
 
-    return { columns, rows, used };
+    return usage;
   } catch {
     return null;
   }
 }
 
-export function measureCellUsage(
-  spriteUrl: string,
-  columns: number,
-  rows: number,
-): Promise<CellUsage | null> {
-  const key = `${spriteUrl}|${columns}x${rows}`;
-  const existing = cache.get(key);
-  if (existing) return existing;
-
-  const pending = withSlot(() => measure(spriteUrl, columns, rows));
-  cache.set(key, pending);
-  return pending;
-}
-
 /**
- * Drops blank cells from the end of a range.
+ * Measures a pet's sheet once, if nobody has, and tells the server.
  *
- * Single-row ranges only, and never down to nothing: a range whose cells are
- * all empty is a mis-cut grid, and playing it unchanged keeps that visible
- * instead of silently substituting a frame from somewhere else.
+ * Called by `PetSprite`, so simply drawing a pet anywhere in the app is what
+ * eventually teaches every other surface how to draw it. Deliberately silent:
+ * this is an optimisation of someone else's future render, and a failed POST
+ * must never disturb the pet on screen.
  */
-export function trimBlankTail(range: FrameRange, grid: FrameGrid, usage: CellUsage | null): FrameRange {
-  if (!usage || usage.columns !== grid.columns || usage.rows !== grid.rows) return range;
-  if (Math.floor(range.start / grid.columns) !== Math.floor(range.end / grid.columns)) return range;
+export function useReportCellUsage(pet: InstalledPet): void {
+  const { id } = pet.definition;
+  const { columns, rows } = pet.definition.frame;
+  const { spriteUrl } = pet;
+  const hasCellUsage = Boolean(pet.hasCellUsage);
 
-  let end = range.end;
-  while (end > range.start && usage.used[end] === false) end -= 1;
-
-  return end === range.end ? range : { ...range, end };
-}
-
-/**
- * The range a preview should actually play.
- *
- * Returns the configured range immediately and the trimmed one once the sheet
- * has been measured, so nothing waits on a decode to appear on screen.
- */
-export function usePlayableRange(
-  spriteUrl: string,
-  grid: FrameGrid,
-  range: FrameRange,
-  enabled: boolean,
-): FrameRange {
-  const [usage, setUsage] = useState<CellUsage | null>(null);
-  const { columns, rows } = grid;
-
-  // Depends on the sheet and its shape, not on the grid object: the cell pitch
-  // does not change which regions are scanned, and an editor that rebuilds its
-  // grid on every keystroke must not restart the measurement each time.
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (hasCellUsage || reported.has(id)) return;
+    reported.add(id);
 
-    let cancelled = false;
-    measureCellUsage(spriteUrl, columns, rows).then((measured) => {
-      if (!cancelled) setUsage(measured);
+    void measureCellUsage(spriteUrl, columns, rows).then((usage) => {
+      if (!usage) return;
+      return petsApi.reportCellUsage(id, usage).catch(() => {
+        // A pet whose measurement did not save just gets measured again next
+        // launch. Nothing on screen depends on it having worked.
+      });
     });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [spriteUrl, columns, rows, enabled]);
-
-  return enabled ? trimBlankTail(range, grid, usage) : range;
+  }, [id, spriteUrl, columns, rows, hasCellUsage]);
 }

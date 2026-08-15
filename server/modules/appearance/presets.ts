@@ -108,7 +108,11 @@ const PRESET_SPECS: Record<string, unknown> = {
     // filter over a web page.
     palette: {
       surfaceHue: 34, surfaceChroma: 'tinted',
-      accentHue: 38, accentChroma: 'electric',
+      // 42 rather than 38: the built-in accent is now an orange at hue 26, and
+      // a preset whose whole identity is "amber" should not be twelve degrees
+      // from the default it is replacing. 42 is also closer to real P3 amber,
+      // so the preset gets more distinctive and more accurate at once.
+      accentHue: 42, accentChroma: 'electric',
       scheme: 'mono', statusHueShift: 0,
     },
     surface: { lightAnchor: 'mid', darkAnchor: 'true-black', step: 4, contrastTarget: 'max' },

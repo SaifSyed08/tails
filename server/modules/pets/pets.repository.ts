@@ -60,6 +60,7 @@ const ADDED_COLUMNS: { name: string; definition: string }[] = [
   { name: 'hidden_at', definition: 'DATETIME' },
   { name: 'assigned_theme', definition: 'TEXT' },
   { name: 'thinking_phrases_json', definition: 'TEXT' },
+  { name: 'cell_usage', definition: 'TEXT' },
 ];
 
 /** Applies the pets schema to a connection. Idempotent. */
@@ -138,6 +139,16 @@ export type InstalledPetRecord = {
   assignedTheme: string | null;
   /** Things the pet says while it is thinking. Plain text, always. */
   thinkingPhrases: string[] | null;
+  /**
+   * Which cells of the sheet hold artwork, as one character per frame.
+   *
+   * `'1'` for a cell with pixels in it, `'0'` for an empty one, row-major. Only
+   * a browser can produce this — the server reads image *headers* and never
+   * decodes a pixel — so it is measured once by the renderer and posted back.
+   * It is what lets the server, rather than each surface, decide which frames
+   * are worth playing.
+   */
+  cellUsage: string | null;
 };
 
 type InstalledPetRow = {
@@ -151,6 +162,7 @@ type InstalledPetRow = {
   hidden_at: string | null;
   assigned_theme: string | null;
   thinking_phrases_json: string | null;
+  cell_usage: string | null;
 };
 
 /**
@@ -179,10 +191,11 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   hiddenAt: row.hidden_at,
   assignedTheme: row.assigned_theme,
   thinkingPhrases: parseJson<string[]>(row.thinking_phrases_json),
+  cellUsage: row.cell_usage,
 });
 
 const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, '
-  + 'hidden_at, assigned_theme, thinking_phrases_json';
+  + 'hidden_at, assigned_theme, thinking_phrases_json, cell_usage';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -261,6 +274,21 @@ export const petsRepository = {
       input.thinkingPhrases ? JSON.stringify(input.thinkingPhrases) : null,
       id,
     );
+  },
+
+  /**
+   * Records which cells of a pet's sheet actually contain artwork.
+   *
+   * Written by whichever surface measured it first and then left alone: the
+   * answer is a property of the image, so re-measuring it on every mount would
+   * be the same decode for the same result.
+   */
+  saveCellUsage(id: string, usage: string): void {
+    db().prepare(`
+      UPDATE installed_pets
+      SET cell_usage = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(usage, id);
   },
 
   /**

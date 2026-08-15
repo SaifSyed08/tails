@@ -133,6 +133,18 @@ Also \`positive\`, \`warning\` and \`destructive\`: the semantic colours the
 theme already publishes, solved against the page. Reach for those rather than
 approximating with the accent when you want the theme's own green or red.
 
+The accent is solved to be readable **as text on the page**, not merely as a
+button fill — \`text-primary\` colours links in the assistant's own output, so
+3:1 was never the right bar for it. That means a very light accent hue (amber,
+yellow, lime) will come back darker than you asked in a light ramp: the hue you
+choose is honoured, the lightness is not negotiable. If you want the vivid
+version of a light hue, put it on a dark ground.
+
+Inside a surface, use \`--t-accent-on\` rather than the accent itself for
+accent-coloured text. It is the same colour re-solved against *that* surface,
+which is the only version that stays legible on a glass popover or a filled
+bubble.
+
 \`tier\` is direction-free — tier 2 is "two steps more contrasty than the page"
 in a light theme and a dark one alike — which is why it is the role to use when
 a surface has to separate in **both** ramps. \`light\` and \`shadow\` each run

@@ -25,7 +25,33 @@
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 10%;
 
-    --primary: 221 83% 45%;
+    /**
+     * The accent, and the one place the ramp stops being a free choice.
+     *
+     * Amber is a light hue, and in the light ramp that forces a decision the
+     * blue this replaced never had to make. An accent has two jobs: it fills
+     * buttons, where the *ink on it* must be readable, and it colours text
+     * through `text-primary`, where it must be readable *on the page*. Blue at
+     * 45% did both — 6.5:1 as text, 4.5:1 under white. Amber cannot: the two
+     * requirements cross at about 40% lightness and neither reaches 4.5:1
+     * there. Bright enough to look like amber means `text-primary` lands
+     * around 3.4:1, which is a real legibility loss across a dozen components.
+     *
+     * So the light ramp takes the most vivid orange that still clears 4.5:1 on
+     * every surface `text-primary` actually lands on — the page, a white card,
+     * and `--muted`, which is darker than the page and is therefore the binding
+     * one — while still carrying white ink at 5.3:1. That ceiling is 35%
+     * lightness at full saturation. The dark ramp has no such squeeze and gets
+     * the bright amber the request was actually about, which is what the app
+     * opens as.
+     *
+     * Hue 26 rather than a truer amber because the warm half of the wheel is
+     * crowded: `--destructive` sits at 8 and `--warning` at 46, and a primary
+     * button that reads as "danger" or "careful" is a worse failure than a
+     * slightly red-leaning orange. 18 degrees clear of one, 20 of the other,
+     * asserted in `default-ramp.test.ts`.
+     */
+    --primary: 26 100% 35%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 240 5% 94%;
@@ -43,12 +69,17 @@
     --positive: 145 63% 30%;
     --positive-foreground: 0 0% 100%;
 
-    --warning: 38 92% 32%;
+    /* Moved from 38 to 46 to get out of the accent's way. Amber warning beside
+       an amber primary means the interface has stopped distinguishing "do this"
+       from "careful" — and of the two, the accent is the one the user asked to
+       be amber, so warning is the one that yields. Still unmistakably a warning
+       colour: gold rather than orange. */
+    --warning: 46 96% 28%;
     --warning-foreground: 0 0% 100%;
 
     --border: 240 6% 88%;
     --input: 240 6% 88%;
-    --ring: 221 83% 45%;
+    --ring: 26 100% 35%;
 
     --radius: 0.625rem;
     --space-unit: 0.25rem;
@@ -127,8 +158,11 @@
     --popover: 240 8% 9%;
     --popover-foreground: 40 15% 95%;
 
-    --primary: 221 83% 62%;
-    --primary-foreground: 240 10% 8%;
+    /* The dark ramp was already dark-ink-on-light-accent and has room for the
+       bright amber, so only the hue moves. 58% rather than the blue's 62%
+       because a saturated amber at 62 glares against a near-black page. */
+    --primary: 26 100% 58%;
+    --primary-foreground: 26 40% 8%;
 
     --secondary: 240 5% 16%;
     --secondary-foreground: 40 15% 95%;
@@ -139,18 +173,24 @@
     --accent: 240 5% 18%;
     --accent-foreground: 40 15% 95%;
 
-    --destructive: 0 72% 58%;
+    /* 64 rather than 58. At 58 this sat within a rounding error of the 4.5:1
+       bar three different ways — as text on the page, as text on a tinted
+       destructive banner, and under its own foreground — which passes today and
+       fails the first time anyone nudges the hue. The tint case is the tight
+       one and it cannot be fixed by the component, because raising the tint
+       alpha moves the ground toward the ink. */
+    --destructive: 0 72% 64%;
     --destructive-foreground: 240 10% 8%;
 
     --positive: 145 55% 52%;
     --positive-foreground: 240 10% 8%;
 
-    --warning: 38 92% 58%;
+    --warning: 46 96% 56%;
     --warning-foreground: 240 10% 8%;
 
     --border: 240 5% 20%;
     --input: 240 5% 20%;
-    --ring: 221 83% 62%;
+    --ring: 26 100% 58%;
   }
 
   /**
@@ -284,9 +324,31 @@
     --t-radius: 0;
   }
 
+  /**
+   * The user's bubble is the one floor surface whose fill is not a neutral, and
+   * that makes it the one place the refinement tokens have to be overridden.
+   *
+   * `--t-ink-muted` and `--t-accent-on` exist to answer "what does secondary
+   * text, and accent-coloured text, look like *on this surface*". Their `:root`
+   * values answer it for a neutral page — `--muted-foreground` and `--primary`.
+   * Inherited onto a surface filled with `--primary` itself, those answers were
+   * 1.16:1 and **1.00:1**: accent text on the accent fill is literally the same
+   * colour, and muted text was invisible. A token whose whole purpose is to
+   * correct for the surface, silently returning the uncorrected value on the
+   * only surface that needs correcting.
+   *
+   * Both now derive from `--primary-foreground`, which the contrast manifest
+   * already holds at 4.5:1 against this exact fill, so they cannot drift apart
+   * from it. The muted one is barely muted — 0.9 alpha — and that is the
+   * physics rather than a compromise: on a saturated fill there is very little
+   * room between "legible" and "the ink", and the derivation lands in the same
+   * place for a generated theme.
+   */
   [data-tails-part='bubbleUser'] {
     --t-fill-color: hsl(var(--primary));
     --t-ink: hsl(var(--primary-foreground));
+    --t-ink-muted: hsl(var(--primary-foreground) / 0.9);
+    --t-accent-on: hsl(var(--primary-foreground));
     --t-border-width: 0;
   }
 
@@ -789,8 +851,22 @@
 
   .prose-tails p { @apply whitespace-pre-wrap; }
 
+  /**
+   * Links use the surface-aware accent, not `text-primary`.
+   *
+   * `--primary` is solved against the *page*. A link inside assistant output
+   * can be sitting on a card, a bubble or a glass popover whose fill diverges
+   * from the page, and on those the page-solved accent is answering the wrong
+   * question — which is exactly what `--t-accent-on` exists for: the accent
+   * re-solved against whatever surface actually contains it.
+   *
+   * It also matters at the floor. Links here are 0.9375rem, so they need 4.5:1
+   * rather than the 3:1 an accent used as a button fill owes the page, and this
+   * rule is the single most-read place in the app where that distinction bites.
+   */
   .prose-tails a {
-    @apply text-primary underline underline-offset-2;
+    @apply underline underline-offset-2;
+    color: var(--t-accent-on);
   }
 
   .prose-tails ul { @apply list-disc space-y-1 pl-5; }

@@ -27,7 +27,16 @@ contextBridge.exposeInMainWorld('petBridge', {
    */
   reportPointerOverPet: (over) => ipcRenderer.send('pet:interactive', { over }),
 
-  startDrag: (offsetX, offsetY) => ipcRenderer.send('pet:drag-start', { offsetX, offsetY }),
+  /**
+   * Begins a drag. Carries no coordinates on purpose.
+   *
+   * The grab offset is worked out in the main process from the cursor and the
+   * window position, which are both in one coordinate system. A renderer's
+   * `screenX` is not guaranteed to be in the same units as the window's
+   * position, and that mismatch grows with distance from the screen origin —
+   * a pet that slides further from the cursor the further you drag it.
+   */
+  startDrag: () => ipcRenderer.send('pet:drag-start'),
   endDrag: () => ipcRenderer.send('pet:drag-end'),
 
   openMenu: (petId) => ipcRenderer.send('pet:menu', { petId }),

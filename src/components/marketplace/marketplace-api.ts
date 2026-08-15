@@ -77,6 +77,18 @@ export type InstalledPet = {
    */
   preview: { frame: number; column: number; row: number };
   /**
+   * The frames each state should actually play — the declared ranges with
+   * their blank tails removed, decided by the server.
+   *
+   * Prefer `playable[state] ?? definition.states[state]` and never trim
+   * anything locally: the desktop pet window is a separate document, and a rule
+   * applied in one renderer and not the other is how the pet ended up blinking
+   * on the desktop but not in the app.
+   */
+  playable: Partial<Record<PetStateName, FrameRange>>;
+  /** False when no renderer has measured this sheet yet. `PetSprite` fixes that. */
+  hasCellUsage: boolean;
+  /**
    * A theme this pet brings to a conversation it is assigned to, or null.
    *
    * An opaque id. Themes come and go, so one that no longer exists means "no
@@ -236,6 +248,19 @@ export const petsApi = {
     request<InstalledPet>('/import', {
       method: 'POST',
       body: JSON.stringify({ definition, image }),
+    }),
+
+  /**
+   * Reports which cells of a pet's sheet hold artwork, one character per frame.
+   *
+   * Measured in a browser because only a browser can decode the sheet, and sent
+   * to the server because the server is the only place both renderers read
+   * from. See `sprite-usage.ts`.
+   */
+  reportCellUsage: (id: string, usage: string) =>
+    request<InstalledPet>(`/${encodeURIComponent(id)}/cell-usage`, {
+      method: 'POST',
+      body: JSON.stringify({ usage }),
     }),
 
   /**
