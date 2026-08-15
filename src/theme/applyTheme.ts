@@ -3,11 +3,28 @@ import { prefersReducedMotion } from '@/theme/motion';
 /** Cached so a cold start can paint the last look before the bundle runs. */
 const THEME_CSS_KEY = 'tails.themeCss';
 
-let themeSheet: CSSStyleSheet | null = null;
-let fallbackStyleElement: HTMLStyleElement | null = null;
+/**
+ * The two stylesheets the appearance system owns, in cascade order.
+ *
+ * `theme` carries derived tokens; `css` carries an author-written stylesheet
+ * that must be able to override them, which is the whole reason it exists.
+ * Order is load order here — `css` is adopted after `theme` and never before,
+ * so a freeform rule wins ties without needing `!important` everywhere.
+ */
+export type AppearanceLayer = 'theme' | 'css';
+
+const LAYER_ORDER: AppearanceLayer[] = ['theme', 'css'];
+
+const sheets = new Map<AppearanceLayer, CSSStyleSheet>();
+const fallbackElements = new Map<AppearanceLayer, HTMLStyleElement>();
+
+const supportsConstructable = (): boolean =>
+  typeof CSSStyleSheet !== 'undefined'
+  && 'replaceSync' in CSSStyleSheet.prototype
+  && 'adoptedStyleSheets' in Document.prototype;
 
 /**
- * Installs the single stylesheet all generated themes are written into.
+ * Installs a layer's stylesheet, keeping the layers in a defined order.
  *
  * A constructed stylesheet in `adoptedStyleSheets` is one atomic object we can
  * rewrite wholesale, and — critically — it carries real `:root` / `.dark`
@@ -15,28 +32,52 @@ let fallbackStyleElement: HTMLStyleElement | null = null;
  * the obvious first implementation and is wrong: inline styles outrank every
  * selector, so the `.dark` overrides stop working and dark mode silently
  * breaks.
+ *
+ * The adopted list is rebuilt rather than appended to, because appending would
+ * order the layers by whichever happened to be written first — which for a
+ * freeform sheet applied before its theme is exactly backwards.
  */
-function ensureSheet(): { write: (css: string) => void } {
+function ensureSheet(layer: AppearanceLayer = 'theme'): { write: (css: string) => void } {
   if (typeof document === 'undefined') return { write: () => {} };
 
-  const supportsConstructable = typeof CSSStyleSheet !== 'undefined'
-    && 'replaceSync' in CSSStyleSheet.prototype
-    && 'adoptedStyleSheets' in Document.prototype;
+  if (supportsConstructable()) {
+    if (!sheets.has(layer)) {
+      sheets.set(layer, new CSSStyleSheet());
 
-  if (supportsConstructable) {
-    if (!themeSheet) {
-      themeSheet = new CSSStyleSheet();
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, themeSheet];
+      const ours = new Set(sheets.values());
+      document.adoptedStyleSheets = [
+        ...document.adoptedStyleSheets.filter((sheet) => !ours.has(sheet)),
+        ...LAYER_ORDER.map((name) => sheets.get(name)).filter((sheet): sheet is CSSStyleSheet => !!sheet),
+      ];
     }
-    return { write: (css) => themeSheet?.replaceSync(css) };
+    return { write: (css) => sheets.get(layer)?.replaceSync(css) };
   }
 
-  if (!fallbackStyleElement) {
-    fallbackStyleElement = document.createElement('style');
-    fallbackStyleElement.id = 'tails-theme';
-    document.head.appendChild(fallbackStyleElement);
+  if (!fallbackElements.has(layer)) {
+    const element = document.createElement('style');
+    element.id = `tails-${layer}`;
+    document.head.appendChild(element);
+    fallbackElements.set(layer, element);
   }
-  return { write: (css) => { if (fallbackStyleElement) fallbackStyleElement.textContent = css; } };
+  return {
+    write: (css) => {
+      const element = fallbackElements.get(layer);
+      if (element) element.textContent = css;
+    },
+  };
+}
+
+/**
+ * Applies an author-written stylesheet above the theme.
+ *
+ * Deliberately not wrapped in a View Transition and deliberately never cached:
+ * this layer is ephemeral by contract — it lives until the window reloads —
+ * so the worst outcome of a stylesheet that hides something important is
+ * "reload the window" rather than "the app now opens broken". The server
+ * validates it; this function only installs what came back.
+ */
+export function applyFreeformCss(css: string): void {
+  ensureSheet('css').write(css);
 }
 
 /** Fonts referenced by a theme, so we can wait for them before swapping. */
@@ -128,7 +169,7 @@ export async function applyTheme(payload: AppearancePayload): Promise<void> {
 
 /** Drops any generated theme, revealing the built-in ramp underneath. */
 export function clearTheme(): void {
-  ensureSheet().write('');
+  ensureSheet('theme').write('');
   try {
     localStorage.removeItem(THEME_CSS_KEY);
   } catch {

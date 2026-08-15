@@ -25,40 +25,60 @@ const encodeSvg = (svg: string): string =>
       `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 
 /**
+ * Rounds an alpha to three places.
+ *
+ * Every generator bakes its strength into its own pixels rather than leaving it
+ * to a CSS `opacity` on the layer. That is not a micro-optimisation: a surface
+ * has two pseudo-elements and three things that want to be painted on them
+ * (texture, lighting overlay, specular ring), and `opacity` applies to a whole
+ * element while `background-image` stacks. Baking alpha lets two of those three
+ * ride as sibling background layers on one pseudo-element, which is the only
+ * arrangement that fits.
+ */
+const alphaOf = (value: number): number => Math.round(Math.min(1, Math.max(0, value)) * 1000) / 1000;
+
+/**
  * A fractal-noise tile.
  *
  * `baseFrequency` is what separates fine photographic grain from coarse paper
  * fibre, so the two textures are one generator at two frequencies rather than
  * two hand-written SVGs that drift apart.
  */
-const noiseTile = (frequency: number, octaves: number, tile: number): string => encodeSvg(`
+const noiseTile = (frequency: number, octaves: number, tile: number, alpha: number): string => encodeSvg(`
   <svg xmlns="http://www.w3.org/2000/svg" width="${tile}" height="${tile}">
     <filter id="n">
       <feTurbulence type="fractalNoise" baseFrequency="${frequency}" numOctaves="${octaves}" stitchTiles="stitch"/>
       <feColorMatrix type="saturate" values="0"/>
     </filter>
-    <rect width="100%" height="100%" filter="url(#n)"/>
+    <rect width="100%" height="100%" filter="url(#n)" opacity="${alphaOf(alpha)}"/>
   </svg>
 `);
 
 /** A dot grid, the halftone base. */
-const halftoneTile = (tile: number): string => encodeSvg(`
+const halftoneTile = (tile: number, alpha: number): string => encodeSvg(`
   <svg xmlns="http://www.w3.org/2000/svg" width="${tile}" height="${tile}">
-    <circle cx="${tile / 4}" cy="${tile / 4}" r="${tile / 6}" fill="#fff"/>
-    <circle cx="${(tile * 3) / 4}" cy="${(tile * 3) / 4}" r="${tile / 6}" fill="#fff"/>
+    <g opacity="${alphaOf(alpha)}">
+      <circle cx="${tile / 4}" cy="${tile / 4}" r="${tile / 6}" fill="#fff"/>
+      <circle cx="${(tile * 3) / 4}" cy="${(tile * 3) / 4}" r="${tile / 6}" fill="#fff"/>
+    </g>
   </svg>
 `);
 
 /** An ordered 4x4 Bayer-ish dither cell. */
-const ditherTile = (): string => encodeSvg(`
+const ditherTile = (alpha: number): string => encodeSvg(`
   <svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
-    <rect width="4" height="4" fill="#000"/>
-    <rect x="0" y="0" width="1" height="1" fill="#fff"/>
-    <rect x="2" y="1" width="1" height="1" fill="#fff"/>
-    <rect x="1" y="2" width="1" height="1" fill="#fff"/>
-    <rect x="3" y="3" width="1" height="1" fill="#fff"/>
+    <g opacity="${alphaOf(alpha)}">
+      <rect width="4" height="4" fill="#000"/>
+      <rect x="0" y="0" width="1" height="1" fill="#fff"/>
+      <rect x="2" y="1" width="1" height="1" fill="#fff"/>
+      <rect x="1" y="2" width="1" height="1" fill="#fff"/>
+      <rect x="3" y="3" width="1" height="1" fill="#fff"/>
+    </g>
   </svg>
 `);
+
+/** White at a given alpha, for the gradient-based textures. */
+const ink = (alpha: number): string => `rgb(255 255 255 / ${alphaOf(alpha)})`;
 
 /** A texture as the renderer consumes it: an image plus the tile size to repeat it at. */
 export type TexturePaint = { image: string; size: string };
@@ -67,81 +87,105 @@ export type TexturePaint = { image: string; size: string };
  * The texture table.
  *
  * Scale multiplies the tile size rather than the noise frequency so a theme can
- * ask for coarser grain without the generator re-running — the data URI is a
- * constant and only `background-size` moves.
+ * ask for coarser grain without changing what the generator draws — only
+ * `background-size` moves.
  */
-const TEXTURE_PAINTS: Record<Exclude<TextureKind, 'none'>, (scale: number) => TexturePaint> = {
-  grain: (scale) => ({
-    image: `url("data:image/svg+xml,${noiseTile(0.85, 4, 120)}")`,
+const TEXTURE_PAINTS: Record<
+  Exclude<TextureKind, 'none'>,
+  (scale: number, alpha: number) => TexturePaint
+> = {
+  grain: (scale, alpha) => ({
+    image: `url("data:image/svg+xml,${noiseTile(0.85, 4, 120, alpha)}")`,
     size: `${Math.round(120 * scale)}px ${Math.round(120 * scale)}px`,
   }),
-  paper: (scale) => ({
-    image: `url("data:image/svg+xml,${noiseTile(0.28, 5, 180)}")`,
+  paper: (scale, alpha) => ({
+    image: `url("data:image/svg+xml,${noiseTile(0.28, 5, 180, alpha)}")`,
     size: `${Math.round(180 * scale)}px ${Math.round(180 * scale)}px`,
   }),
-  halftone: (scale) => ({
-    image: `url("data:image/svg+xml,${halftoneTile(12)}")`,
+  halftone: (scale, alpha) => ({
+    image: `url("data:image/svg+xml,${halftoneTile(12, alpha)}")`,
     size: `${Math.round(12 * scale)}px ${Math.round(12 * scale)}px`,
   }),
-  dither: (scale) => ({
-    image: `url("data:image/svg+xml,${ditherTile()}")`,
+  dither: (scale, alpha) => ({
+    image: `url("data:image/svg+xml,${ditherTile(alpha)}")`,
     size: `${Math.round(4 * scale)}px ${Math.round(4 * scale)}px`,
   }),
   // Scanline and grid are pure gradients: no data URI needed, and they stay
   // crisp at any device pixel ratio where a raster tile would shimmer.
-  scanline: (scale) => ({
-    image: 'repeating-linear-gradient(0deg, #fff 0, #fff 1px, transparent 1px, transparent 3px)',
+  scanline: (scale, alpha) => ({
+    image: `repeating-linear-gradient(0deg, ${ink(alpha)} 0, ${ink(alpha)} 1px, transparent 1px, transparent 3px)`,
     size: `100% ${Math.max(2, Math.round(3 * scale))}px`,
   }),
-  grid: (scale) => ({
+  grid: (scale, alpha) => ({
     image: [
-      'linear-gradient(0deg, #fff 0, #fff 1px, transparent 1px)',
-      'linear-gradient(90deg, #fff 0, #fff 1px, transparent 1px)',
+      `linear-gradient(0deg, ${ink(alpha)} 0, ${ink(alpha)} 1px, transparent 1px)`,
+      `linear-gradient(90deg, ${ink(alpha)} 0, ${ink(alpha)} 1px, transparent 1px)`,
     ].join(', '),
     size: `${Math.round(24 * scale)}px ${Math.round(24 * scale)}px`,
   }),
 };
 
-/** Resolves a texture selection to its paint, or null for "none". */
-export function readTexturePaint(kind: TextureKind, scale: number): TexturePaint | null {
-  if (kind === 'none') return null;
-  return TEXTURE_PAINTS[kind](scale);
+/**
+ * Resolves a texture selection to its paint, or null for "none".
+ *
+ * The opacity is baked into the returned image. Nothing downstream should apply
+ * it a second time — see `alphaOf` for why the strength lives in the pixels.
+ */
+export function readTexturePaint(
+  kind: TextureKind,
+  scale: number,
+  opacity: number,
+): TexturePaint | null {
+  if (kind === 'none' || opacity <= 0) return null;
+  return TEXTURE_PAINTS[kind](scale, opacity);
 }
 
 /**
  * Lighting overlays.
  *
- * Written against two colour placeholders the caller substitutes with resolved
- * theme colours, rather than hard-coded white and black: a sheen made of literal
- * white is invisible on a paper theme and blows out a pastel one.
+ * Built from theme colours supplied as alpha-taking functions rather than from
+ * literal white and black: a sheen made of real white is invisible on a paper
+ * theme and blows out a pastel one, and taking the alpha as an argument is what
+ * lets `strength` be baked into the stops instead of applied afterwards.
  */
 export type OverlayPaint = { image: string; blend: BlendMode };
 
+/** Resolved theme colours an overlay may draw with, at any alpha. */
+export type OverlayTint = {
+  light: (alpha: number) => string;
+  shadow: (alpha: number) => string;
+};
+
 const OVERLAY_PAINTS: Record<
   Exclude<OverlayKind, 'none'>,
-  (angle: number, light: string, shadow: string) => OverlayPaint
+  (angle: number, strength: number, tint: OverlayTint) => OverlayPaint
 > = {
-  sheen: (angle, light) => ({
-    image: `linear-gradient(${angle}deg, ${light} 0%, transparent 42%, transparent 58%, ${light} 100%)`,
+  sheen: (angle, strength, tint) => ({
+    image: `linear-gradient(${angle}deg, ${tint.light(strength * 0.9)} 0%, transparent 42%, transparent 58%, ${tint.light(strength * 0.55)} 100%)`,
     blend: 'soft-light',
   }),
-  topLight: (_angle, light) => ({
-    image: `linear-gradient(180deg, ${light} 0%, transparent 55%)`,
+  topLight: (_angle, strength, tint) => ({
+    image: `linear-gradient(180deg, ${tint.light(strength)} 0%, transparent 55%)`,
     blend: 'soft-light',
   }),
-  vignette: (_angle, _light, shadow) => ({
-    image: `radial-gradient(ellipse at center, transparent 45%, ${shadow} 100%)`,
+  vignette: (_angle, strength, tint) => ({
+    image: `radial-gradient(ellipse at center, transparent 45%, ${tint.shadow(strength)} 100%)`,
     blend: 'multiply',
   }),
 };
 
-/** Resolves an overlay selection to its paint, or null for "none". */
+/**
+ * Resolves an overlay selection to its paint, or null for "none".
+ *
+ * As with textures, the strength is in the stops. The returned image is
+ * self-sufficient and can sit beside a texture as a second background layer.
+ */
 export function readOverlayPaint(
   kind: OverlayKind,
   angle: number,
-  light: string,
-  shadow: string,
+  strength: number,
+  tint: OverlayTint,
 ): OverlayPaint | null {
-  if (kind === 'none') return null;
-  return OVERLAY_PAINTS[kind](angle, light, shadow);
+  if (kind === 'none' || strength <= 0) return null;
+  return OVERLAY_PAINTS[kind](angle, strength, tint);
 }

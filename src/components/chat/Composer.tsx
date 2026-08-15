@@ -184,7 +184,10 @@ export function Composer({
   return (
     <div className="relative mx-auto max-w-3xl space-y-2">
       {paletteOpen ? (
-        <div className="animate-scale-in absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-xl border border-border bg-popover shadow-xl">
+        <div
+          data-tails-part="popover"
+          className="animate-scale-in absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden"
+        >
           {matches.map((command, index) => (
             <button
               key={command.name}
@@ -235,8 +238,11 @@ export function Composer({
         </div>
       ) : null}
 
+      {/* `input` rather than a composer-specific part: the surface list is
+          closed, and the composer is the app's primary text field — a theme
+          that styles typing should style it here too. */}
       <div
-        data-tails-part="composer"
+        data-tails-part="input"
         onDragOver={(event) => {
           event.preventDefault();
           setDragging(true);
@@ -248,8 +254,11 @@ export function Composer({
           if (event.dataTransfer.files.length > 0) void addFiles(event.dataTransfer.files);
         }}
         className={cn(
-          'flex items-end gap-2 rounded-2xl border bg-card p-2 transition-shadow duration-quick ease-standard focus-within:ring-2 focus-within:ring-ring',
-          dragging ? 'border-primary ring-2 ring-primary/40' : 'border-border',
+          'flex items-end gap-2 p-2 transition-shadow duration-quick ease-standard focus-within:ring-2 focus-within:ring-ring',
+          // Drop feedback is a ring, not a border colour: the part rule owns
+          // border-color at higher specificity, so a `border-primary` here
+          // would never paint.
+          dragging && 'ring-2 ring-primary/40',
         )}
       >
         <button

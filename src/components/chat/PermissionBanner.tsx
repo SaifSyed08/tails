@@ -20,7 +20,16 @@ export function PermissionBanner({ permission, onAnswer }: PermissionBannerProps
 
   return (
     <Reveal variant="rise">
-      <div className="rounded-xl border border-warning/50 bg-warning/10 p-3">
+      {/*
+        Marked critical, and deliberately not given a `data-tails-part`.
+        This is the element that asks whether Claude may act on the machine, so
+        it must look the way the app looks and not the way a theme wants it to.
+        The freeform CSS validator refuses any selector that mentions this
+        attribute, which is what stops a generated stylesheet from hiding,
+        shrinking, or restyling a permission prompt into something the user
+        approves without reading.
+      */}
+      <div data-tails-critical className="rounded-xl border border-warning/50 bg-warning/10 p-3">
         <div className="flex items-start gap-2">
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
           <div className="min-w-0 flex-1">

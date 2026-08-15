@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
-import { applyTheme, type AppearancePayload } from '@/theme/applyTheme';
+import { applyFreeformCss, applyTheme, type AppearancePayload } from '@/theme/applyTheme';
 
 /** What the app is doing about its own appearance right now. */
 export type AppearancePhase = 'idle' | 'preparing' | 'applying';
@@ -76,7 +76,7 @@ export function AppearanceProvider({ sessionId, children }: AppearanceProviderPr
         scope?: string;
         scopeKey?: string;
       }) | undefined;
-      if (!payload || payload.layer !== 'theme') return;
+      if (!payload) return;
 
       // A conversation-scoped change belongs only to that conversation's
       // window; a global one applies everywhere.
@@ -84,6 +84,18 @@ export function AppearanceProvider({ sessionId, children }: AppearanceProviderPr
         || !payload.scopeKey
         || payload.scopeKey === sessionId;
       if (!isForThisWindow) return;
+
+      // The freeform layer sits above the theme and swaps synchronously. It
+      // skips the two-phase treatment on purpose: there are no fonts to
+      // preload, and a stylesheet the author is iterating on should land the
+      // instant it validates rather than after a deliberate 180ms beat.
+      if (payload.layer === 'css') {
+        applyFreeformCss(payload.css);
+        window.dispatchEvent(new CustomEvent('tails:appearance-changed'));
+        return;
+      }
+
+      if (payload.layer !== 'theme') return;
 
       void run(payload);
     });

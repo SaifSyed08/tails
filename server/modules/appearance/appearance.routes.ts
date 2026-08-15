@@ -35,6 +35,18 @@ export function createAppearanceRouter(): express.Router {
     return themeService.applyTheme(resolvedId, scope, readString(req.body?.sessionId) ?? '');
   }));
 
+  // The freeform layer. Ephemeral and separate from /apply on purpose: it is a
+  // different trust level, and routing it through the same endpoint would make
+  // that impossible to see from the outside.
+  router.post('/css', respond((req) => (
+    themeService.applyFreeformCss(req.body?.css, readString(req.body?.sessionId) ?? '')
+  )));
+
+  router.delete('/css', respond((req) => {
+    themeService.clearFreeformCss(readString(req.query.sessionId) ?? '');
+    return { ok: true };
+  }));
+
   router.post('/unbind', respond((req) => {
     const scope = req.body?.scope === 'session' ? 'session' : 'global';
     themeService.unbind(scope, readString(req.body?.sessionId) ?? '');

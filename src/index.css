@@ -106,6 +106,100 @@
     --ring: 221 83% 62%;
   }
 
+  /**
+   * The surface floor.
+   *
+   * Every `--t-*` token the appearance engine can emit is given a value here
+   * that reproduces the built-in look, so a part is fully styled with no theme
+   * bound at all. Without this the consumption rules below would paint parts
+   * `transparent` whenever nothing is bound — the floor has to be a complete
+   * theme, not an absence of one.
+   */
+  :root {
+    --t-fill-color: hsl(var(--card));
+    --t-fill-image: none;
+    --t-fill-blend: normal;
+    --t-fill-origin: padding-box;
+    --t-fill-clip: border-box;
+    --t-border-width: 1px;
+    --t-border-style: solid;
+    --t-border-color: hsl(var(--border));
+    --t-radius: var(--radius);
+    --t-corner-shape: round;
+    --t-shadow: none;
+    --t-backdrop: none;
+    --t-texture-image: none;
+    --t-texture-size: auto;
+    --t-texture-opacity: 0;
+    --t-texture-blend: normal;
+    --t-overlay-image: none;
+    --t-overlay-opacity: 0;
+    --t-overlay-blend: normal;
+    --t-ink: hsl(var(--card-foreground));
+    --t-ink-muted: hsl(var(--muted-foreground));
+    --t-ink-shadow: none;
+    --t-accent-on: hsl(var(--primary));
+  }
+
+  /* Per-part floor values, mirroring what each part looked like when it was
+     styled with Tailwind utilities directly. A theme overrides these through
+     the same tokens, so the two paths cannot drift. */
+  /* Both are full-bleed chrome, so they get one dividing edge rather than a
+     box: a 1px border on all four sides would draw a line down the window's
+     left edge and around the title bar. A theme is free to override this — the
+     floor only has to be right for the built-in look. */
+  [data-tails-part='sidebar'],
+  [data-tails-part='header'] {
+    --t-fill-color: hsl(var(--background));
+    --t-ink: hsl(var(--foreground));
+    --t-radius: 0;
+  }
+
+  [data-tails-part='sidebar'] {
+    --t-border-width: 0 1px 0 0;
+  }
+
+  [data-tails-part='header'] {
+    --t-border-width: 0 0 1px 0;
+  }
+
+  [data-tails-part='popover'] {
+    --t-fill-color: hsl(var(--popover));
+    --t-ink: hsl(var(--popover-foreground));
+  }
+
+  [data-tails-part='code'] {
+    --t-fill-color: hsl(var(--muted) / 0.6);
+  }
+
+  [data-tails-part='scrim'] {
+    --t-fill-color: hsl(var(--background) / 0.6);
+    --t-border-width: 0;
+    --t-radius: 0;
+  }
+
+  [data-tails-part='bubbleUser'] {
+    --t-fill-color: hsl(var(--primary));
+    --t-ink: hsl(var(--primary-foreground));
+    --t-border-width: 0;
+  }
+
+  /* The assistant's turn is unbubbled by default — page text rather than a
+     card, which is what makes a long answer readable. It is still a named part
+     so a theme *can* give it a surface; it just doesn't start with one. */
+  [data-tails-part='bubbleAssistant'] {
+    --t-fill-color: transparent;
+    --t-ink: hsl(var(--foreground));
+    --t-border-width: 0;
+    --t-radius: 0;
+  }
+
+  [data-tails-part='button'] {
+    --t-fill-color: transparent;
+    --t-border-width: 0;
+    --t-ink: inherit;
+  }
+
   * {
     border-color: hsl(var(--border));
   }
@@ -158,6 +252,117 @@
 }
 
 @layer components {
+  /**
+   * The surface renderer — where `--t-*` tokens become pixels.
+   *
+   * This is the half of the appearance engine that lives in the client. The
+   * server derives tokens and scopes them to `[data-tails-part="…"]`; nothing
+   * it emits has any effect until these rules consume them. A token emitted and
+   * never consumed is exactly the v1 failure — the spec validated, the value
+   * was dropped, and every generated theme came out as the nearest preset with
+   * different hues.
+   *
+   * Selectors are doubled to (0,2,0) so they outrank the Tailwind utility of
+   * the same name. A part's appearance belongs to the theme; a `bg-card` left
+   * on the element must not quietly win. (Tailwind v3's `@layer` is a build-time
+   * grouping rather than a real cascade layer, so specificity still decides.)
+   *
+   *   element   fill, border, radius, shadow, backdrop, ink
+   *   ::before  texture + overlay, as two blended background layers
+   *
+   * The specular ring is not a layer here. It arrives as the last entry in
+   * `--t-fill-image`, clipped to `border-box` while the fills below it clip to
+   * `padding-box` — which is why `--t-fill-clip` and `--t-fill-origin` are
+   * comma lists rather than single values. That beats drawing it on a
+   * pseudo-element with a mask, because a masked ring follows `border-radius`
+   * but not `corner-shape`, and would square off the corners of every
+   * squircle.
+   */
+  [data-tails-part][data-tails-part] {
+    position: relative;
+    /* Makes the part its own stacking context, which is what lets the paint
+       layers below sit at `z-index: -1` — above the element's own background
+       but beneath its content, including bare text nodes. Also confines the
+       texture's `mix-blend-mode` to this surface instead of letting it
+       composite against whatever is behind the window. */
+    isolation: isolate;
+    background-color: var(--t-fill-color);
+    background-image: var(--t-fill-image);
+    background-blend-mode: var(--t-fill-blend);
+    background-origin: var(--t-fill-origin);
+    background-clip: var(--t-fill-clip);
+    border-width: var(--t-border-width);
+    border-style: var(--t-border-style);
+    border-color: var(--t-border-color);
+    border-radius: var(--t-radius);
+    box-shadow: var(--t-shadow);
+    color: var(--t-ink);
+    text-shadow: var(--t-ink-shadow);
+    /* Both spellings: the unprefixed property is unsupported in the WebKit
+       build Electron ships on some platforms, and glass without it is just a
+       flat translucent panel. */
+    -webkit-backdrop-filter: var(--t-backdrop);
+    backdrop-filter: var(--t-backdrop);
+    /* Progressive enhancement — squircles where supported (Chrome 139+),
+       ordinary rounded corners everywhere else. */
+    corner-shape: var(--t-corner-shape);
+  }
+
+  /**
+   * Texture and overlay.
+   *
+   * Painted on a pseudo-element rather than as extra layers on the element so
+   * they sit above the fill but below the content, and so `mix-blend-mode`
+   * composites them against the fill instead of against whatever is behind the
+   * window.
+   */
+  [data-tails-part][data-tails-part]::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    corner-shape: inherit;
+    pointer-events: none;
+    background-image: var(--t-texture-image), var(--t-overlay-image);
+    background-size: var(--t-texture-size), cover;
+    background-repeat: repeat, no-repeat;
+    background-blend-mode: var(--t-texture-blend), var(--t-overlay-blend);
+    /* No `opacity` here, deliberately. A pseudo-element has exactly one, and
+       these are two layers with two different strengths — applying the
+       texture's would silently scale the overlay by it, so a theme with no
+       texture would lose its overlay entirely. Both images arrive with their
+       alpha already baked in by `derive.ts` instead. */
+  }
+
+  /**
+   * Ink that is aware of the surface it sits on.
+   *
+   * `--t-ink` is applied to the part itself, but secondary and accent text need
+   * opting into: on a dark glass panel over a light window, the global
+   * `--muted-foreground` is solving for the wrong background. These two are
+   * solved against the *surface's* fill, which is the only way muted text stays
+   * legible on a part whose fill diverges from the page.
+   */
+  .ink-muted {
+    color: var(--t-ink-muted);
+  }
+
+  .ink-accent {
+    color: var(--t-accent-on);
+  }
+
+  /**
+   * Tone surfaces — `positive`, `warning`, and friends.
+   *
+   * Scoped separately from parts because a tone answers "what does this mean"
+   * while a part answers "what is this", and one element can be both.
+   */
+  [data-tails-surface][data-tails-surface] {
+    background-color: var(--t-fill-color);
+    color: var(--t-ink);
+  }
+
   /**
    * Markdown rendered by the assistant.
    *

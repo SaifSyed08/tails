@@ -84,8 +84,9 @@ const toStates = (drafts: Record<PetStateName, StateDraft>, grid: FrameGrid): Pe
   return states;
 };
 
-const FIELD_CLASS = 'w-full rounded-md border border-border bg-background px-2 py-1 text-sm '
-  + 'outline-none focus:ring-2 focus:ring-ring';
+/* Paired with `data-tails-part="input"` on every field that uses it — fill,
+   border and radius come from the theme, so only layout survives here. */
+const FIELD_CLASS = 'w-full px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring';
 
 const GRID_FIELDS = [
   { key: 'width', label: 'Cell width', hint: 'px' },
@@ -170,7 +171,7 @@ export function FrameGridEditor({ pet, onSave, onCancel }: FrameGridEditorProps)
   };
 
   return (
-    <div className="space-y-4 rounded-lg border border-border bg-background/40 p-3">
+    <div data-tails-part="card" className="space-y-4 p-3">
       <div>
         <h4 className="text-sm font-semibold">Frame layout</h4>
         <p className="mt-0.5 text-xs text-muted-foreground">
@@ -211,6 +212,7 @@ export function FrameGridEditor({ pet, onSave, onCancel }: FrameGridEditorProps)
                 min={field.key === 'fps' ? 0.5 : 1}
                 value={draft[field.key]}
                 onChange={(event) => setField(field.key, event.target.value)}
+                data-tails-part="input"
                 className={FIELD_CLASS}
               />
               <span className="mt-0.5 block text-[10px] text-muted-foreground">{field.hint}</span>
@@ -290,7 +292,8 @@ export function FrameGridEditor({ pet, onSave, onCancel }: FrameGridEditorProps)
                   disabled={!isIdle && !stateDraft.enabled}
                   onChange={(event) => setStateField(name, { count: event.target.value })}
                   aria-label={`Frame count for ${name}`}
-                  className="w-16 rounded-md border border-border bg-background px-1.5 py-1 disabled:opacity-50"
+                  data-tails-part="input"
+                  className="w-16 px-1.5 py-1 disabled:opacity-50"
                 />
               </label>
 

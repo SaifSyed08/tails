@@ -134,7 +134,7 @@ export function Sidebar({
   return (
     <aside
       data-tails-part="sidebar"
-      className="flex h-full w-72 shrink-0 flex-col border-r border-border bg-card/40"
+      className="flex h-full w-72 shrink-0 flex-col"
     >
       <div className="app-drag flex h-11 shrink-0 items-center gap-1 px-3">
         <span className="font-display text-sm font-semibold tracking-[0.18em]">TAILS</span>
@@ -162,7 +162,12 @@ export function Sidebar({
 
       {searchOpen ? (
         <div className="animate-fade-in px-3 pb-2">
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-ring">
+          {/* The field is the wrapper, not the `input` element: the icon and
+              the clear button sit inside the same box. */}
+          <div
+            data-tails-part="input"
+            className="flex items-center gap-2 px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-ring"
+          >
             <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <input
               ref={searchInputRef}
@@ -255,7 +260,8 @@ export function Sidebar({
 
           {orderMenuOpen ? (
             <div
-              className="animate-scale-in absolute right-0 top-7 z-20 w-40 overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-lg"
+              data-tails-part="popover"
+              className="animate-scale-in absolute right-0 top-7 z-20 w-40 overflow-hidden py-1"
               onClick={(event) => event.stopPropagation()}
             >
               {([
@@ -346,7 +352,8 @@ export function Sidebar({
 
       {contextMenu ? (
         <div
-          className="animate-scale-in fixed z-50 w-44 overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-xl"
+          data-tails-part="popover"
+          className="animate-scale-in fixed z-50 w-44 overflow-hidden py-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >

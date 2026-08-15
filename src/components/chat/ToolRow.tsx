@@ -28,13 +28,11 @@ export function ToolRow({ row }: ToolRowProps) {
 
   const StatusIcon = status === 'running' ? Loader2 : status === 'error' ? AlertCircle : CheckCircle2;
 
+  // A failed call is marked by its status icon rather than by a red border:
+  // the `card` part owns border-color, so a `border-destructive` on the row
+  // would be overridden and read as working styling that isn't.
   return (
-    <div
-      className={cn(
-        'rounded-lg border bg-card/60 text-sm transition-colors duration-quick ease-standard',
-        status === 'error' ? 'border-destructive/40' : 'border-border',
-      )}
-    >
+    <div data-tails-part="card" className="text-sm transition-colors duration-quick ease-standard">
       <button
         type="button"
         onClick={() => setExpanded((current) => !current)}
@@ -68,16 +66,23 @@ export function ToolRow({ row }: ToolRowProps) {
       {expanded ? (
         <div className="animate-fade-in space-y-2 border-t border-border/60 px-3 py-2">
           {Object.keys(input).length > 0 ? (
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-2 font-mono text-xs">
+            <pre
+              data-tails-part="code"
+              className="overflow-x-auto whitespace-pre-wrap break-words p-2 font-mono text-xs"
+            >
               {JSON.stringify(input, null, 2)}
             </pre>
           ) : null}
 
           {row.result?.content ? (
             <pre
+              // An error body keeps its destructive tint, which is state
+              // rather than surface, so only the ordinary case is a `code`
+              // surface for the theme to style.
+              data-tails-part={row.result.isError ? undefined : 'code'}
               className={cn(
-                'max-h-80 overflow-auto whitespace-pre-wrap break-words rounded p-2 font-mono text-xs',
-                row.result.isError ? 'bg-destructive/10 text-destructive' : 'bg-muted/60',
+                'max-h-80 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs',
+                row.result.isError && 'rounded bg-destructive/10 text-destructive',
               )}
             >
               {row.result.content}

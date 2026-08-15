@@ -37,6 +37,15 @@ type RevealProps = {
   delayMs?: number;
   className?: string;
   as?: 'div' | 'li' | 'section' | 'span';
+  /**
+   * The appearance-engine surface this element is, if any.
+   *
+   * Forwarded rather than left to a wrapper because the element that animates
+   * in is often the panel itself, and the surface has to be on the element that
+   * owns the background — splitting them would put the theme's fill and the
+   * entrance gesture on two different boxes.
+   */
+  part?: string;
 };
 
 /**
@@ -51,11 +60,13 @@ export function Reveal({
   delayMs = 0,
   className,
   as: Element = 'div',
+  part,
 }: RevealProps) {
   const reduced = useReducedMotion();
 
   return (
     <Element
+      data-tails-part={part}
       className={cn(!reduced && REVEAL_ANIMATIONS[variant], className)}
       style={reduced || delayMs === 0 ? undefined : { animationDelay: `${delayMs}ms` }}
     >

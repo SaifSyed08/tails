@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 
 import { themesRepository, type StoredTheme, type ThemeScope } from '@/db/themes.repository.js';
 import { deriveTokens } from '@/modules/appearance/derive.js';
-import { serializeStylesheet } from '@/modules/appearance/serialize.js';
+import { validateFreeformCss } from '@/modules/appearance/freeform-css.js';
 import { THEME_PRESETS } from '@/modules/appearance/presets.js';
-import { themeSpecSchema, type ThemeSpec } from '@/modules/appearance/theme-spec.js';
+import { serializeStylesheet } from '@/modules/appearance/serialize.js';
+import { upgradeSpec, themeSpecSchema, type ThemeSpec } from '@/modules/appearance/theme-spec.js';
 import { appBroadcast } from '@/shared/broadcast.js';
 import { AppError, createMessage } from '@/shared/utils.js';
 
@@ -16,6 +17,26 @@ import { AppError, createMessage } from '@/shared/utils.js';
  * must not disappear because the agent generated eleven variants.
  */
 const MAX_THEMES = 100;
+
+/**
+ * Whether the freeform CSS layer is available at all.
+ *
+ * On by default, and the reasoning is worth recording because the safer default
+ * is tempting. Everything the declarative spec produces has been solved for
+ * contrast and cannot name a URL; freeform CSS is validated to the same
+ * standard, but that is validation rather than construction, and the two are
+ * not the same promise.
+ *
+ * What makes the weaker promise acceptable here is that the layer is
+ * ephemeral — never written to the database, gone on reload — so the worst
+ * outcome of a hostile or merely bad stylesheet is "reload the window" rather
+ * than "the app opens broken and the thing that would let you fix it is the
+ * thing that is broken". The out-of-process panic key is the backstop beneath
+ * that, deliberately outside the renderer so no stylesheet can reach it.
+ *
+ * Set `TAILS_FREEFORM_CSS=0` to take the declarative spec alone.
+ */
+const FREEFORM_CSS_ENABLED = process.env.TAILS_FREEFORM_CSS !== '0';
 
 export type ThemeSummary = {
   id: string;
@@ -91,7 +112,10 @@ export const themeService = {
       derived,
       css: serializeStylesheet(derived),
       contrast: {
+        target: upgradeSpec(parsed.data).surface.contrastTarget,
         minRatio: Math.round(derived.minRatio * 100) / 100,
+        // Dotted paths into the spec, not prose. The model corrects a path; it
+        // argues with a sentence.
         adjusted: derived.adjusted,
       },
     };
@@ -262,6 +286,73 @@ export const themeService = {
       tokens: stored.tokens,
       origin: 'saved',
     });
+  },
+
+  /**
+   * Applies an author-written stylesheet as a layer above the theme.
+   *
+   * Ephemeral by design. It lives in the renderer until the window reloads and
+   * is never written to the database, which makes the worst outcome of a bad
+   * stylesheet "reload the window" rather than "the app opens broken and the
+   * thing that would let you fix it is the thing that is broken". Persisting it
+   * would need a recovery path, and a recovery path nobody has ever exercised
+   * is not a recovery path.
+   *
+   * The CSS handed to the renderer is the validator's output, never the input.
+   */
+  applyFreeformCss(rawCss: unknown, sessionId = ''): { css: string; bytes: number } {
+    if (!FREEFORM_CSS_ENABLED) {
+      throw new AppError(
+        'Freeform theme CSS is switched off on this install (TAILS_FREEFORM_CSS=0). Use the declarative theme spec instead — it covers everything that can be guaranteed safe.',
+        { code: 'THEME_CSS_DISABLED', statusCode: 403 },
+      );
+    }
+
+    if (typeof rawCss !== 'string') {
+      throw new AppError('Provide the stylesheet as a string.', {
+        code: 'THEME_CSS_INVALID',
+        statusCode: 422,
+        details: [{ path: 'css', message: 'Expected a string.' }],
+      });
+    }
+
+    const result = validateFreeformCss(rawCss);
+    if (!result.ok) {
+      throw new AppError('The stylesheet was rejected.', {
+        code: 'THEME_CSS_INVALID',
+        statusCode: 422,
+        details: result.issues,
+      });
+    }
+
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'css',
+        scope: 'preview',
+        scopeKey: sessionId,
+        themeId: 'freeform',
+        name: 'Custom CSS',
+        css: result.css,
+        pinnedMode: null,
+      },
+    }));
+
+    return { css: result.css, bytes: Buffer.byteLength(result.css, 'utf8') };
+  },
+
+  /** Drops the freeform layer, leaving the theme underneath untouched. */
+  clearFreeformCss(sessionId = ''): void {
+    appBroadcast.publish(createMessage('appearance_changed', sessionId, {
+      appearance: {
+        layer: 'css',
+        scope: 'preview',
+        scopeKey: sessionId,
+        themeId: 'freeform',
+        name: 'Custom CSS',
+        css: '',
+        pinnedMode: null,
+      },
+    }));
   },
 
   deleteTheme(themeId: string): { id: string } {

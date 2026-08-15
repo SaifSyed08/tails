@@ -43,8 +43,9 @@ const readAsText = (file: File): Promise<string> => new Promise((resolve, reject
   reader.readAsText(file);
 });
 
-const FIELD_CLASS = 'w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm '
-  + 'outline-none focus:ring-2 focus:ring-ring';
+/* Paired with `data-tails-part="input"` on every field that uses it — fill,
+   border and radius come from the theme, so only layout survives here. */
+const FIELD_CLASS = 'w-full px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring';
 
 export function ImportPetDialog({ onClose, onImported }: ImportPetDialogProps) {
   const [folderPath, setFolderPath] = useState('');
@@ -122,8 +123,8 @@ export function ImportPetDialog({ onClose, onImported }: ImportPetDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-6 backdrop-blur-sm">
-      <div className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+    <div data-tails-part="scrim" className="fixed inset-0 z-50 flex items-start justify-center p-6">
+      <div data-tails-part="card" className="flex max-h-full w-full max-w-lg flex-col overflow-hidden">
         <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3">
           <h2 className="font-display text-sm font-semibold uppercase tracking-wide">Import pet</h2>
           <button
@@ -157,6 +158,7 @@ export function ImportPetDialog({ onClose, onImported }: ImportPetDialogProps) {
                 onChange={(event) => setFolderPath(event.target.value)}
                 placeholder="C:\Users\you\.codex\pets\sonic"
                 aria-label="Pet folder path"
+                data-tails-part="input"
                 className={FIELD_CLASS}
               />
               <button
@@ -202,6 +204,7 @@ export function ImportPetDialog({ onClose, onImported }: ImportPetDialogProps) {
                   value={id}
                   onChange={(event) => setId(event.target.value)}
                   placeholder="sonic"
+                  data-tails-part="input"
                   className={FIELD_CLASS}
                 />
               </label>
@@ -211,6 +214,7 @@ export function ImportPetDialog({ onClose, onImported }: ImportPetDialogProps) {
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
                   placeholder="Sonic"
+                  data-tails-part="input"
                   className={FIELD_CLASS}
                 />
               </label>
@@ -222,6 +226,7 @@ export function ImportPetDialog({ onClose, onImported }: ImportPetDialogProps) {
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="A tiny blue speedster."
+                data-tails-part="input"
                 className={FIELD_CLASS}
               />
             </label>

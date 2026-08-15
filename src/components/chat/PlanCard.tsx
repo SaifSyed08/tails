@@ -28,7 +28,7 @@ export function PlanCard({ requestId, plan, onAnswer }: PlanCardProps) {
 
   return (
     <Reveal variant="rise">
-      <div className="rounded-xl border border-primary/40 bg-card p-4">
+      <div data-tails-part="card" className="p-4">
         <div className="mb-3 flex items-center gap-2 text-sm font-medium">
           <ClipboardList className="size-4 text-primary" aria-hidden="true" />
           Plan ready for review
@@ -47,7 +47,8 @@ export function PlanCard({ requestId, plan, onAnswer }: PlanCardProps) {
               autoFocus
               placeholder="What should it do differently?"
               aria-label="Feedback on the plan"
-              className="w-full resize-y rounded-lg border border-border bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+              data-tails-part="input"
+              className="w-full resize-y p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
             />
             <div className="flex gap-2">
               <button
@@ -67,7 +68,14 @@ export function PlanCard({ requestId, plan, onAnswer }: PlanCardProps) {
             </div>
           </div>
         ) : (
-          <div className="mt-3 flex flex-wrap gap-2">
+          /*
+            The card body is themed, but this row is not: approving a plan can
+            grant auto-accept for the rest of the session, which makes these
+            three buttons a permission decision wearing a plan's clothes. The
+            distinction a stylesheet must never be able to blur is the one
+            between "Approve & auto-accept" and "Approve, ask each edit".
+          */
+          <div data-tails-critical className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => onAnswer(requestId, true, { autoAcceptEdits: true })}

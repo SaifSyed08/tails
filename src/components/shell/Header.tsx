@@ -91,8 +91,9 @@ function EditableLabel({
           }
         }}
         aria-label={ariaLabel}
+        data-tails-part="input"
         className={cn(
-          'min-w-0 rounded border border-border bg-background px-1.5 py-0.5 outline-none focus:ring-2 focus:ring-ring',
+          'min-w-0 px-1.5 py-0.5 outline-none focus:ring-2 focus:ring-ring',
           inputClassName,
         )}
       />
@@ -130,7 +131,7 @@ export function Header({
   return (
     <header
       data-tails-part="header"
-      className="app-drag flex h-11 shrink-0 items-center gap-2 border-b border-border px-3"
+      className="app-drag flex h-11 shrink-0 items-center gap-2 px-3"
     >
       {sidebarCollapsed ? (
         <button

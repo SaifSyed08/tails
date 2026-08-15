@@ -111,10 +111,11 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-6 backdrop-blur-sm">
+    <div data-tails-part="scrim" className="fixed inset-0 z-40 flex items-start justify-center p-6">
       <Reveal
         variant="scale"
-        className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
+        part="card"
+        className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden"
       >
         <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3">
           <h2 className="font-display text-sm font-semibold uppercase tracking-wide">Settings</h2>
@@ -148,8 +149,9 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
               {themes.map((theme) => (
                 <div
                   key={theme.id}
+                  data-tails-part="card"
                   className={cn(
-                    'rounded-xl border border-border p-3 transition-colors duration-quick',
+                    'p-3 transition-colors duration-quick',
                     busyId === theme.id && 'opacity-60',
                   )}
                 >
@@ -171,7 +173,8 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
                             }}
                             autoFocus
                             aria-label="Preset name"
-                            className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
+                            data-tails-part="input"
+                            className="min-w-0 flex-1 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
                           />
                           <button
                             type="button"

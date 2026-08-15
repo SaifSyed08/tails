@@ -50,7 +50,7 @@ export function QuestionCard({ requestId, questions, onAnswer }: QuestionCardPro
 
   return (
     <Reveal variant="rise">
-      <div className="rounded-xl border border-primary/40 bg-primary/5 p-4">
+      <div data-tails-part="card" className="p-4">
         <div className="mb-3 flex items-center gap-2 text-sm font-medium">
           <MessageCircleQuestion className="size-4 text-primary" aria-hidden="true" />
           T.A.I.L.S. needs a decision
@@ -118,7 +118,8 @@ export function QuestionCard({ requestId, questions, onAnswer }: QuestionCardPro
                 if (event.key === 'Enter') submit();
               }}
               placeholder="Something else…"
-              className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none transition-shadow duration-quick focus:ring-2 focus:ring-ring"
+              data-tails-part="input"
+              className="w-full px-2.5 py-1.5 text-sm outline-none transition-shadow duration-quick focus:ring-2 focus:ring-ring"
             />
           </div>
 

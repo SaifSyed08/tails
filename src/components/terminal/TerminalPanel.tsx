@@ -292,9 +292,9 @@ export function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
 
   return (
     <div
-      data-tails-part="terminal"
+      data-tails-part="code"
       style={{ height }}
-      className="relative flex shrink-0 flex-col overflow-hidden border-t border-border bg-card"
+      className="relative flex shrink-0 flex-col overflow-hidden"
     >
       <div
         role="separator"

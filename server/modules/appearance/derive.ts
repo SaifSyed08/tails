@@ -95,6 +95,14 @@ const CONTRAST_PAIRS: ContrastPair[] = [
 export const pairMinimum = (pair: ContrastPair, target: ContrastTarget): number =>
   CONTRAST_TARGETS[target][pair.kind];
 
+/**
+ * The contrast the system promises regardless of what anyone asked for.
+ *
+ * A theme may target `aaa` and miss it on a surface whose own fill makes the
+ * target unreachable. It may not miss this one.
+ */
+const HARD_TEXT_FLOOR = CONTRAST_TARGETS.aa.text;
+
 /** Saturation for surface roles, by authored chroma bucket. */
 const SURFACE_SATURATION = { neutral: 5, tinted: 14, rich: 26 } as const;
 /** Saturation for the accent roles. */
@@ -539,12 +547,24 @@ function buildSurfaceTokens(
 
   const ink = inkTone(0.35)(tierOf(values, inkTier));
   const inkMuted = inkTone(0.5)(tierOf(values, mutedTier));
-  // A surface whose fill leaves no legible option at all is reported rather
-  // than shipped quietly. It should be unreachable — the ladder can always find
-  // one pole that works — but "should be" is not a guarantee, and the model can
-  // only fix what it is told about.
-  if (contrastRatio(ink, effective) < ramp.target.text) {
+
+  // Two different reports, because they are two different situations, and
+  // collapsing them would make the guarantee unfalsifiable.
+  //
+  // Missing the theme's *chosen* target is ordinary: a 40%-opaque scrim over a
+  // mid-grey page composites to a mid-grey, and no colour reads at 7:1 on that.
+  // The author asked for something the physics of their own fill will not give,
+  // and saying so is the useful response.
+  //
+  // Missing the AA floor is a defect. AA is the promise the whole system makes,
+  // and it is enforced by construction — the ink ladder can always reach one
+  // pole or the other. This report exists so that if the promise ever stops
+  // holding, it stops loudly rather than shipping grey text on grey.
+  const achieved = contrastRatio(ink, effective);
+  if (achieved < HARD_TEXT_FLOOR) {
     adjusted.push(`surfaces.${part}.fill`);
+  } else if (achieved < ramp.target.text) {
+    adjusted.push(`surfaces.${part}.ink.target`);
   }
 
   // A link on a glass popover has to clear the floor against the popover, not
@@ -563,10 +583,37 @@ function buildSurfaceTokens(
     accentSteps += 1;
   }
 
-  const fills = recipe.fill.map((layer) => ({ layer, image: formatFillLayer(layer, ramp) }));
+  const ring = recipe.border.variant === 'gradient-ring' ? recipe.border.ring : null;
+  const useRing = ring !== null;
+
+  const ringImage = ring
+    ? `linear-gradient(${ring.angle}deg, ${ring.stops.map((stop) => {
+      const { color, alpha } = resolveColorRef(stop.color, ramp);
+      return stop.position === null
+        ? formatColor(color, alpha)
+        : `${formatColor(color, alpha)} ${stop.position}%`;
+    }).join(', ')})`
+    : 'none';
+
+  const fills = recipe.fill.map((layer) => ({
+    image: formatFillLayer(layer, ramp),
+    blend: layer.blend as string,
+    box: 'padding-box',
+  }));
+
+  // A gradient border and a border radius are famously incompatible:
+  // `border-image` squares the corners off. Painting the ring as a background
+  // layer clipped to the border box, with the fill clipped to the padding box,
+  // is the one construction that follows the radius — and doing it here rather
+  // than in the renderer means the renderer needs no extra element and no
+  // special case, only two more custom properties.
   const bottom = recipe.fill[recipe.fill.length - 1];
-  const bottomIsOpaqueSolid = bottom?.kind === 'solid' && (bottom.stops[0].color.alpha ?? 1) >= 1;
+  const bottomIsOpaqueSolid = !useRing
+    && bottom?.kind === 'solid'
+    && (bottom.stops[0].color.alpha ?? 1) >= 1;
+
   const painted = bottomIsOpaqueSolid ? fills.slice(0, -1) : fills;
+  if (useRing) painted.push({ image: ringImage, blend: 'normal', box: 'border-box' });
 
   const fillColor = bottomIsOpaqueSolid
     ? (() => {
@@ -578,49 +625,50 @@ function buildSurfaceTokens(
   const sideWidth = (side: 'top' | 'right' | 'bottom' | 'left'): string =>
     `${recipe.border.style === 'none' ? 0 : recipe.border.sides.includes(side) ? recipe.border.width : 0}px`;
 
-  const borderColor = recipe.border.variant === 'gradient-ring'
+  const borderColor = useRing
     ? 'transparent'
     : (() => {
       const { color, alpha } = resolveColorRef(recipe.border.color, ramp);
       return formatColor(color, alpha);
     })();
 
-  const ringImage = recipe.border.ring
-    ? `linear-gradient(${recipe.border.ring.angle}deg, ${recipe.border.ring.stops.map((stop) => {
-      const { color, alpha } = resolveColorRef(stop.color, ramp);
-      return stop.position === null
-        ? formatColor(color, alpha)
-        : `${formatColor(color, alpha)} ${stop.position}%`;
-    }).join(', ')})`
-    : 'none';
-
-  const texture = readTexturePaint(recipe.texture.kind, recipe.texture.scale);
-  const lightColor = (() => {
-    const { color, alpha } = resolveColorRef({ role: 'light', tier: 8 }, ramp);
-    return formatColor(color, alpha);
-  })();
-  const shadowColor = (() => {
-    const { color, alpha } = resolveColorRef({ role: 'shadow', tier: 8 }, ramp);
-    return formatColor(color, alpha);
-  })();
+  const texture = readTexturePaint(
+    recipe.texture.kind, recipe.texture.scale, recipe.texture.opacity,
+  );
+  const tint = {
+    light: (alpha: number) => {
+      const resolved = resolveColorRef({ role: 'light', tier: 8 }, ramp);
+      return formatColor(resolved.color, alpha);
+    },
+    shadow: (alpha: number) => {
+      const resolved = resolveColorRef({ role: 'shadow', tier: 8 }, ramp);
+      return formatColor(resolved.color, alpha);
+    },
+  };
   const overlay = readOverlayPaint(
-    recipe.overlay.kind, recipe.overlay.angle, lightColor, shadowColor,
+    recipe.overlay.kind, recipe.overlay.angle, recipe.overlay.strength, tint,
   );
 
+  const refraction = recipe.backdrop?.refraction ?? 0;
   const backdrop = recipe.backdrop
     ? [
       `blur(${recipe.backdrop.blur}px)`,
       `saturate(${recipe.backdrop.saturate})`,
       `brightness(${recipe.backdrop.brightness})`,
       // Refraction has no CSS primitive in Chromium 140. Half of it lands as a
-      // contrast lift in the filter chain and half as `--t-refraction`, which
-      // the renderer turns into an inner edge highlight; between them the edge
-      // reads as bending light rather than as a blur with a line on it.
-      ...(recipe.backdrop.refraction > 0
-        ? [`contrast(${round(1 + recipe.backdrop.refraction * 0.2)})`]
-        : []),
+      // contrast lift in the filter chain and half as an inner edge highlight
+      // folded into the shadow stack below; between them the edge reads as
+      // bending light rather than as a blur with a line drawn on it.
+      ...(refraction > 0 ? [`contrast(${round(1 + refraction * 0.2)})`] : []),
     ].join(' ')
     : 'none';
+
+  // Prepended rather than appended: box-shadow paints the first layer on top,
+  // and a specular rim that sits under an ambient shadow is not a rim.
+  const shadowStack = refraction > 0
+    ? `inset 0 0 ${round(6 + refraction * 18)}px ${-round(2 + refraction * 6)}px ${tint.light(refraction * 0.45)}, ${formatShadows(recipe.shadows, ramp)}`
+      .replace(/, none$/, '')
+    : formatShadows(recipe.shadows, ramp);
 
   // `square` is emitted as a zero radius rather than as `corner-shape: square`
   // so it is square on every engine, not only on those with corner-shape.
@@ -636,24 +684,28 @@ function buildSurfaceTokens(
     tokens: {
       't-fill-color': fillColor,
       't-fill-image': painted.length > 0 ? painted.map((entry) => entry.image).join(', ') : 'none',
-      't-fill-blend': painted.length > 0
-        ? painted.map((entry) => entry.layer.blend).join(', ')
-        : 'normal',
+      't-fill-blend': painted.length > 0 ? painted.map((entry) => entry.blend).join(', ') : 'normal',
+      // Both boxes are emitted as per-layer lists so the renderer can set
+      // `background-clip` and `background-origin` unconditionally.
+      't-fill-clip': painted.length > 0 ? painted.map((entry) => entry.box).join(', ') : 'border-box',
+      't-fill-origin': painted.length > 0 ? painted.map((entry) => entry.box).join(', ') : 'padding-box',
       't-border-width': `${sideWidth('top')} ${sideWidth('right')} ${sideWidth('bottom')} ${sideWidth('left')}`,
-      't-border-style': recipe.border.style,
+      't-border-style': useRing && recipe.border.style === 'none' ? 'solid' : recipe.border.style,
       't-border-color': borderColor,
-      't-ring-image': ringImage,
       't-radius': `${recipe.corner.shape === 'square' ? 0 : recipe.corner.radius}px`,
       't-corner-shape': cornerShape,
-      't-shadow': formatShadows(recipe.shadows, ramp),
+      't-shadow': shadowStack,
       't-backdrop': backdrop,
-      't-refraction': String(recipe.backdrop?.refraction ?? 0),
       't-texture-image': texture?.image ?? 'none',
       't-texture-size': texture?.size ?? 'auto',
-      't-texture-opacity': String(texture ? recipe.texture.opacity : 0),
+      // 0 or 1, never the authored strength: the strength is already in the
+      // image's own pixels. Emitting it here as well would let a renderer that
+      // applies `opacity: var(--t-texture-opacity)` square it, which is the
+      // kind of bug that looks like "the grain is too subtle" for a week.
+      't-texture-opacity': texture ? '1' : '0',
       't-texture-blend': recipe.texture.blend,
       't-overlay-image': overlay?.image ?? 'none',
-      't-overlay-opacity': String(overlay ? recipe.overlay.strength : 0),
+      't-overlay-opacity': overlay ? '1' : '0',
       't-overlay-blend': overlay?.blend ?? 'normal',
       't-ink': formatColor(ink),
       't-ink-muted': formatColor(inkMuted),

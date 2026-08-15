@@ -76,8 +76,9 @@ function PetCard({
 
   return (
     <div
+      data-tails-part="card"
       className={cn(
-        'flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors duration-quick',
+        'flex flex-col gap-3 p-4 transition-colors duration-quick',
         pet.active && 'ring-2 ring-primary',
         busy && 'opacity-60',
       )}
@@ -239,7 +240,7 @@ function RemoteCatalogue({ result }: { result: CatalogueResult | null }) {
   return (
     <ul className="grid gap-2 sm:grid-cols-2">
       {result.entries.map((entry) => (
-        <li key={entry.id} className="rounded-xl border border-border bg-card p-3">
+        <li key={entry.id} data-tails-part="card" className="p-3">
           <p className="text-sm font-medium">{entry.displayName}</p>
           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{entry.description}</p>
           {entry.views === null ? null : (
@@ -348,8 +349,8 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
 
   return (
     <div
-      data-tails-part="marketplace"
-      className={cn('flex h-full min-h-0 flex-col bg-background text-foreground', className)}
+      data-tails-part="card"
+      className={cn('flex h-full min-h-0 flex-col text-foreground', className)}
     >
       {/* The two keyframes every sprite preview animates against. */}
       <style>{SPRITE_KEYFRAMES}</style>
