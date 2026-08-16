@@ -36,3 +36,20 @@ export const appBroadcast = {
 export function publishSessionsChanged(sessionId = ''): void {
   appBroadcast.publish(createMessage('sessions_changed', sessionId));
 }
+
+/**
+ * Announces that the pet library changed.
+ *
+ * Installing, removing, hiding, starring or activating a pet all change what
+ * every surface showing pets should be drawing — the marketplace, the sidebar
+ * carousel, the desktop window. Without this they each had to poll or to
+ * announce it inside their own document, which works in one window and leaves
+ * every other one stale: a pet installed in one window never appeared in the
+ * next.
+ *
+ * The id is carried so a consumer can be specific if it wants to; most just
+ * re-read.
+ */
+export function publishPetsChanged(petId = ''): void {
+  appBroadcast.publish(createMessage('pets_changed', petId));
+}

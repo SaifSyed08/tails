@@ -600,11 +600,30 @@ function installIpc() {
       return;
     }
 
+    // Zoom is asserted here as well as on load and on the wheel gesture,
+    // because this is the moment it does damage: a page reporting CSS pixels
+    // while zoomed describes a window that is 1.5x too big.
+    petWindow.webContents.setZoomLevel(0);
+
+    // Compared with a tolerance, not for equality. `setContentSize(143, 152)`
+    // comes back as 144x153 on a fractionally scaled display, so an exact test
+    // never matches and the window is re-sized every time the page speaks.
     const size = sizeNow();
-    if (dragTimer || (size.width === width && size.height === height)) return;
+    const settled = Math.abs(size.width - width) <= POSITION_TOLERANCE
+      && Math.abs(size.height - height) <= POSITION_TOLERANCE;
+    if (dragTimer || settled) return;
 
     const at = positionNow();
     petWindow.setContentSize(width, height);
+
+    // Verified, like the position is. A content size that does not come back as
+    // the one we asked for means something is scaling this window underneath
+    // us, and that is the fault that has been mistaken for drift twice.
+    const applied = sizeNow();
+    if (Math.abs(applied.width - width) > POSITION_TOLERANCE
+      || Math.abs(applied.height - height) > POSITION_TOLERANCE) {
+      logDrag('size-mismatch', { wanted: { width, height }, applied });
+    }
     // Re-clamped, because a window that just grew may now hang off the screen.
     const clamped = clampToDisplay(at.x, at.y, width, height);
     moveTo(clamped.x, clamped.y);
@@ -706,6 +725,24 @@ export function createPetWindow(options) {
   petWindow.webContents.on('did-finish-load', () => {
     petWindow?.webContents.setZoomLevel(0);
     petWindow?.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+  });
+
+  /**
+   * And refused if anything zooms it later.
+   *
+   * The partition stops the *app's* zoom reaching this page. It does not stop
+   * this page being zoomed directly: the window is interactive whenever the
+   * pointer is on the pet, and a Ctrl+wheel there is Chromium's own zoom
+   * gesture. That is what grew the window to 223x229 — 1.5x is a zoom step, and
+   * it scales every CSS pixel the page measures itself in, so the size it
+   * reports stops describing the window it needs.
+   *
+   * There is nothing here to make bigger; it is one sprite at a fixed size.
+   */
+  petWindow.webContents.on('zoom-changed', () => {
+    if (!isAlive()) return;
+    logDrag('zoom-refused', { level: petWindow.webContents.getZoomLevel() });
+    petWindow.webContents.setZoomLevel(0);
   });
 
   // Above full-screen applications, not merely above ordinary windows.

@@ -477,6 +477,18 @@ document.addEventListener('mouseup', () => {
   setPointerOver(false);
 });
 
+/**
+ * No zooming the pet.
+ *
+ * Ctrl+wheel over this window is Chromium's zoom gesture, and the window is
+ * interactive whenever the pointer is on the sprite — so an ordinary scroll
+ * with Ctrl held, aimed at whatever is behind the pet, used to resize the pet
+ * instead. The shell resets any zoom that gets through; this stops it starting.
+ */
+window.addEventListener('wheel', (event) => {
+  if (event.ctrlKey) event.preventDefault();
+}, { passive: false });
+
 document.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   if (!current || !isOverPet(event.clientX, event.clientY)) return;

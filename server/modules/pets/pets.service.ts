@@ -40,6 +40,7 @@ import {
   type GridBasis,
 } from '@/modules/pets/sprite-metrics.js';
 import { listZipEntries, readZipEntry, ZipError } from '@/modules/pets/zip.js';
+import { publishPetsChanged } from '@/shared/broadcast.js';
 import { AppError, readRecord, readString } from '@/shared/utils.js';
 
 /**
@@ -609,6 +610,9 @@ function installPet(file: PetFile, spriteBytes: Buffer, spriteFileName: string):
   );
 
   petsRepository.rememberPet({ id: definition.data.id, source: 'tails', directory: targetDir });
+  // Every window showing pets re-reads on this; without it a pet installed here
+  // is invisible in the next window until something else forces a refresh.
+  publishPetsChanged(definition.data.id);
   return requirePet(definition.data.id);
 }
 
@@ -1064,6 +1068,7 @@ export const petsService = {
   setActivePet(id: string | null): { activePetId: string | null } {
     if (id === null) {
       petsRepository.setActivePetId(null);
+      publishPetsChanged();
       return { activePetId: null };
     }
 
@@ -1072,6 +1077,7 @@ export const petsService = {
     // Putting a pet on screen is what "used" means: it drives the carousel's
     // ordering and clears its not-tried-yet dot.
     petsRepository.markUsed(pet.definition.id);
+    publishPetsChanged(pet.definition.id);
     return { activePetId: pet.definition.id };
   },
 
@@ -1100,6 +1106,7 @@ export const petsService = {
     petsRepository.forgetPet(pet.definition.id);
     if (petsRepository.getActivePetId() === pet.definition.id) petsRepository.setActivePetId(null);
 
+    publishPetsChanged(pet.definition.id);
     return { id: pet.definition.id };
   },
 
@@ -1131,6 +1138,7 @@ export const petsService = {
     const pet = requirePet(id);
     petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
     petsRepository.setStarred(pet.definition.id, starred);
+    publishPetsChanged(pet.definition.id);
     return requirePet(id);
   },
 
@@ -1168,6 +1176,7 @@ export const petsService = {
       petsRepository.setActivePetId(null);
     }
 
+    publishPetsChanged(pet.definition.id);
     return requirePet(id);
   },
 

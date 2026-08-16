@@ -23,6 +23,7 @@ export type MessageKind =
   | 'chat_subscribed'
   | 'session_created'
   | 'sessions_changed'
+  | 'pets_changed'
   | 'appearance_changed'
   | 'protocol_error';
 
