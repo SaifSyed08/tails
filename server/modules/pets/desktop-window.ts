@@ -115,7 +115,7 @@ const HIT_TOLERANCE = ${HIT_TOLERANCE};
 
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
-  startDrag() {}, endDrag() {}, openMenu() {},
+  startDrag() {}, endDrag() {}, dragHeartbeat() {}, openMenu() {},
   onFacing() {}, onRefresh() {},
 };
 
@@ -126,6 +126,7 @@ let current = null;      // the pet payload currently rendered
 let box = null;          // its cell geometry
 let mask = null;         // union alpha mask of the played frames, at cell resolution
 let dragging = false;
+let dragHeartbeat = null;
 let pointerOver = false;
 let playing = null;      // the state name currently animating
 let petRect = null;      // cached sprite box; invalidated on resize and re-render
@@ -408,9 +409,30 @@ document.addEventListener('mousemove', (event) => {
 function abandonDrag() {
   if (!dragging) return;
   dragging = false;
+  stopHeartbeat();
   pet.classList.remove('dragging');
   playState('idle');
   bridge.endDrag();
+}
+
+/**
+ * A pulse that means "the button is still down".
+ *
+ * The shell cannot read the mouse button, so it used to infer a finished drag
+ * from the pointer leaving the window — which is wrong whenever a fast gesture
+ * outruns the window for a moment, and it froze the drag mid-carry. This page
+ * *does* know: it has the mousedown, and it gets the mouseup, the mouseleave or
+ * the blur. So it says so, and the shell only gives up when this goes quiet.
+ */
+function startHeartbeat() {
+  stopHeartbeat();
+  bridge.dragHeartbeat();
+  dragHeartbeat = window.setInterval(() => bridge.dragHeartbeat(), 200);
+}
+
+function stopHeartbeat() {
+  if (dragHeartbeat !== null) window.clearInterval(dragHeartbeat);
+  dragHeartbeat = null;
 }
 
 // Belt and braces with the shell's watchdog: whichever notices first wins, and
@@ -430,6 +452,7 @@ pet.addEventListener('mousedown', (event) => {
   event.preventDefault();
 
   dragging = true;
+  startHeartbeat();
   pet.classList.add('dragging');
   playState(facing === 'left' ? 'running-left' : 'running-right');
 
@@ -447,6 +470,7 @@ pet.addEventListener('mousedown', (event) => {
 document.addEventListener('mouseup', () => {
   if (!dragging) return;
   dragging = false;
+  stopHeartbeat();
   pet.classList.remove('dragging');
   playState('idle');
   bridge.endDrag();

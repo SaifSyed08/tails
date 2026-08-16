@@ -34,13 +34,20 @@ const DEFAULT_SIZE = { width: 160, height: 180 };
 const DRAG_INTERVAL_MS = 16;
 
 /**
- * How long the pointer may be outside the window before the drag is abandoned.
+ * How long the page may go quiet during a drag before the shell gives up on it.
  *
- * A fast gesture outruns the window for a frame or two, which is fine. Longer
- * than this means the two have genuinely separated and the mouseup is never
- * coming — the state that used to leave a pet stuck to the cursor.
+ * The page pulses every 200ms while the button is held, so silence means the
+ * page is gone, hung, or never saw the mouseup — the state that would otherwise
+ * leave a pet glued to the cursor.
+ *
+ * This replaces an earlier rule that abandoned the drag when the *pointer* left
+ * the window. That was a bad proxy: a fast gesture outruns the window for a
+ * moment, and the geometry made it worse in one direction — the sprite sits at
+ * the bottom of its window, so a downward drag has only a few pixels of margin
+ * below the grab point while an upward one has the whole box. It froze
+ * downward drags first, and the pet was left behind.
  */
-const LOST_POINTER_MS = 400;
+const SILENT_PAGE_MS = 1200;
 
 /** How often to check that an interactive window still has the pointer over it. */
 const WATCHDOG_INTERVAL_MS = 250;
@@ -84,9 +91,8 @@ let interactive = false;
 let watchdogTimer = null;
 let dragTimer = null;
 let dragOffset = null;
-let dragSize = null;
 let lastFacing = null;
-let lostPointerSince = null;
+let lastHeartbeat = 0;
 let lastDragX = null;
 let saveTimer = null;
 
@@ -239,6 +245,9 @@ function stopWatchdog() {
 function startDrag() {
   if (!isAlive() || dragTimer) return;
 
+  // Seeded here so a drag is never abandoned before the first pulse arrives.
+  lastHeartbeat = Date.now();
+
   const cursor = screen.getCursorScreenPoint();
   const origin = positionNow();
 
@@ -247,9 +256,6 @@ function startDrag() {
   // further down relative to the pointer.
   dragOffset = { x: cursor.x - origin.x, y: cursor.y - origin.y };
 
-  // The size is cached for the gesture: it cannot change mid-drag, and reading
-  // it per frame is another chance for a rounded value to reach the maths.
-  dragSize = sizeNow();
   lastDragX = cursor.x;
   setInteractive(true);
 
@@ -299,17 +305,10 @@ function startDrag() {
       lastDragX = cursor.x;
     }
 
-    // If the pointer has left the window's own box, the page can no longer
-    // receive the mouseup that would end this. Give it a moment — a fast drag
-    // legitimately outruns the window by a frame or two — and then let go.
-    const inside = cursor.x >= next.x && cursor.x <= next.x + dragSize.width
-      && cursor.y >= next.y && cursor.y <= next.y + dragSize.height;
-    if (inside) {
-      lostPointerSince = null;
-    } else {
-      lostPointerSince = lostPointerSince ?? Date.now();
-      if (Date.now() - lostPointerSince > LOST_POINTER_MS) return stopDrag();
-    }
+    // The page says when the gesture is over — by sending `pet:drag-end`, or by
+    // falling silent. Where the pointer happens to be is not evidence either
+    // way, and treating it as evidence is what froze fast drags.
+    if (Date.now() - lastHeartbeat > SILENT_PAGE_MS) return stopDrag();
 
     dragTimer = setTimeout(step, DRAG_INTERVAL_MS);
     return undefined;
@@ -322,10 +321,8 @@ function stopDrag() {
   if (dragTimer) clearTimeout(dragTimer);
   dragTimer = null;
   dragOffset = null;
-  dragSize = null;
   lastFacing = null;
   lastDragX = null;
-  lostPointerSince = null;
 
   // Put it back on a screen. The drag itself is unclamped so the window can
   // always stay under the pointer; this is where a pet that was carried off the
@@ -444,6 +441,10 @@ function installIpc() {
   ipcMain.on('pet:drag-start', () => startDrag());
 
   ipcMain.on('pet:drag-end', () => stopDrag());
+
+  ipcMain.on('pet:drag-heartbeat', () => {
+    lastHeartbeat = Date.now();
+  });
 
   ipcMain.on('pet:menu', (_event, payload) => openContextMenu(
     typeof payload?.petId === 'string' ? payload.petId : null,

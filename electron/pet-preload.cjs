@@ -39,6 +39,14 @@ contextBridge.exposeInMainWorld('petBridge', {
   startDrag: () => ipcRenderer.send('pet:drag-start'),
   endDrag: () => ipcRenderer.send('pet:drag-end'),
 
+  /**
+   * "The button is still down."
+   *
+   * The shell has no way to read the mouse button, and inferring the answer
+   * from where the pointer is gets it wrong during a fast gesture.
+   */
+  dragHeartbeat: () => ipcRenderer.send('pet:drag-heartbeat'),
+
   openMenu: (petId) => ipcRenderer.send('pet:menu', { petId }),
 
   /** The shell tells the page which way the drag is going, and when to re-read the pet. */
