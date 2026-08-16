@@ -53,6 +53,28 @@ const MAX_WINDOW = { width: 320, height: 360 };
 const SETTLE_MS = 220;
 
 /**
+ * How long an app-driven carry survives without a new frame, in ms.
+ *
+ * A carry the app is driving has no natural end — the shell cannot see the hand
+ * open — so there has to be a floor under it. Placements arrive every frame
+ * while a hand is moving, so this is refreshed long before it can fire during a
+ * real drag; what it catches is the drag that ends without a final word, which
+ * otherwise leaves a carry running forever. That state is the worst this window
+ * has: the page stops watching the pointer and the shell stops polling for it,
+ * so nothing can make the window clickable again.
+ */
+const HOLD_TIMEOUT_MS = 2000;
+
+/**
+ * How recently a carry frame must have arrived for the carry to count as live.
+ *
+ * Used where being wrong is expensive rather than untidy: deciding whether a
+ * window being shown is mid-handoff, and so whether to leave its input state
+ * alone instead of putting it back together.
+ */
+const HOLD_FRESH_MS = 400;
+
+/**
  * How far the OS may disagree with our record before we believe the OS.
  *
  * A DIP round trip loses at most a pixel on a fractionally scaled display, so
@@ -115,6 +137,17 @@ let carrying = false;
  * what draws the new sheet at the old pet's size — a sprite cut off mid-row.
  */
 let carrySource = null;
+/**
+ * When the last carry frame arrived.
+ *
+ * A carry the app is driving has no natural end — the shell cannot see the hand
+ * open — so "is he still being carried" has to be a question about *recency*
+ * rather than about a flag. A flag that is only ever cleared by a message is a
+ * flag that stays set when the message does not come, and a stuck carry is the
+ * worst state this window has: the page stops watching the pointer and the
+ * shell stops polling for it, so nothing can make the window clickable again.
+ */
+let lastCarryAt = 0;
 
 /**
  * The size the page last asked for, in its own CSS pixels.
@@ -320,7 +353,7 @@ function setInteractive(next) {
 function startWatchdog() {
   if (watchdogTimer) return;
   watchdogTimer = setInterval(() => {
-    if (!isAlive() || carrying) return;
+    if (!isAlive() || carryIsLive()) return;
 
     /*
      * The OS's own rectangle, not our record of it.
@@ -395,6 +428,7 @@ function stopWatchdog() {
  */
 function onCarried(x, y, source = 'os', holding = false) {
   carrySource = source;
+  lastCarryAt = Date.now();
   if (!carrying) {
     carrying = true;
     carryFrom = { x, y };
@@ -423,25 +457,52 @@ function onCarried(x, y, source = 'os', holding = false) {
    */
   if (settleTimer) clearTimeout(settleTimer);
   if (holding) {
-    settleTimer = null;
+    /*
+     * A held carry ends when the app says so — but not *only* then.
+     *
+     * Placements arrive every frame while a hand is moving, so this timer is
+     * refreshed long before it can fire during a real drag. What it catches is
+     * the drag that ends without a final word: released back inside the chat,
+     * interrupted, the renderer reloaded. Without it that carry never ends, and
+     * a carry that never ends is a pet nobody can pick up again.
+     */
+    settleTimer = setTimeout(endCarry, HOLD_TIMEOUT_MS);
     return;
   }
-  settleTimer = setTimeout(() => {
-    settleTimer = null;
-    carrying = false;
-    carrySource = null;
-    carryFacing = null;
-    if (!isAlive()) return;
+  settleTimer = setTimeout(endCarry, SETTLE_MS);
+}
 
-    petWindow.webContents.send('pet:carry', false);
+/**
+ * Whether a carry is actually happening, rather than merely flagged.
+ *
+ * An OS drag refreshes the flag from move events and ends 220ms after the last
+ * one, so there the flag is the fact. An app-driven carry has no end the shell
+ * can see, so it is only believed while its frames are still arriving —
+ * otherwise a carry nobody closed keeps the pointer poll switched off, which is
+ * one of the two things that leaves this window impossible to click.
+ */
+function carryIsLive() {
+  if (!carrying) return false;
+  if (carrySource !== 'app') return true;
+  return Date.now() - lastCarryAt < HOLD_FRESH_MS;
+}
 
-    // Put down, possibly on a different screen. Rescaled here rather than
-    // during the drag: mid-flight `setContentSize` is the path that cut the
-    // sprite in half and, before that, fed the drift — and a pet who resizes
-    // the moment he lands reads as him settling rather than as a glitch.
-    applyReportedSize();
-    persistPosition();
-  }, SETTLE_MS);
+/** The end of a carry, however it ended. */
+function endCarry() {
+  settleTimer = null;
+  carrying = false;
+  carrySource = null;
+  carryFacing = null;
+  if (!isAlive()) return;
+
+  petWindow.webContents.send('pet:carry', false);
+
+  // Put down, possibly on a different screen. Rescaled here rather than during
+  // the drag: mid-flight `setContentSize` is the path that cut the sprite in
+  // half and, before that, fed the drift — and a pet who resizes the moment he
+  // lands reads as him settling rather than as a glitch.
+  applyReportedSize();
+  persistPosition();
 }
 
 /**
@@ -471,7 +532,10 @@ function resyncAfterShow() {
    * on the next placement — a single frame of standing still in the middle of a
    * run, which is exactly what was reported.
    */
-  const held = carrying && carrySource === 'app';
+  // Fresh, not merely flagged. A stale "he is being carried" here would skip
+  // the reset and leave the window exactly as unusable as the flag claims it is
+  // busy — which is the state this whole function exists to prevent.
+  const held = carryIsLive() && carrySource === 'app';
   if (!held) {
     if (settleTimer) {
       clearTimeout(settleTimer);

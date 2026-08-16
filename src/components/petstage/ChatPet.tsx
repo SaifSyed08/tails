@@ -19,6 +19,7 @@ import { useReducedMotion } from '@/shared/ui/Motion';
 import {
   activatePet,
   assignPetToSession,
+  clearActivePet,
   readDisplayPet,
   readSessionPet,
   readStage,
@@ -223,6 +224,8 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * which pet was clicked, but only the server can turn that into a pet.
    */
   const [desktopPet, setDesktopPet] = useState<InstalledPet | null>(null);
+  /** Who the desktop window would show right now, or null for nobody. */
+  const [activePetId, setActivePetId] = useState<string | null>(null);
   /** The size and walk settings as the user is changing them, before the reload. */
   const [pendingStage, setPendingStage] = useState<{ petId: string; stage: PetStage } | null>(null);
 
@@ -272,6 +275,38 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * evidence that someone put him there, and it carries the point as well.
    */
   const dropRef = useRef<{ at: number; x: number; y: number } | null>(null);
+
+  /**
+   * The last pet this surface had standing in a conversation.
+   *
+   * Remembered past the conversation ending, because that is exactly when it
+   * matters: opening a different chat used to release the desktop window, and
+   * the pet you had just been looking at would reappear floating over
+   * everything. He has a home, and it is not the desktop.
+   */
+  const lastInChatPetRef = useRef<string | null>(null);
+
+  /**
+   * Pets the user deliberately put on the desktop, this run.
+   *
+   * The escape hatch from the rule above, and the thing that distinguishes the
+   * two cases: carrying him across the window edge is a decision, and clicking
+   * a different conversation is not.
+   */
+  const desktopByChoiceRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Who was on the desktop before a pick-up borrowed the slot.
+   *
+   * Picking him up activates him so the desktop window has him loaded and sized
+   * before the hand reaches the edge. A hand that never gets there has decided
+   * nothing, so the borrow is given back. `undefined` means nothing is
+   * outstanding; `null` means the slot was empty and should be again.
+   */
+  const restoreActiveRef = useRef<string | null | undefined>(undefined);
+
+  /** The last point he was carried to outside the chat, in page coordinates. */
+  const lastOutsideRef = useRef<{ x: number; y: number } | null>(null);
 
   // Watches for a carry ending anywhere in the app. Recorded rather than acted
   // on: whether it concerns this chat is only known when the assignment arrives.
@@ -326,12 +361,17 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     if (!sessionId) return undefined;
 
     let cancelled = false;
-    readSessionPet(sessionId)
-      .then((resolved) => {
+    // Both at once: who lives in this chat, and who is on the desktop. The
+    // second is needed to keep a conversation's pet from leaking onto the
+    // desktop when you simply open another conversation — see the suppression
+    // effect below.
+    Promise.all([readSessionPet(sessionId), readDisplayPet().catch(() => null)])
+      .then(([resolved, display]) => {
         if (cancelled) return;
         // Only a pet assigned to *this* conversation lives here. The globally
         // active pet lives on the desktop and is not a guest in every chat.
         setAssignment({ sessionId, pet: resolved.source === 'session' ? resolved.pet : null });
+        setActivePetId(display?.pet?.definition.id ?? null);
       })
       .catch(() => {
         if (!cancelled) setAssignment({ sessionId, pet: null });
@@ -590,6 +630,35 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     if (show) suppressDesktopPet(false);
   }, []);
 
+  /**
+   * Gives back everything a pick-up borrowed.
+   *
+   * Called when the gesture ends anywhere inside the chat, including when it is
+   * interrupted. Three things to undo, and all three have bitten: the active
+   * pet (so a pet who never left does not silently become the desktop's), the
+   * shell's carry (which has no natural end when the app is driving it, and
+   * leaves the window unclickable while it is believed to be running), and the
+   * record of where he was outside.
+   */
+  const endBorrowedDesktop = useCallback(() => {
+    const held = lastOutsideRef.current;
+    lastOutsideRef.current = null;
+    if (held) placeDesktopPetAt(held.x, held.y, false);
+
+    const restore = restoreActiveRef.current;
+    restoreActiveRef.current = undefined;
+    const carried = activatedRef.current;
+    activatedRef.current = null;
+    if (restore === undefined || !carried || restore === carried) return;
+
+    void (restore === null ? clearActivePet(carried) : activatePet(restore))
+      .then(refreshDesktopPet)
+      .catch(() => {
+        // Worst case the pet he was just holding stays the active one, which is
+        // a defensible answer to an ambiguous gesture and not worth a dialog.
+      });
+  }, []);
+
   const { carrying, onPointerDown, onClickCapture } = useInChatCarry({
     onPress: () => {
       // Pressed, not yet dragged. Whatever was moving him stops now: he used to
@@ -606,6 +675,9 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       } : current));
     },
     onStart: () => {
+      // Whoever was on the desktop is remembered, so a pick-up that comes to
+      // nothing does not quietly change who lives there.
+      restoreActiveRef.current = activePetId;
       // Activated at the first movement, not when he crosses the edge.
       //
       // The desktop window only ever draws the active pet, and it has to fetch
@@ -650,6 +722,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         // No grab offset and no read-back: every position comes from the hand,
         // so nothing can accumulate — which is what six rounds of drift were.
         placeDesktopPetAt(pointer.x, pointer.y, true);
+        lastOutsideRef.current = pointer;
         return;
       }
 
@@ -673,22 +746,34 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       // window steps aside again — an interruption decides nothing.
       outsideRef.current = false;
       setOutside(false);
-      activatedRef.current = null;
+      // `endBorrowedDesktop` clears the record of who was activated, so it must
+      // read it first — clearing it here would make the restore a no-op.
+      endBorrowedDesktop();
       setMotion((current) => (current ? { ...current, carried: false, vy: 0 } : current));
     },
     onRelease: ({ clientX, clientY, velocity }) => {
       const wasOutside = outsideRef.current;
       outsideRef.current = false;
       setOutside(false);
-      activatedRef.current = null;
 
       if (wasOutside) {
-        // Left on the desktop. The assignment is untouched: he still belongs to
-        // this conversation, and coming back to it brings him back in.
+        // Left on the desktop, and that is a decision: the assignment is
+        // untouched — he still belongs to this conversation and coming back
+        // brings him in — but until then the desktop is where he lives, and the
+        // rule that keeps a chat's pet off the desktop has to know that.
         placeDesktopPetAt(clientX, clientY);
+        if (pet) desktopByChoiceRef.current.add(pet.definition.id);
+        restoreActiveRef.current = undefined;
+        activatedRef.current = null;
+        lastOutsideRef.current = null;
         if (arrival) setHandedOffArrival(arrival);
         return;
       }
+
+      // Let go inside, so nothing was decided: the desktop slot goes back to
+      // whoever had it, and any carry the shell still thinks it is running is
+      // ended where it actually left him rather than left to time out.
+      endBorrowedDesktop();
 
       /*
        * Let go inside: he keeps the hand's speed and gravity does the rest.
@@ -715,12 +800,47 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     },
   });
 
-  // While he is in the window the desktop one stands aside, and takes over
-  // again the moment he is not — closed chat, unassigned, or carried out.
+  // Declared before the suppression effect below, which reads it: effects run
+  // in order, so this is what makes "the pet we were just showing" true by the
+  // time the question is asked.
   useEffect(() => {
-    suppressDesktopPet(Boolean(pet) && !handedOff && !outside);
-    return () => suppressDesktopPet(false);
-  }, [pet, handedOff, outside]);
+    if (pet && !handedOff) lastInChatPetRef.current = pet.definition.id;
+  }, [pet, handedOff]);
+
+  /**
+   * When the desktop window may have him, and when it may not.
+   *
+   * Two clauses, and the second is the whole of this fix:
+   *
+   * - While he is standing in this chat, the desktop stands aside.
+   * - And it goes on standing aside for a pet who *lives* in a conversation,
+   *   even after you have navigated away from it. Opening a different chat
+   *   unmounts him here, and the desktop window would otherwise take that as
+   *   its cue and show him floating over everything — a pet nobody asked for,
+   *   arriving as a side effect of a click.
+   *
+   * The way onto the desktop is to carry him there, which records the choice.
+   * Activating somebody else releases this too, because then he is no longer
+   * the pet the window would show.
+   */
+  useEffect(() => {
+    const homedInAChat = activePetId !== null
+      && activePetId === lastInChatPetRef.current
+      && !desktopByChoiceRef.current.has(activePetId);
+
+    suppressDesktopPet((Boolean(pet) && !handedOff && !outside) || homedInAChat);
+  }, [pet, handedOff, outside, activePetId]);
+
+  /*
+   * Released only when this surface goes away entirely.
+   *
+   * Not on every change of the effect above: its cleanup used to run first and
+   * un-suppress for the instant before the new value was applied, which on a
+   * conversation change meant showing and hiding a real window in the same
+   * tick. The value is recomputed whenever anything it depends on moves, so
+   * there is nothing for a per-run cleanup to do.
+   */
+  useEffect(() => () => suppressDesktopPet(false), []);
 
   useEffect(() => () => {
     if (wanderRef.current !== undefined) window.clearTimeout(wanderRef.current);

@@ -124,3 +124,22 @@ export async function assignPetToSession(sessionId: string, petId: string): Prom
   // carousel says so. A failure here costs a dot, not the assignment.
   void fetch(`/api/pets/${encodeURIComponent(petId)}/used`, { method: 'POST' }).catch(() => {});
 }
+
+/**
+ * Takes the desktop pet off screen, leaving nobody active.
+ *
+ * The undo for `activatePet`. Picking a pet up in a chat activates him so the
+ * desktop window is loaded and sized by the time the hand reaches the edge —
+ * but a hand that never gets there has decided nothing, and the pet who was
+ * active before (or the absence of one) has to come back. The route takes any
+ * pet id and reads the body, so this can clear the slot without knowing who is
+ * in it.
+ */
+export async function clearActivePet(petId: string): Promise<void> {
+  const response = await fetch(`/api/pets/${encodeURIComponent(petId)}/activate`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ active: false }),
+  });
+  if (!response.ok) throw new Error(`The desktop pet could not be cleared (${response.status}).`);
+}

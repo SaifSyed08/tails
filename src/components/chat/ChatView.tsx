@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { CommandToken, readStyledCommand } from '@/components/chat/commandStyle';
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
 import { EmptyState, type ModelBadgeState } from '@/components/chat/EmptyState';
+import type { ModelChoice } from '@/types/chat';
 import { PetPicker } from '@/components/chat/PetPicker';
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
 import { PlanCard } from '@/components/chat/PlanCard';
@@ -178,7 +179,7 @@ type ChatViewProps = {
 export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const {
     rows, busy, pendingPermissions, pendingPrompts, error, mode, changeMode,
-    suggestion, clearSuggestion,
+    turnSettings, changeTurnSettings, suggestion, clearSuggestion,
     sendMessage, abort, answerPermission, answerQuestion, answerPlan,
   } = useChatSession(sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -186,9 +187,18 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const composerRef = useRef<ComposerHandle>(null);
   const [petPickerOpen, setPetPickerOpen] = useState(false);
   const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);
-  // Starts as "still reading" rather than "nothing": the badge holds its place
-  // from the first frame, so the name arriving is a text swap and not a jolt.
-  const [model, setModel] = useState<ModelBadgeState>({ status: 'resolving' });
+  /*
+    Starts as "still reading" rather than "nothing": the badge holds its place
+    from the first frame, so the name arriving is a text swap and not a jolt.
+  */
+  const [catalogue, setCatalogueState] = useState<{
+    current: ModelChoice | null;
+    models: ModelChoice[];
+    resolving: boolean;
+  }>({ current: null, models: [], resolving: true });
+
+  const setCatalogue = (next: { current: ModelChoice | null; models: ModelChoice[] }) =>
+    setCatalogueState({ ...next, resolving: false });
 
   // Follow the stream only while the user is already at the bottom; yanking
   // them down while they're reading earlier output is the classic chat-UI sin.
@@ -262,22 +272,35 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     let cancelled = false;
 
     void (async () => {
-      let next: ModelBadgeState = { status: 'unavailable' };
+      let next: { current: ModelChoice | null; models: ModelChoice[] } = { current: null, models: [] };
       try {
-        if (sessionId) {
-          const resolved = await api.getSessionModel(sessionId);
-          if (resolved?.displayName) next = { status: 'ready', name: resolved.displayName };
-        }
+        if (sessionId) next = await api.getSessionModels(sessionId);
       } catch {
         // Nothing to say, so nothing is said.
       }
-      if (!cancelled) setModel(next);
+      if (!cancelled) setCatalogue(next);
     })();
 
     return () => {
       cancelled = true;
     };
   }, [sessionId]);
+
+  /*
+    One source for both the badge and the picker. The badge showed the model
+    the CLI resolves to, and now that the model can be chosen the two would
+    disagree the moment anyone chose one — so the badge reads the selection
+    first and falls back to the resolved default.
+  */
+  const chosenModel = turnSettings.model
+    ? catalogue.models.find((entry) => entry.id === turnSettings.model) ?? null
+    : null;
+  const effectiveModel = chosenModel ?? catalogue.current;
+  const model: ModelBadgeState = catalogue.resolving
+    ? { status: 'resolving' }
+    : effectiveModel
+      ? { status: 'ready', name: effectiveModel.displayName }
+      : { status: 'unavailable' };
 
   const handleScroll = () => {
     const container = scrollRef.current;
@@ -400,6 +423,10 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
           onSuggestionDismiss={clearSuggestion}
           onAssignPet={() => setPetPickerOpen(true)}
           petName={pet?.name ?? null}
+          models={catalogue.models}
+          fallbackModel={catalogue.current}
+          turnSettings={turnSettings}
+          onTurnSettingsChange={changeTurnSettings}
         />
       </div>
 

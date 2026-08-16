@@ -39,6 +39,30 @@ export const PERMISSION_MODE_VALUES = ['default', 'acceptEdits', 'plan'] as cons
 export type PermissionMode = typeof PERMISSION_MODE_VALUES[number];
 
 /**
+ * How hard the model works on a turn — the SDK's own word, and the user's.
+ *
+ * Weakest first, which is the order the picker shows them in. Which of these a
+ * given model accepts comes from the catalogue, not from this list.
+ */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = typeof EFFORT_LEVELS[number];
+
+/** One model the account may choose, as the composer needs it. */
+export type ModelChoice = {
+  id: string;
+  displayName: string;
+  description?: string;
+  /** Empty means this model has no effort control, not that it accepts all. */
+  effortLevels: EffortLevel[];
+};
+
+/** What a conversation is set to run with; empty fields mean "the default". */
+export type TurnSettings = {
+  model?: string;
+  effort?: EffortLevel;
+};
+
+/**
  * A file staged in the composer, on its way out.
  *
  * Carries the bytes; `MessageAttachment` is the same file once it is part of
@@ -69,6 +93,7 @@ export type NormalizedMessage = {
   content?: string;
   attachments?: MessageAttachment[];
   permissionMode?: string;
+  turnSettings?: { model?: string; effort?: string };
   toolName?: string;
   toolInput?: unknown;
   toolId?: string;

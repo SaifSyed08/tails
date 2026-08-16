@@ -4,7 +4,7 @@ import { endsSuggestion } from '@/components/chat/suggestion';
 import { mergeTranscript, unaccountedFor } from '@/components/chat/transcript';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { api } from '@/lib/api';
-import { PERMISSION_MODE_VALUES, type PermissionMode } from '@/types/chat';
+import { EFFORT_LEVELS, PERMISSION_MODE_VALUES, type EffortLevel, type PermissionMode, type TurnSettings } from '@/types/chat';
 import type {
   AttachmentPayload,
   ChatRow,
@@ -21,6 +21,10 @@ import type {
  */
 function readPermissionMode(value: unknown): PermissionMode | null {
   return PERMISSION_MODE_VALUES.find((entry) => entry === value) ?? null;
+}
+
+function readEffort(value: unknown): EffortLevel | null {
+  return EFFORT_LEVELS.find((entry) => entry === value) ?? null;
 }
 
 /**
@@ -155,6 +159,16 @@ export function useChatSession(sessionId: string | null) {
    */
   const [suggestion, setSuggestion] = useState<string | null>(null);
 
+  /**
+   * The model and effort this conversation runs with.
+   *
+   * Per conversation and reset with it, exactly like the permission mode:
+   * inheriting a heavier model or a maximum effort into a chat the user
+   * thought was fresh is the same failure as inheriting auto-accept, and costs
+   * real money rather than just surprise.
+   */
+  const [turnSettings, setTurnSettings] = useState<TurnSettings>({});
+
   // Deltas land here and are flushed on a timer; writing them to state per
   // token is the single easiest way to make a chat UI feel slow.
   const streamBufferRef = useRef('');
@@ -164,11 +178,19 @@ export function useChatSession(sessionId: string | null) {
   // The server's mode is authoritative only until the user picks one: a
   // reconnect mid-conversation must not undo a selection they just made.
   const modeAdoptedRef = useRef(false);
+  const turnSettingsRef = useRef<TurnSettings>({});
+  const turnSettingsAdoptedRef = useRef(false);
 
   const changeMode = useCallback((next: PermissionMode) => {
     modeAdoptedRef.current = true;
     modeRef.current = next;
     setMode(next);
+  }, []);
+
+  const changeTurnSettings = useCallback((next: TurnSettings) => {
+    turnSettingsAdoptedRef.current = true;
+    turnSettingsRef.current = next;
+    setTurnSettings(next);
   }, []);
 
   const resetStream = useCallback(() => {
@@ -211,6 +233,9 @@ export function useChatSession(sessionId: string | null) {
     modeAdoptedRef.current = false;
     modeRef.current = 'default';
     setMode('default');
+    turnSettingsAdoptedRef.current = false;
+    turnSettingsRef.current = {};
+    setTurnSettings({});
     // A suggestion is about one turn of one conversation; it must never
     // follow the user into another.
     setSuggestion(null);
@@ -259,6 +284,18 @@ export function useChatSession(sessionId: string | null) {
           if (reported && !modeAdoptedRef.current) {
             modeRef.current = reported;
             setMode(reported);
+          }
+
+          // Same rule as the mode: the server's answer is authoritative right
+          // up until the user makes a choice of their own.
+          if (!turnSettingsAdoptedRef.current) {
+            const effort = readEffort(message.turnSettings?.effort);
+            const adopted: TurnSettings = {
+              ...(message.turnSettings?.model ? { model: message.turnSettings.model } : {}),
+              ...(effort ? { effort } : {}),
+            };
+            turnSettingsRef.current = adopted;
+            setTurnSettings(adopted);
           }
           setState((current) => ({
             ...current,
@@ -381,6 +418,9 @@ export function useChatSession(sessionId: string | null) {
       // Read from the ref rather than the closure so a mode changed between
       // renders cannot send a turn under the mode the composer used to show.
       permissionMode: modeRef.current,
+      // From the ref for the same reason as the mode: a setting changed
+      // between renders must not send under the previous one.
+      ...turnSettingsRef.current,
       attachments,
     });
   }, [sessionId, send]);
@@ -445,6 +485,8 @@ export function useChatSession(sessionId: string | null) {
     ...state,
     mode,
     changeMode,
+    turnSettings,
+    changeTurnSettings,
     suggestion,
     clearSuggestion,
     sendMessage,

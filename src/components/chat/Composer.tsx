@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 
+import { ModelPicker } from '@/components/chat/ModelPicker';
 import {
   CommandToken,
   readStyledCommand,
@@ -16,7 +17,12 @@ import {
 } from '@/components/chat/commandStyle';
 import { api, type SlashCommand } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { AttachmentPayload, PermissionMode } from '@/types/chat';
+import type {
+  AttachmentPayload,
+  ModelChoice,
+  PermissionMode,
+  TurnSettings,
+} from '@/types/chat';
 
 /**
  * The permission modes offered in the UI, with their labels.
@@ -353,6 +359,11 @@ type ComposerProps = {
   onSuggestionDismiss?: () => void;
   /** Opens the pet picker. Owned above so the dialog is not trapped in here. */
   onAssignPet: () => void;
+  /** The models this account may pick, and the one running by default. */
+  models: ModelChoice[];
+  fallbackModel: ModelChoice | null;
+  turnSettings: TurnSettings;
+  onTurnSettingsChange: (settings: TurnSettings) => void;
   /** The conversation's assigned pet, shown against the menu entry. */
   petName?: string | null;
 };
@@ -371,7 +382,7 @@ export type ComposerHandle = {
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer({
   sessionId, busy, mode, onModeChange, onSend, onAbort, suggestion, onSuggestionDismiss,
-  onAssignPet, petName,
+  onAssignPet, petName, models, fallbackModel, turnSettings, onTurnSettingsChange,
 }, ref) {
   const [draft, setDraft] = useState('');
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -778,6 +789,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           {activeMode.label}
           <span className="opacity-50">shift + tab</span>
         </button>
+
+        <ModelPicker
+          models={models}
+          fallback={fallbackModel}
+          settings={turnSettings}
+          onChange={onTurnSettingsChange}
+        />
 
         {/* A textarea cannot style a run of its own text, so the command the
             draft is carrying is shown beside it rather than inside it — which

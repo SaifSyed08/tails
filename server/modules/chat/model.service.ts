@@ -1,15 +1,35 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, type EffortLevel, type ModelInfo } from '@anthropic-ai/claude-agent-sdk';
 
-/** The model a conversation will actually run on. */
-export type SessionModel = {
-  /** The wire id, e.g. `claude-opus-5[1m]`. */
+/** One model the account can actually pick, as the composer needs it. */
+export type ModelChoice = {
+  /** The wire id passed straight back as `options.model`. */
   id: string;
-  /** What to show a person, e.g. `Opus (1M context)`. Falls back to the id. */
+  /** What to show a person, e.g. `Opus (1M context)`. */
   displayName: string;
+  description?: string;
+  /**
+   * Effort levels this model accepts, in the SDK's own order.
+   *
+   * Empty for a model with no effort control, which is not the same as a model
+   * that accepts every level — the picker has to be able to tell those apart.
+   */
+  effortLevels: EffortLevel[];
+};
+
+export type SessionModels = {
+  /**
+   * What Claude Code resolves to here with no override.
+   *
+   * Null when it could not be read, which is also what makes the badge absent
+   * rather than approximate.
+   */
+  current: ModelChoice | null;
+  /** Everything the account may choose. Empty when the catalogue is unreadable. */
+  models: ModelChoice[];
 };
 
 /**
- * How long a resolved model is reused.
+ * How long a resolved catalogue is reused.
  *
  * Reading it spawns a CLI subprocess, so it must not happen per render. The
  * answer only changes when the user changes their Claude Code configuration,
@@ -20,36 +40,62 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 /** How long to wait for the init event before giving up and reporting nothing. */
 const RESOLVE_TIMEOUT_MS = 8000;
 
-const cache = new Map<string, { model: SessionModel | null; expiresAt: number }>();
+const EMPTY: SessionModels = { current: null, models: [] };
+
+const cache = new Map<string, { models: SessionModels; expiresAt: number }>();
 
 /**
- * Prettifies a wire id we could not match against the model list.
+ * The alias row, which is a pointer rather than a model.
  *
- * Deliberately conservative — it only tidies the id it was given. Inventing a
- * marketing name for an id this build does not recognise would be a guess, and
- * a wrong model name is worse than a raw one.
+ * `supportedModels()` returns a row whose value is `default` and whose display
+ * name is "Default (recommended)". It resolves to whichever model the user has
+ * configured, so it answers a different question than the picker asks — and
+ * offering it alongside the model it points at would give the same choice two
+ * names. Reverting to the configured default is expressed by choosing nothing.
  */
-function fallbackName(id: string): string {
-  return id;
+const ALIAS_VALUE = 'default';
+
+function toChoice(entry: ModelInfo): ModelChoice {
+  return {
+    id: entry.value,
+    displayName: entry.displayName,
+    ...(entry.description ? { description: entry.description } : {}),
+    effortLevels: entry.supportsEffort ? [...(entry.supportedEffortLevels ?? [])] : [],
+  };
 }
 
 /**
- * Reads the model Claude Code would use in this folder.
+ * Resolves the wire id the CLI announced back to a catalogue row.
  *
- * The only authoritative source is the CLI's own `system`/`init` event, which
- * reflects settings, config and any per-project override — none of which this
- * app can see. It arrives within about a hundred milliseconds of the
- * subprocess starting and needs no prompt, so this asks for it directly rather
- * than waiting for the user's first message and inferring from that.
- *
- * Returns null rather than a placeholder when anything goes wrong: the caller
- * shows nothing at all in that case, which is the honest outcome.
+ * Two rows can resolve to the same wire id: the alias the user selected and
+ * the model it points at. The alias's name is the last resort, because the
+ * badge exists to say *which* model, not that a default is in force.
  */
-export async function readSessionModel(cwd: string): Promise<SessionModel | null> {
-  const cached = cache.get(cwd);
-  if (cached && cached.expiresAt > Date.now()) return cached.model;
+function resolveCurrent(id: string, catalogue: ModelInfo[]): ModelChoice {
+  const named = catalogue.filter((entry) => entry.value !== ALIAS_VALUE);
+  const match = named.find((entry) => entry.value === id)
+    ?? named.find((entry) => entry.resolvedModel === id)
+    ?? catalogue.find((entry) => entry.value === id || entry.resolvedModel === id);
 
-  let model: SessionModel | null = null;
+  // Falling back to the raw id rather than inventing a marketing name: a wrong
+  // model name is worse than an unfamiliar one.
+  return match ? toChoice(match) : { id, displayName: id, effortLevels: [] };
+}
+
+/**
+ * Reads the models available in this folder, and which one is in force.
+ *
+ * Both come from one throwaway subprocess: the catalogue from a control
+ * request, and the resolved model from the CLI's own `system`/`init` event —
+ * the only authoritative source, since it reflects settings, config and any
+ * per-project override that this app cannot see. It arrives about a hundred
+ * milliseconds in and needs no prompt.
+ */
+export async function readSessionModels(cwd: string): Promise<SessionModels> {
+  const cached = cache.get(cwd);
+  if (cached && cached.expiresAt > Date.now()) return cached.models;
+
+  let resolved: SessionModels = EMPTY;
 
   try {
     // `persistSession: false` keeps this from leaving an empty conversation in
@@ -60,26 +106,15 @@ export async function readSessionModel(cwd: string): Promise<SessionModel | null
     });
 
     try {
-      const catalogue = await instance.supportedModels().catch(() => []);
-      const deadline = Date.now() + RESOLVE_TIMEOUT_MS;
+      const catalogue = await instance.supportedModels().catch((): ModelInfo[] => []);
+      const models = catalogue.filter((entry) => entry.value !== ALIAS_VALUE).map(toChoice);
+      resolved = { current: null, models };
 
+      const deadline = Date.now() + RESOLVE_TIMEOUT_MS;
       for await (const message of instance) {
-        const event = message as { type?: string; subtype?: string; model?: unknown };
+        const event = message as { type?: string; model?: unknown };
         if (event.type === 'system' && typeof event.model === 'string' && event.model) {
-          const id = event.model;
-          /*
-            Two rows can resolve to the same wire id: the alias the user
-            selected ("default") and the model it actually points at
-            ("opus[1m]"). The alias's display name is "Default (recommended)",
-            which answers a different question than the one being asked — the
-            badge is there to say *which* model — so the alias rows are the
-            last resort, not the first match.
-          */
-          const named = catalogue.filter((entry) => entry.value !== 'default');
-          const match = named.find((entry) => entry.value === id)
-            ?? named.find((entry) => entry.resolvedModel === id)
-            ?? catalogue.find((entry) => entry.value === id || entry.resolvedModel === id);
-          model = { id, displayName: match?.displayName ?? fallbackName(id) };
+          resolved = { current: resolveCurrent(event.model, catalogue), models };
           break;
         }
         // A stream that never announces a model must not hold the request open.
@@ -89,11 +124,23 @@ export async function readSessionModel(cwd: string): Promise<SessionModel | null
       instance.close();
     }
   } catch {
-    // No CLI, no auth, an unreadable folder. All of them mean the same thing
-    // to the caller: we cannot say what model this is, so we do not say.
-    model = null;
+    // No CLI, no auth, an unreadable folder. All of them mean the same thing to
+    // the caller: we cannot say what is available, so we do not say.
+    resolved = EMPTY;
   }
 
-  cache.set(cwd, { model, expiresAt: Date.now() + CACHE_TTL_MS });
-  return model;
+  cache.set(cwd, { models: resolved, expiresAt: Date.now() + CACHE_TTL_MS });
+  return resolved;
+}
+
+/**
+ * The catalogue if it is already known, without going and fetching it.
+ *
+ * Used on the send path, which must not pay for a subprocess: a cold cache
+ * means the turn runs unvalidated rather than slowly. The composer warms it on
+ * mount, so in practice it is there.
+ */
+export function peekSessionModels(cwd: string): SessionModels | null {
+  const cached = cache.get(cwd);
+  return cached && cached.expiresAt > Date.now() ? cached.models : null;
 }

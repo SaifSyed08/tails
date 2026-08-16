@@ -1,4 +1,4 @@
-import type { NormalizedMessage } from '@/types/chat';
+import type { ModelChoice, NormalizedMessage } from '@/types/chat';
 
 export type SessionListItem = {
   id: string;
@@ -78,9 +78,16 @@ export const api = {
   listCommands: (sessionId: string) =>
     request<SlashCommand[]>(`/sessions/${encodeURIComponent(sessionId)}/commands`),
 
-  /** Null when the model genuinely cannot be read; callers show nothing then. */
-  getSessionModel: (sessionId: string) =>
-    request<{ id: string; displayName: string } | null>(
+  /**
+   * The models this conversation can run on, and the one in force.
+   *
+   * `current` is null when the model genuinely cannot be read, which is what
+   * makes the badge absent rather than approximate; `models` is empty when the
+   * catalogue could not be read, which hides the picker rather than offering
+   * an empty one.
+   */
+  getSessionModels: (sessionId: string) =>
+    request<{ current: ModelChoice | null; models: ModelChoice[] }>(
       `/sessions/${encodeURIComponent(sessionId)}/model`,
     ),
 

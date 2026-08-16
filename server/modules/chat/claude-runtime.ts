@@ -1,4 +1,10 @@
-import { query, type CanUseTool, type Options, type PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  type CanUseTool,
+  type EffortLevel,
+  type Options,
+  type PermissionResult,
+} from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'node:crypto';
 
 import { sessionsRepository } from '@/db/sessions.repository.js';
@@ -9,7 +15,9 @@ import {
   normalizeSdkMessage,
   toMessageAttachment,
 } from '@/modules/chat/normalize.js';
+import { peekSessionModels } from '@/modules/chat/model.service.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
+import { resolveTurnSettings, type TurnSettings } from '@/modules/chat/turn-settings.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { publishSessionsChanged } from '@/shared/broadcast.js';
 import type { AskUserQuestion, NormalizedMessage, PermissionDecision } from '@/shared/types.js';
@@ -180,6 +188,9 @@ type RunChatTurnInput = {
   cwd: string;
   permissionMode?: SelectablePermissionMode;
   attachments?: ChatAttachment[];
+  /** Wire id from the composer's picker; omitted runs on the CLI's default. */
+  model?: string;
+  effort?: EffortLevel;
 };
 
 /**
@@ -254,6 +265,20 @@ function buildPrompt(text: string, attachments: ChatAttachment[]) {
  * to read and simply showed whatever the last conversation was set to.
  */
 const sessionPermissionModes = new Map<string, SelectablePermissionMode>();
+
+/**
+ * The model and effort each conversation is running with.
+ *
+ * Same reasoning as the permission mode above: the composer has to be able to
+ * ask what is actually in force rather than assume its own last selection, and
+ * an empty entry means "whatever the CLI resolves to", which is not something
+ * this app should try to name for itself.
+ */
+const sessionTurnSettings = new Map<string, TurnSettings>();
+
+export function getSessionTurnSettings(sessionId: string): TurnSettings {
+  return sessionTurnSettings.get(sessionId) ?? {};
+}
 
 /**
  * How long the stream is drained after the turn has already finished.
@@ -340,6 +365,27 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   // told what is actually in force rather than guessing.
   sessionPermissionModes.set(sessionId, permissionMode ?? 'default');
 
+  /*
+    Validated against the catalogue the CLI itself reported, and only when that
+    catalogue is already cached — the send path must not pay for a subprocess.
+    The composer warms it on mount, so in practice this is a map lookup.
+
+    Both settings apply from this turn onward rather than mid-run, which is not
+    a limitation worth working around: a fresh CLI is spawned per turn, so the
+    next message is the earliest point either could take effect anyway.
+  */
+  const settings = resolveTurnSettings(
+    { ...(input.model ? { model: input.model } : {}), ...(input.effort ? { effort: input.effort } : {}) },
+    peekSessionModels(cwd)?.models ?? [],
+  );
+  sessionTurnSettings.set(sessionId, { ...(settings.model ? { model: settings.model } : {}), ...(settings.effort ? { effort: settings.effort } : {}) });
+
+  // A request that could not be honoured is said out loud. Silently dropping
+  // it would leave the composer claiming a model that never ran.
+  for (const problem of settings.problems) {
+    send(createMessage('error', sessionId, { errorCode: 'unavailable_model', content: problem }));
+  }
+
   // Echo what the user actually typed, not the expanded form — seeing
   // `/personalize` turn into a paragraph of instructions in your own
   // transcript is disorienting. The attachments ride along so the bubble can
@@ -405,8 +451,11 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       // conversation the user started.
       allowedTools: APPEARANCE_ALLOWED_TOOLS,
       // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
-      // each turn, so any live mode change would be discarded anyway.
+      // each turn, so any live mode change would be discarded anyway. The same
+      // goes for the model and the effort level below.
       ...(permissionMode ? { permissionMode } : {}),
+      ...(settings.model ? { model: settings.model } : {}),
+      ...(settings.effort ? { effort: settings.effort } : {}),
       canUseTool: createPermissionGate(sessionId),
       ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
       ...(process.env.TAILS_CLAUDE_PATH

@@ -90,6 +90,8 @@ export type NormalizedMessage = {
   statusCode?: string;
   /** `chat_subscribed` only — the mode this conversation is really running in. */
   permissionMode?: string;
+  /** `chat_subscribed` only — the model and effort actually in force. */
+  turnSettings?: { model?: string; effort?: string };
 
   /** `appearance_changed` payload; see AppearanceBroadcast. */
   appearance?: unknown;
@@ -174,6 +176,10 @@ export type ClientMessage =
     cwd?: string;
     /** 'default' | 'acceptEdits' | 'plan'; validated by the runtime. */
     permissionMode?: string;
+    /** Model wire id from the composer's picker; validated against the catalogue. */
+    model?: string;
+    /** 'low' | 'medium' | 'high' | 'xhigh' | 'max'; validated by the runtime. */
+    effort?: string;
     /** Files and images attached to this message. */
     attachments?: { name: string; mediaType: string; data: string }[];
   }

@@ -3,12 +3,14 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import {
   getSessionPermissionMode,
+  getSessionTurnSettings,
   resolvePermission,
   runChatTurn,
   SELECTABLE_PERMISSION_MODES,
   type ChatAttachment,
 } from '@/modules/chat/claude-runtime.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
+import { readEffortLevel } from '@/modules/chat/turn-settings.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { appBroadcast } from '@/shared/broadcast.js';
 import type { ClientMessage, NormalizedMessage } from '@/shared/types.js';
@@ -44,6 +46,8 @@ function parseClientMessage(raw: string): ClientMessage | null {
         content,
         cwd: readString(message.cwd) ?? undefined,
         permissionMode: readString(message.permissionMode) ?? undefined,
+        model: readString(message.model) ?? undefined,
+        effort: readString(message.effort) ?? undefined,
         attachments,
       };
     }
@@ -189,6 +193,9 @@ export function attachChatGateway(server: Server): WebSocketServer {
             send(createMessage('chat_subscribed', entry.sessionId, {
               statusCode: runRegistry.isRunning(entry.sessionId) ? 'running' : 'idle',
               permissionMode: getSessionPermissionMode(entry.sessionId),
+              // Same reason as the permission mode: the composer must be able
+              // to show what is actually in force, not its own last guess.
+              turnSettings: getSessionTurnSettings(entry.sessionId),
               appearance: { pendingPermissions: runRegistry.listPendingPermissions(entry.sessionId) },
             }));
 
@@ -253,6 +260,10 @@ async function handleSend(
       cwd: session.cwd,
       permissionMode: mode,
       attachments: message.attachments,
+      // The model is checked against the CLI's own catalogue in the runtime,
+      // which is the only place that knows what this account may use.
+      ...(message.model ? { model: message.model } : {}),
+      ...(readEffortLevel(message.effort) ? { effort: readEffortLevel(message.effort) } : {}),
     });
   } catch (error) {
     send(createMessage('error', message.sessionId, {
