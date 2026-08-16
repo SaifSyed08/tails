@@ -32,6 +32,7 @@ import { PetPill } from './PetPill';
 import { advanceMotion, type Bounds, type Motion } from './pet-motion';
 import { fpsForState } from './sprite-rate';
 import { useChatActivity } from './useChatActivity';
+import { useDesktopPetAlerts } from './useDesktopPetAlerts';
 import { useInChatCarry } from './useInChatCarry';
 
 /**
@@ -333,6 +334,16 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     queueMicrotask(() => setHandedOffArrival(null));
     return undefined;
   }, [dragging]);
+
+  /*
+   * The desktop pet's notifications.
+   *
+   * Hosted here because this component is the app's one always-mounted piece of
+   * pet — it is rendered whatever view is on screen, with a null session when
+   * that view is not a chat, which is exactly the situation the notification is
+   * for. See the hook for why the decision is split between here and the shell.
+   */
+  useDesktopPetAlerts({ sessionId, activePetId });
 
   // The desktop pet's settings button. The shell has already raised the app.
   useEffect(() => {

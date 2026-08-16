@@ -14,6 +14,7 @@ import {
   type PetDragPayload,
   type PetDropTarget,
 } from '@/components/marketplace';
+import { onSessionRequested } from '@/components/petstage/session-requests';
 import { FloatingCard } from '@/components/sidebar/FloatingCard';
 import { SessionRow } from '@/components/sidebar/SessionRow';
 import { useWebSocket } from '@/contexts/WebSocketContext';
@@ -123,6 +124,38 @@ export function Sidebar({
   const { subscribe } = useWebSocket();
 
   const requestReload = useCallback(() => setReloadNonce((current) => current + 1), []);
+
+  /**
+   * A conversation asked for from outside the app — the desktop pet's
+   * notification bubble.
+   *
+   * It goes through the same call a click on a row makes, rather than through
+   * some second way of opening a chat, because there should not be a second
+   * way. If the chat is not in the list yet — archived, or past the limit — the
+   * list is re-read and the request is held until it arrives, which is the one
+   * case where a bubble could otherwise do nothing at all.
+   */
+  const pendingOpenRef = useRef<string | null>(null);
+
+  useEffect(() => onSessionRequested((requested) => {
+    const found = sessions.find((entry) => entry.id === requested);
+    if (found) {
+      pendingOpenRef.current = null;
+      onSelect(found);
+      return;
+    }
+    pendingOpenRef.current = requested;
+    requestReload();
+  }), [sessions, onSelect, requestReload]);
+
+  useEffect(() => {
+    const wanted = pendingOpenRef.current;
+    if (!wanted) return;
+    const found = sessions.find((entry) => entry.id === wanted);
+    if (!found) return;
+    pendingOpenRef.current = null;
+    onSelect(found);
+  }, [sessions, onSelect]);
 
   useEffect(() => {
     let cancelled = false;

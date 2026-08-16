@@ -143,3 +143,23 @@ export async function clearActivePet(petId: string): Promise<void> {
   });
   if (!response.ok) throw new Error(`The desktop pet could not be cleared (${response.status}).`);
 }
+
+/** The two things the pet needs to know about a conversation. */
+export type SessionSummary = { title: string; petId: string | null };
+
+/**
+ * Reads a conversation's name and its pet.
+ *
+ * Asked once per finished turn rather than kept in step: completions are rare
+ * compared with renders, and a name held in memory is a name that goes stale
+ * exactly when the title is being generated — which is the moment this is for.
+ */
+export async function readSessionSummary(sessionId: string): Promise<SessionSummary> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`That conversation could not be read (${response.status}).`);
+
+  const session = await response.json() as { title?: string; petId?: string | null };
+  return { title: String(session.title ?? ''), petId: session.petId ?? null };
+}

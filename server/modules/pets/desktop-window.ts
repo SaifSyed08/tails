@@ -343,12 +343,17 @@ const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
   openDetails() {}, hidePet() {},
   onFacing() {}, onRefresh() {}, onCarry() {}, onResync() {}, onProbe() {},
+  onAlert() {}, openAlert() {}, dismissAlert() {},
 };
 
 const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
 const handle = document.getElementById('handle');
 const pill = document.getElementById('pill');
+const bubble = document.getElementById('bubble');
+const bubbleOpen = document.getElementById('bubble-open');
+const bubbleMore = document.getElementById('bubble-more');
+const bubbleClose = document.getElementById('bubble-close');
 const pillSettings = document.getElementById('pill-settings');
 const pillHide = document.getElementById('pill-hide');
 
@@ -366,6 +371,8 @@ let playing = null;      // the state name currently animating
 let petRect = null;      // cached sprite box; invalidated on resize and re-render
 let facing = 'right';
 let scale = 1;           // the user's own size for this pet
+let alert = null;        // the chat waiting to be read, or null
+let alertJumpTimer = null;
 
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -564,10 +571,7 @@ async function render(next) {
 
   if (changed || scaleChanged) {
     pet.style.backgroundImage = 'url(' + next.spriteUrl + ')';
-    bridge.reportSize(
-      Math.ceil(box.cellWidth) + PADDING * 2,
-      Math.ceil(box.cellHeight) + PADDING * 2,
-    );
+    reportSize();
     bridge.reportVisibility(true);
   }
 
@@ -598,6 +602,23 @@ async function render(next) {
 }
 
 /**
+ * Asks the shell for exactly as much window as he currently needs.
+ *
+ * Which is not a constant: the bubble is only up sometimes, and the room for it
+ * is only worth having then. The shell grows the window from his feet, so this
+ * changing does not move him.
+ */
+function reportSize() {
+  if (!box) return;
+  const width = Math.max(
+    Math.ceil(box.cellWidth) + PADDING * 2,
+    alert ? BUBBLE_MAX_WIDTH + PADDING * 2 : 0,
+  );
+  const height = Math.ceil(box.cellHeight) + PADDING * 2 + (alert ? BUBBLE_BAND : 0);
+  bridge.reportSize(width, height);
+}
+
+/**
  * Finds the artwork inside the cell, and hangs the furniture off it.
  *
  * The bounding box of the opaque pixels, from the same mask the hit-test uses,
@@ -609,6 +630,10 @@ function placeFurniture() {
   if (!mask || !box) {
     handle.style.display = 'none';
     pill.style.display = 'none';
+    // The bubble still goes up. A pet whose mask failed to build is a pet with
+    // no grab region and no pill, which is bad enough — silently swallowing the
+    // notification as well would mean a chat that finished and never said so.
+    if (box) placeBubble(pet.getBoundingClientRect(), stage.getBoundingClientRect(), 0, box.cellWidth / box.scale - 1, 0);
     return;
   }
 
@@ -637,6 +662,7 @@ function placeFurniture() {
   const stageRect = stage.getBoundingClientRect();
   placeHandle(rect, stageRect, minX, maxX, minY, maxY);
   placePill(rect, stageRect, minX, maxX, maxY);
+  placeBubble(rect, stageRect, minX, maxX, minY);
 }
 
 /**
@@ -699,6 +725,38 @@ function placePill(rect, stageRect, minX, maxX, maxY) {
   // Visible at rest rather than a ghost: it is the only thing on screen that
   // says he has controls at all.
   pill.style.opacity = open ? '1' : '0.85';
+}
+
+/**
+ * Puts the bubble above his head, and keeps it inside the window.
+ *
+ * Centred on the artwork rather than on the cell for the same reason the pill
+ * is, and clamped horizontally because a long chat name makes a bubble wider
+ * than the pet is: at the edges it slides along rather than hanging off.
+ */
+function placeBubble(rect, stageRect, minX, maxX, minY) {
+  if (!alert) {
+    bubble.style.display = 'none';
+    bubble.classList.remove('up');
+    return;
+  }
+
+  bubble.style.display = 'flex';
+  // Read after display, and before the position is set: the width depends on
+  // the text, which is the thing that just changed.
+  const width = bubble.getBoundingClientRect().width;
+  const artworkWidth = (maxX - minX + 1) * box.scale;
+  const centre = rect.left - stageRect.left + minX * box.scale + artworkWidth / 2;
+  const head = rect.top - stageRect.top + minY * box.scale;
+
+  bubble.style.left = Math.round(
+    Math.max(2, Math.min(stageRect.width - width - 2, centre - width / 2)),
+  ) + 'px';
+  bubble.style.top = Math.round(Math.max(2, head - bubble.getBoundingClientRect().height - 6)) + 'px';
+
+  // Raised on the frame after it is placed, so it fades in where it belongs
+  // rather than sliding across from wherever it was last time.
+  requestAnimationFrame(() => bubble.classList.add('up'));
 }
 
 /** Where the pill is on screen, or null when it is not shown. */
@@ -770,6 +828,17 @@ function isOverPet(clientX, clientY) {
     }
   }
 
+  // And so does the bubble, for exactly the same reason: it is above his head,
+  // over nothing, and a notification you cannot click is a worse notification
+  // than none.
+  if (alert) {
+    const box3 = bubble.getBoundingClientRect();
+    if (box3.width > 0 && clientX >= box3.left && clientX <= box3.right
+      && clientY >= box3.top && clientY <= box3.bottom) {
+      return true;
+    }
+  }
+
   // Cached: this runs on every forwarded mouse move, and the sprite only moves
   // when the window resizes or the pet changes. Reading layout per move is a
   // forced synchronous reflow sixty times a second for a number that did not
@@ -811,6 +880,10 @@ function setPointerOver(next) {
 
   pill.classList.toggle('open', next && !dragging);
   placeFurniture();
+
+  // Noticed. He stops hopping while you are pointing at him, and picks it up
+  // again if you wander off without reading the chat.
+  if (alert && !next) setAlertJumping();
 }
 
 document.addEventListener('mousemove', (event) => {
@@ -886,6 +959,73 @@ bridge.onFacing((next) => {
   if (dragging) playState(next === 'left' ? 'running-left' : 'running-right');
 });
 bridge.onRefresh(() => void poll());
+
+/**
+ * A conversation has finished, or has been dealt with.
+ *
+ * The shell decides *whether* he should say anything — it is the only side that
+ * knows if the window is in front of the user — so this is only the saying: put
+ * the bubble up, ask for the room to put it in, and start the jumping.
+ */
+bridge.onAlert((next) => {
+  const had = Boolean(alert);
+  alert = next && next.sessionId ? next : null;
+
+  if (alert) {
+    bubbleOpen.textContent = alert.text;
+    bubbleOpen.title = alert.text;
+    bubbleMore.hidden = alert.others < 1;
+    bubbleMore.textContent = alert.others > 0 ? '+' + alert.others : '';
+  } else {
+    bubble.classList.remove('up');
+  }
+
+  // The window has to change height for the bubble to have anywhere to be, and
+  // the furniture is placed against the *new* box — so the order is: ask, let
+  // the resize land, then place.
+  if (had !== Boolean(alert)) reportSize();
+  requestAnimationFrame(() => placeFurniture());
+  setAlertJumping();
+});
+
+/**
+ * Jumping, with pauses.
+ *
+ * The pauses are the whole difference between "over here" and "something is
+ * wrong with the pet". Suspended while he is being carried or pointed at,
+ * because both mean the user has already noticed him, and skipped entirely
+ * under reduced motion — the bubble says the same thing without moving.
+ */
+function setAlertJumping() {
+  if (alertJumpTimer) {
+    clearInterval(alertJumpTimer);
+    alertJumpTimer = null;
+  }
+  if (!alert || reduced) return;
+
+  const hop = () => {
+    if (dragging || pointerOver) return;
+    playState('jumping');
+    setTimeout(() => {
+      if (!dragging && !pointerOver) playState('idle');
+    }, ALERT_JUMP_MS);
+  };
+
+  hop();
+  alertJumpTimer = setInterval(hop, ALERT_JUMP_EVERY_MS);
+}
+
+bubbleOpen.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (alert) bridge.openAlert(alert.sessionId);
+});
+
+bubbleClose.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (alert) bridge.dismissAlert(alert.sessionId);
+});
 
 /*
  * The shell asking, instead of the pointer telling.
