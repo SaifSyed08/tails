@@ -40,6 +40,17 @@ const HIT_TOLERANCE = 6;
 /** Depth of the drag handle, in cell pixels, measured down from the artwork's top. */
 const HANDLE_BAND = 46;
 
+/**
+ * How much faster than the sheet's own rate the pet plays.
+ *
+ * Codex's 260ms a frame is the rate its own site plays at, and it reads as
+ * slightly under-wound here — the pets look like they are moving through
+ * treacle. A third quicker keeps every animation recognisably the one the
+ * artist drew while giving it some life. Mirrored in `ChatPet`, so a pet does
+ * not run at two different speeds depending on which surface he is standing on.
+ */
+const FPS_BOOST = 1.35;
+
 export function renderDesktopWindowHtml(): string {
   // A fresh nonce per render, so the page can keep its inline style and script
   // without opening the door to any others. It is a window floating over the
@@ -186,6 +197,7 @@ const PET_HEIGHT = ${PET_HEIGHT};
 const PADDING = ${PADDING};
 const HIT_TOLERANCE = ${HIT_TOLERANCE};
 const HANDLE_BAND = ${HANDLE_BAND};
+const FPS_BOOST = ${FPS_BOOST};
 
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
@@ -282,7 +294,7 @@ function applyAnimation(grid, range) {
   const startRow = Math.floor(start / grid.columns);
   const rowSpan = Math.floor(end / grid.columns) - startRow + 1;
   const framesPerSweep = rowSpan === 1 ? frameCount : grid.columns;
-  const fps = range.fps ?? grid.fps ?? 8;
+  const fps = (range.fps ?? grid.fps ?? 8) * FPS_BOOST;
 
   const originX = rowSpan === 1 ? -startColumn * box.cellWidth : 0;
   const still = reduced || frameCount < 2 || framesPerSweep < 2;
@@ -527,8 +539,30 @@ function pillRect() {
  * only signal is the window changing position. The running animation and the
  * facing both hang off that.
  */
+let carryFloor = null;
+
 bridge.onCarry((isCarrying) => {
   dragging = isCarrying;
+
+  /*
+   * A carry that is never called off.
+   *
+   * While this page believes it is being carried it stops looking at the
+   * pointer entirely, so a lost or delayed end-of-carry is not a cosmetic
+   * problem: it is a pet who can never be picked up again. The shell always
+   * sends the end — but "always" is exactly the assumption that has cost this
+   * feature the most, so there is a floor under it.
+   */
+  if (carryFloor) clearTimeout(carryFloor);
+  carryFloor = isCarrying
+    ? setTimeout(() => {
+      carryFloor = null;
+      dragging = false;
+      pointerOver = false;
+      pet.classList.remove('dragging');
+      playState('idle');
+    }, 4000)
+    : null;
 
   // Nothing to press while he is in the air, and a button sliding around the
   // desktop under a moving window is just debris.
@@ -607,6 +641,37 @@ function setPointerOver(next) {
 document.addEventListener('mousemove', (event) => {
   if (dragging) return;
   setPointerOver(isOverPet(event.clientX, event.clientY));
+});
+
+/*
+ * The pointer left the window in one movement.
+ *
+ * Fast enough and the last move we see is still on the pet, so without this the
+ * page goes on believing the pointer is there — and because it only reports
+ * *changes*, it would never report the next arrival either. The shell has a
+ * watchdog behind this, and now tells us when it fires; this is the cheap half.
+ */
+/*
+ * The window changed size, so everything measured from it is now wrong.
+ *
+ * Two things are cached against the old layout: the sprite's box, which the
+ * hit-test consults on every forwarded mouse move, and the drag handle's
+ * position. Neither is re-derived anywhere else — the poll re-places the handle
+ * but never invalidates the box — so a resize that lands after the first render
+ * leaves the pet permanently ungrabbable: the pointer is over him, and the
+ * rectangle being consulted says it is not.
+ *
+ * The one resize that always happens is the first one, when the page tells the
+ * shell how big it needs to be.
+ */
+window.addEventListener('resize', () => {
+  petRect = null;
+  if (mask) placeHandle();
+});
+
+document.addEventListener('mouseleave', () => {
+  if (dragging) return;
+  setPointerOver(false);
 });
 
 document.addEventListener('contextmenu', (event) => {

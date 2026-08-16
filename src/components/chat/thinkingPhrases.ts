@@ -58,8 +58,24 @@ const MAX_PHRASE_LENGTH = 72;
 /** Most lines one pet may contribute, matching what the pets module accepts. */
 const MAX_PHRASES = 12;
 
-/** One pet line per this many slots in the rotation. */
-const PHRASE_SPACING = 3;
+/**
+ * How often a slot goes to the pet, when the pet has anything to say.
+ *
+ * Better than even, deliberately: the pet is the reason anyone assigned it,
+ * and the generic verbs are the ones nobody will miss. The remaining 40% is
+ * what keeps the row still reading as "the agent is working" rather than as an
+ * idle animation — at 100% the indicator stops being an indicator.
+ */
+const PET_SLOT_CHANCE = 0.6;
+
+/**
+ * How many slots a rotation is built from.
+ *
+ * Long enough that a lap through it is not recognisable as a loop — at the
+ * indicator's pace this is several minutes of work — and short enough to build
+ * in one pass when the pet changes.
+ */
+const ROTATION_SLOTS = SPINNER_VERBS.length * 2;
 
 /**
  * Cleans user-authored lines.
@@ -83,31 +99,93 @@ export function readPetPhrases(phrases: readonly string[] | undefined): string[]
 }
 
 /**
+ * Draws from a pool without replacement, reshuffling once it runs dry.
+ *
+ * A bag rather than an independent roll each time. Independent rolls over five
+ * phrases put the same line up three times in a dozen slots — no two in a row,
+ * but plainly repetitive — because chance clusters. Drawing without
+ * replacement guarantees every line a pet has is used before any of them comes
+ * round again, which is what makes a short list stop sounding short.
+ */
+function createBag(pool: readonly string[], random: () => number) {
+  let queue: string[] = [];
+
+  const refill = () => {
+    queue = [...pool];
+    // Fisher-Yates, on the injected source so a seeded run is reproducible.
+    for (let index = queue.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(random() * (index + 1));
+      [queue[index], queue[swap]] = [queue[swap], queue[index]];
+    }
+  };
+
+  return {
+    /** Null when everything the pool holds is currently disallowed. */
+    take(avoid: readonly string[]): string | null {
+      if (pool.length === 0) return null;
+
+      // Twice: once against what is left in the bag, once against a fresh one.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (queue.length === 0) refill();
+
+        // Reaches past a disallowed head rather than reshuffling around it, so
+        // the no-repeat rule costs the bag nothing.
+        const index = queue.findIndex((entry) => !avoid.includes(entry));
+        if (index >= 0) return queue.splice(index, 1)[0] ?? null;
+
+        queue = [];
+      }
+
+      return null;
+    },
+  };
+}
+
+/**
  * Builds the rotation the indicator walks.
  *
- * Mixed rather than replaced, and spaced rather than clumped. An indicator
- * that only ever says pet lines stops reading as "the agent is working" and
- * starts reading as decoration — the ordinary words are what make the pet
- * lines land as a surprise rather than as the whole joke.
+ * Each slot is decided on its own — roughly three in five go to the pet — so
+ * the sequence does not fall into an audible pattern the way a fixed
+ * one-in-three cadence did. Nothing ever follows itself: with a handful of
+ * phrases, pure chance repeats often enough to look like a bug, and the
+ * no-repeat rule costs one extra draw to avoid.
  *
- * The pet's lines cycle, so a pet with two of them still says both throughout
- * a long run instead of falling silent after the first pass.
+ * `random` is injected rather than reached for, so a seeded run is
+ * reproducible and this does not become the one corner the tests cannot see.
  */
-export function buildThinkingRotation(petPhrases: readonly string[] | undefined): string[] {
-  const base = SPINNER_VERBS;
+export function buildThinkingRotation(
+  petPhrases: readonly string[] | undefined,
+  random: () => number = Math.random,
+): string[] {
+  // Verbs are what need the ellipsis; a pet line is written by hand and
+  // already punctuated however its author wanted.
+  const verbs = SPINNER_VERBS.map((verb) => `${verb}…`);
   const pet = readPetPhrases(petPhrases);
-  // Base words are the ones that need the ellipsis; a pet line is written by
-  // hand and already punctuated however its author wanted.
-  const rotation: string[] = [];
-  let petIndex = 0;
+  if (pet.length === 0) return verbs;
 
-  base.forEach((word, index) => {
-    rotation.push(`${word}…`);
-    if (pet.length > 0 && (index + 1) % (PHRASE_SPACING - 1) === 0) {
-      rotation.push(pet[petIndex % pet.length]);
-      petIndex += 1;
-    }
-  });
+  const petBag = createBag(pet, random);
+  const verbBag = createBag(verbs, random);
+  const rotation: string[] = [];
+  let previous = '';
+
+  for (let slot = 0; slot < ROTATION_SLOTS; slot += 1) {
+    const wantsPet = random() < PET_SLOT_CHANCE;
+    // The last slot also avoids the first one. The indicator walks this list
+    // in a cycle, so those two are neighbours too, and a repeat there looks
+    // exactly like the indicator having frozen — just once a lap.
+    const avoid = slot === ROTATION_SLOTS - 1 && rotation.length > 0
+      ? [previous, rotation[0]]
+      : [previous];
+
+    // The fallback is what a one-phrase pet hits: rather than say the same
+    // line twice, the slot goes back to a verb.
+    const entry = (wantsPet ? petBag : verbBag).take(avoid)
+      ?? (wantsPet ? verbBag : petBag).take(avoid);
+    if (!entry) break;
+
+    rotation.push(entry);
+    previous = entry;
+  }
 
   return rotation;
 }

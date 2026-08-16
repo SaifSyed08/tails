@@ -290,13 +290,39 @@ function startWatchdog() {
   watchdogTimer = setInterval(() => {
     if (!isAlive() || !interactive || carrying) return;
 
+    /*
+     * The OS's own rectangle, not our record of it.
+     *
+     * This test used to mix the two: `getPosition` is the *outer* origin and
+     * `getContentSize` is the drawing area, and on Windows this window carries
+     * an invisible frame 20px across and 32px down. So the rectangle being
+     * tested was offset from the one on screen, and the watchdog could decide
+     * the pointer had left while it was sitting on the pet — which turns
+     * click-through back on underneath a pointer that never went anywhere.
+     *
+     * Bounds are also the forgiving choice, which is the right bias for a
+     * recovery mechanism: being late to restore click-through costs a few
+     * pixels of dead desktop, and being early costs the pet.
+     */
     const cursor = screen.getCursorScreenPoint();
-    const at = positionNow();
-    const size = sizeNow();
-    const inside = cursor.x >= at.x && cursor.x <= at.x + size.width
-      && cursor.y >= at.y && cursor.y <= at.y + size.height;
+    const at = petWindow.getBounds();
+    const inside = cursor.x >= at.x && cursor.x <= at.x + at.width
+      && cursor.y >= at.y && cursor.y <= at.y + at.height;
+    if (inside) return;
 
-    if (!inside) setInteractive(false);
+    setInteractive(false);
+
+    /*
+     * And tell the page, because this decision was ours.
+     *
+     * The page only reports the pointer *arriving*, and it dedupes: it will not
+     * re-report an arrival it believes is still in effect. So a window we made
+     * click-through behind the page's back can never be made clickable again —
+     * the pointer is already "on the pet" as far as the page is concerned, and
+     * every later move is dropped. That is a pet who cannot be picked up for
+     * the rest of the session, and it is why this line exists.
+     */
+    petWindow.webContents.send('pet:resync');
   }, WATCHDOG_INTERVAL_MS);
 }
 
@@ -709,7 +735,12 @@ export function placePetAt(x, y) {
   const size = sizeNow();
   const clamped = clampToDisplay(x - size.width / 2, y - size.height / 2, size.width, size.height);
   moveTo(clamped.x, clamped.y);
-  persistPosition();
+
+  // Treated as a carry, because it is one — the app is dragging him across the
+  // desktop. That gets him the running animation, the facing, the pause on the
+  // watchdog and the resize handler, and the save when the moves stop, all from
+  // the same place a handle drag gets them.
+  onCarried(clamped.x, clamped.y);
 }
 
 /** The user's own hide/show, which survives a restart. */

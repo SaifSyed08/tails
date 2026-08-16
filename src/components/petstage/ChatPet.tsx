@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import {
   PetSprite,
   readPetDragFrame,
+  refreshDesktopPet,
   resolveCellBox,
   SPRITE_KEYFRAMES,
   suppressDesktopPet,
@@ -14,7 +15,13 @@ import {
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
-import { readSessionPet, readStage, savePetStage, type PetStage } from './chat-pet-api';
+import {
+  activatePet,
+  readSessionPet,
+  readStage,
+  savePetStage,
+  type PetStage,
+} from './chat-pet-api';
 import { placeDesktopPetAt } from './desktop-handoff';
 import { PetMenu } from './PetMenu';
 import { PetPill } from './PetPill';
@@ -85,6 +92,37 @@ const GREETING_MS = 900;
 const REACTION_MS = 1200;
 
 /**
+ * How much faster than the sheet's own rate he plays.
+ *
+ * Codex's 260ms a frame reads as slightly under-wound — the pets look like they
+ * are moving through treacle. Mirrored in `desktop-window.ts`, so he does not
+ * run at two different speeds depending on which surface he is standing on.
+ */
+const FPS_BOOST = 1.35;
+
+/**
+ * How much of the margin beside the transcript he strolls in.
+ *
+ * His words: about 80% of the left padding, less half his width. He lives in
+ * that gutter, so the walk has to be measured against it rather than against
+ * the window — a wander computed from the whole width sends him across the
+ * text, and one computed from nothing keeps him standing in the corner.
+ */
+const WANDER_SPAN = 0.8;
+
+/** How far past the chat's edge the hand goes before the desktop takes him. */
+const EDGE_HYSTERESIS = 12;
+
+/**
+ * The shortest stroll worth performing.
+ *
+ * Small, because the gutter is small: at the old 40px he would decline almost
+ * every wander a narrow margin offered him, which is a large part of why he
+ * never appeared to walk left.
+ */
+const MIN_STROLL = 12;
+
+/**
  * How long after a drag ends a new assignment still counts as that drop.
  *
  * The assignment is written by the server and comes back over the wire, so it
@@ -137,30 +175,24 @@ function measure(overlay: HTMLElement, width: number, height: number): Geometry 
 /**
  * Somewhere to stand that is not on top of what Claude wrote.
  *
- * He may cross the column — the room is not divided in half — but he does not
- * stop in it. When neither margin is wide enough to hold him, he stays where he
- * is rather than picking the least-bad spot on the text.
+ * Measured against the margin he lives in rather than against the window, so
+ * the walk is as long as the space actually is: a wide window gives him room to
+ * roam and a narrow one keeps him tucked beside the composer. A margin too thin
+ * to hold him means he stays where he is rather than standing on the text.
  */
 function pickWanderTarget(geometry: Geometry, spriteWidth: number, from: number): number | null {
-  const bands: [number, number][] = [];
   const { column, maxX } = geometry;
 
-  if (!column) {
-    bands.push([GUTTER_INSET, maxX]);
-  } else {
-    // Both margins, however narrow — the filter below throws out the ones with
-    // no room, which is the same test written once instead of twice.
-    bands.push([GUTTER_INSET, column.left - spriteWidth - GUTTER_INSET]);
-    bands.push([column.right + GUTTER_INSET, maxX - GUTTER_INSET]);
-  }
+  // No column means no transcript to keep off, so the room is his.
+  const limit = column
+    ? WANDER_SPAN * column.left - spriteWidth / 2
+    : maxX;
+  const high = Math.min(maxX, limit);
+  if (high <= GUTTER_INSET) return null;
 
-  const usable = bands.filter(([low, high]) => high > low);
-  if (usable.length === 0) return null;
-
-  const [low, high] = usable[Math.floor(Math.random() * usable.length)];
-  const target = randomBetween(low, high);
+  const target = randomBetween(GUTTER_INSET, high);
   // A stroll of two pixels is a twitch. Ask again rather than perform it.
-  return Math.abs(target - from) < 40 ? null : target;
+  return Math.abs(target - from) < MIN_STROLL ? null : target;
 }
 
 export function ChatPet({ sessionId }: ChatPetProps) {
@@ -396,6 +428,18 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   }, [arrival]);
 
   /**
+   * Coming back to a conversation brings him back.
+   *
+   * Where he is standing is not a fact about the conversation — the assignment
+   * is, and taking him out to the desktop never touched it. So leaving the chat
+   * retires the handoff, and returning finds him living there as he always was.
+   * Deferred out of the effect body because that is a render-time write.
+   */
+  useEffect(() => {
+    queueMicrotask(() => setHandedOffArrival(null));
+  }, [sessionId]);
+
+  /**
    * Everything that moves him, one frame at a time.
    *
    * One loop for the lifetime of the component rather than one per journey: a
@@ -467,11 +511,75 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * stays the size he is, keeps his feet under the point you grabbed him by,
    * and the two ways it can end are the two things you can do with an animal
    * you have picked up: put him down, or put him outside.
+   *
+   * ## Crossing the edge of the chat
+   *
+   * The app window clips its own contents, so a pet carried towards the sidebar
+   * used to slide *under* it and disappear — the hand kept moving and the
+   * animal it was holding was gone. So the handoff happens the moment the
+   * pointer leaves the chat, not when it is released: the desktop window is
+   * un-suppressed and follows the pointer from there, and this stops drawing
+   * him. Both halves are the same pet in the same place, so what the user sees
+   * is one continuous gesture that happens to cross a window boundary.
+   *
+   * Coming back into the chat reverses it, because a hand that has not opened
+   * has not decided anything yet.
    */
+  const [outside, setOutside] = useState(false);
+  const outsideRef = useRef(false);
+  const activatedRef = useRef<string | null>(null);
+
+  /**
+   * Hands him to the desktop window, once per gesture.
+   *
+   * Activating him is the point: the desktop window shows the *active* pet and
+   * nothing else, so without this a pet dragged out either vanished (nobody
+   * active) or turned into whoever was — which is what "a different pet appears
+   * outside the chat interface" was.
+   */
+  const takeOutside = useCallback((petId: string) => {
+    if (activatedRef.current !== petId) {
+      activatedRef.current = petId;
+      void activatePet(petId).then(refreshDesktopPet).catch(() => {
+        // He will still be carried on the desktop layer; he just may be the pet
+        // the window already had. Nothing here is worth interrupting a drag.
+      });
+    }
+    suppressDesktopPet(false);
+  }, []);
+
   const { carrying, onPointerDown, onClickCapture } = useInChatCarry({
-    onMove: (left, top) => {
+    onMove: (left, top, screen) => {
       const rect = overlay?.getBoundingClientRect();
-      if (!rect || !geometry) return;
+      if (!rect || !geometry || !pet) return;
+
+      // His middle, against the chat's box, with a dead band around the edge.
+      // Crossing hands a window between two owners, and a hand that wobbles on
+      // the boundary would otherwise hide and show a real OS window several
+      // times a second.
+      const centreX = left + fullWidth / 2;
+      const centreY = top + fullHeight / 2;
+      const beyond = Math.max(
+        rect.left - centreX, centreX - rect.right,
+        rect.top - centreY, centreY - rect.bottom,
+      );
+      const isOutside = beyond > (outsideRef.current ? -EDGE_HYSTERESIS : EDGE_HYSTERESIS);
+
+      if (isOutside !== outsideRef.current) {
+        outsideRef.current = isOutside;
+        setOutside(isOutside);
+        if (isOutside) takeOutside(pet.definition.id);
+        else suppressDesktopPet(true);
+      }
+
+      if (isOutside) {
+        // He is the desktop window now, and it follows the pointer directly.
+        // No grab offset and no read-back: every position comes from the hand,
+        // so nothing can accumulate — which is what six rounds of drift were.
+        placeDesktopPetAt(screen.x, screen.y);
+        return;
+      }
+
       const x = left - rect.left;
       // Never below the floor: there is no room down there, and a pet behind
       // the composer is a pet nobody can get back.
@@ -487,23 +595,25 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         facing: x < current.x - 1 ? 'left' : x > current.x + 1 ? 'right' : current.facing,
       } : current));
     },
-    onRelease: ({ x, y, screenX, screenY }) => {
-      const rect = overlay?.getBoundingClientRect();
-      const inside = rect
-        && x + fullWidth / 2 >= rect.left && x + fullWidth / 2 <= rect.right
-        && y + fullHeight / 2 >= rect.top && y + fullHeight / 2 <= rect.bottom;
+    onCancel: () => {
+      // Changed your mind mid-flight. He goes back to the chat, and the desktop
+      // window steps aside again — an interruption decides nothing.
+      outsideRef.current = false;
+      setOutside(false);
+      activatedRef.current = null;
+      setMotion((current) => (current ? { ...current, carried: false, vy: 0 } : current));
+    },
+    onRelease: ({ screenX, screenY }) => {
+      const wasOutside = outsideRef.current;
+      outsideRef.current = false;
+      setOutside(false);
+      activatedRef.current = null;
 
-      if (!inside) {
-        // Out of the chat — over the sidebar, over the header, off the window
-        // entirely. He goes back to being a desktop pet, and he goes back to it
-        // where the hand opened rather than wherever that window was left.
+      if (wasOutside) {
+        // Left on the desktop. The assignment is untouched: he still belongs to
+        // this conversation, and coming back to it brings him back in.
         placeDesktopPetAt(screenX, screenY);
         if (arrival) setHandedOffArrival(arrival);
-        // He has left, so the entrance is owed again: dropped back into this
-        // same chat later, the arrival string is unchanged and this is the only
-        // thing that would stop him coming in.
-        enteredRef.current = null;
-        suppressDesktopPet(false);
         return;
       }
 
@@ -524,9 +634,9 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   // While he is in the window the desktop one stands aside, and takes over
   // again the moment he is not — closed chat, unassigned, or carried out.
   useEffect(() => {
-    suppressDesktopPet(Boolean(pet) && !handedOff);
+    suppressDesktopPet(Boolean(pet) && !handedOff && !outside);
     return () => suppressDesktopPet(false);
-  }, [pet, handedOff]);
+  }, [pet, handedOff, outside]);
 
   useEffect(() => () => {
     if (wanderRef.current !== undefined) window.clearTimeout(wanderRef.current);
@@ -556,7 +666,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     });
   }, [pet]);
 
-  if (!overlay || !pet || !geometry || !here || handedOff) return null;
+  if (!overlay || !pet || !geometry || !here || handedOff || outside) return null;
 
   const height = Math.round(CARRIED_HEIGHT + (fullHeight - CARRIED_HEIGHT) * here.grow);
   const width = Math.round(height * widthPerHeight);
@@ -633,7 +743,20 @@ export function ChatPet({ sessionId }: ChatPetProps) {
           }}
           title={`${pet.definition.displayName} — right-click for options, or carry him out of the window`}
         >
-          <PetSprite pet={pet} size={height} state={state} facing={here.facing} />
+          <PetSprite
+            pet={pet}
+            size={height}
+            state={state}
+            /*
+             * Mirrored only when the sheet has no row of its own for the
+             * direction. A Codex sheet has both `running-left` and
+             * `running-right`, and playing the left row *and* flipping it was
+             * making him moonwalk — two negatives that cancel, so he faced the
+             * way he came from. Same rule as the desktop page.
+             */
+            facing={pet.definition.states[state] ? 'right' : here.facing}
+            fps={(pet.definition.frame.fps ?? 8) * FPS_BOOST}
+          />
           <PetPill
             open={hovered && !carrying}
             width={width}

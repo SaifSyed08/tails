@@ -68,3 +68,21 @@ export async function savePetStage(petId: string, stage: PetStage): Promise<void
   });
   if (!response.ok) throw new Error(`That setting could not be saved (${response.status}).`);
 }
+
+/**
+ * Makes this pet the desktop pet.
+ *
+ * Carrying him out of a chat is a decision about who lives on the desktop, and
+ * the desktop window only ever shows the *active* pet. Without this, dragging a
+ * pet out either produced nothing (no active pet) or produced somebody else —
+ * whoever had last been activated in the marketplace — which is the pet
+ * equivalent of picking up a cat and putting down a dog.
+ */
+export async function activatePet(petId: string): Promise<void> {
+  const response = await fetch(`/api/pets/${encodeURIComponent(petId)}/activate`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ active: true }),
+  });
+  if (!response.ok) throw new Error(`That pet could not be put on the desktop (${response.status}).`);
+}

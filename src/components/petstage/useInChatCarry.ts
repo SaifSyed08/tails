@@ -37,10 +37,25 @@ export type InChatRelease = {
 };
 
 export type InChatCarryOptions = {
-  /** The pet's top-left corner has moved, in viewport coordinates. */
-  onMove: (x: number, y: number) => void;
+  /**
+   * The pet's top-left corner has moved, in viewport coordinates, and where the
+   * pointer is on the screen.
+   *
+   * Both, because the two answers are needed at once: the viewport point says
+   * where he is in the chat, and the screen point is the only thing that means
+   * anything to a window floating over the whole desktop.
+   */
+  onMove: (x: number, y: number, screen: { x: number; y: number }) => void;
   /** The hand opened. Not called for an interruption — see the note above. */
   onRelease: (release: InChatRelease) => void;
+  /**
+   * The gesture was interrupted: Escape, the window losing focus, unmounting.
+   *
+   * Separate from a release because it decides nothing — it puts everything
+   * back the way it was. A carry that has changed something along the way (this
+   * one moves a whole window) needs somewhere to undo that.
+   */
+  onCancel?: () => void;
 };
 
 type Gesture = {
@@ -100,7 +115,10 @@ export function useInChatCarry(options: InChatCarryOptions): {
     if (!gesture.carrying) return;
     swallowClickRef.current = true;
     setCarrying(false);
-    if (!released) return;
+    if (!released) {
+      optionsRef.current.onCancel?.();
+      return;
+    }
 
     optionsRef.current.onRelease({
       x: gesture.x - gesture.grabX,
@@ -156,7 +174,11 @@ export function useInChatCarry(options: InChatCarryOptions): {
       }
 
       move.preventDefault();
-      optionsRef.current.onMove(move.clientX - gesture.grabX, move.clientY - gesture.grabY);
+      optionsRef.current.onMove(
+        move.clientX - gesture.grabX,
+        move.clientY - gesture.grabY,
+        { x: move.screenX, y: move.screenY },
+      );
     };
 
     const up = (end: PointerEvent) => {
