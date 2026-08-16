@@ -27,29 +27,18 @@ contextBridge.exposeInMainWorld('petBridge', {
    */
   reportPointerOverPet: (over) => ipcRenderer.send('pet:interactive', { over }),
 
-  /**
-   * Begins a drag. Carries no coordinates on purpose.
-   *
-   * The grab offset is worked out in the main process from the cursor and the
-   * window position, which are both in one coordinate system. A renderer's
-   * `screenX` is not guaranteed to be in the same units as the window's
-   * position, and that mismatch grows with distance from the screen origin —
-   * a pet that slides further from the cursor the further you drag it.
-   */
-  startDrag: () => ipcRenderer.send('pet:drag-start'),
-  endDrag: () => ipcRenderer.send('pet:drag-end'),
-
-  /**
-   * "The button is still down."
-   *
-   * The shell has no way to read the mouse button, and inferring the answer
-   * from where the pointer is gets it wrong during a fast gesture.
-   */
-  dragHeartbeat: () => ipcRenderer.send('pet:drag-heartbeat'),
-
   openMenu: (petId) => ipcRenderer.send('pet:menu', { petId }),
 
-  /** The shell tells the page which way the drag is going, and when to re-read the pet. */
+  /**
+   * The shell tells the page it is being carried.
+   *
+   * There is no mousedown to listen for: the OS performs the window move from a
+   * `-webkit-app-region` handle, so the only evidence a drag is happening is
+   * the window changing position, which only the shell can see.
+   */
+  onCarry: (handler) => ipcRenderer.on('pet:carry', (_event, carrying) => handler(carrying)),
+
+  /** Which way the carry is going, and when to re-read the pet. */
   onFacing: (handler) => ipcRenderer.on('pet:facing', (_event, facing) => handler(facing)),
   onRefresh: (handler) => ipcRenderer.on('pet:refresh', () => handler()),
 

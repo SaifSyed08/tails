@@ -37,6 +37,9 @@ const PADDING = 12;
 /** How far outside an opaque pixel still counts as "on the pet", in cell pixels. */
 const HIT_TOLERANCE = 6;
 
+/** Depth of the drag handle, in cell pixels, measured down from the artwork's top. */
+const HANDLE_BAND = 46;
+
 export function renderDesktopWindowHtml(): string {
   // A fresh nonce per render, so the page can keep its inline style and script
   // without opening the door to any others. It is a window floating over the
@@ -90,6 +93,26 @@ export function renderDesktopWindowHtml(): string {
 
   #pet.mirrored { transform: scaleX(-1); }
 
+  /*
+   * The scruff of the neck: the one place the OS may start a window move.
+   *
+   * Everything else is no-drag, because a drag region swallows mouse events and
+   * right-clicking the pet has to keep reaching the page — the context menu is
+   * the only recovery path that does not need the marketplace.
+   *
+   * Its position comes from the sprite's measured opaque pixels, not from the
+   * top of its box. The cell has transparent padding, and a handle over empty
+   * pixels would never be usable: the alpha hit-test would not flip the window
+   * out of click-through there, so the OS would never see the press.
+   */
+  #handle {
+    position: absolute;
+    -webkit-app-region: drag;
+    cursor: grab;
+  }
+
+  #stage, #pet { -webkit-app-region: no-drag; }
+
   @keyframes tails-sprite-x {
     from { background-position-x: var(--sprite-x-from); }
     to { background-position-x: var(--sprite-x-to); }
@@ -106,27 +129,28 @@ export function renderDesktopWindowHtml(): string {
 </style>
 </head>
 <body>
-<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div></div>
+<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div></div>
 <script type="module" nonce="${nonce}">
 const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
 const PADDING = ${PADDING};
 const HIT_TOLERANCE = ${HIT_TOLERANCE};
+const HANDLE_BAND = ${HANDLE_BAND};
 
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
-  startDrag() {}, endDrag() {}, dragHeartbeat() {}, openMenu() {},
-  onFacing() {}, onRefresh() {},
+  openMenu() {},
+  onFacing() {}, onRefresh() {}, onCarry() {},
 };
 
 const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
+const handle = document.getElementById('handle');
 
 let current = null;      // the pet payload currently rendered
 let box = null;          // its cell geometry
 let mask = null;         // union alpha mask of the played frames, at cell resolution
 let dragging = false;
-let dragHeartbeat = null;
 let pointerOver = false;
 let playing = null;      // the state name currently animating
 let petRect = null;      // cached sprite box; invalidated on resize and re-render
@@ -333,7 +357,10 @@ async function render(next) {
     playState('idle');
   }
 
-  if (!changed && mask) return;
+  if (!changed && mask) {
+    placeHandle();
+    return;
+  }
 
   petRect = null;
 
@@ -343,10 +370,76 @@ async function render(next) {
   try {
     const image = await loadImage(next.spriteUrl);
     mask = buildHitMask(image, grid, idle);
+    placeHandle();
   } catch {
     mask = null;
   }
 }
+
+/**
+ * Puts the drag handle over the top band of the pet's actual artwork.
+ *
+ * Derived from the same alpha mask the hit-test uses, so the handle and the
+ * clickable area agree by construction. A band rather than the whole sprite
+ * because the rest has to stay no-drag for right-click; the top of a sprite is
+ * also where you would pick an animal up.
+ */
+function placeHandle() {
+  if (!mask || !box) {
+    handle.style.display = 'none';
+    return;
+  }
+
+  let minX = mask.width;
+  let maxX = -1;
+  let minY = mask.height;
+
+  for (let y = 0; y < mask.height; y += 1) {
+    for (let x = 0; x < mask.width; x += 1) {
+      if (!mask.bytes[y * mask.width + x]) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+    }
+  }
+
+  if (maxX < 0) {
+    handle.style.display = 'none';
+    return;
+  }
+
+  const rect = pet.getBoundingClientRect();
+  const stageRect = stage.getBoundingClientRect();
+  const left = rect.left - stageRect.left + minX * box.scale;
+  const top = rect.top - stageRect.top + minY * box.scale;
+  const width = Math.max(16, (maxX - minX + 1) * box.scale);
+  const height = Math.max(14, Math.round(HANDLE_BAND * box.scale));
+
+  handle.style.display = 'block';
+  handle.style.left = left + 'px';
+  handle.style.top = top + 'px';
+  handle.style.width = width + 'px';
+  handle.style.height = height + 'px';
+}
+
+/**
+ * The shell says when the pet is being carried.
+ *
+ * There is no mousedown to react to any more — the OS runs the move, and the
+ * only signal is the window changing position. The running animation and the
+ * facing both hang off that.
+ */
+bridge.onCarry((isCarrying) => {
+  dragging = isCarrying;
+
+  if (isCarrying) {
+    pet.classList.add('dragging');
+    playState(facing === 'left' ? 'running-left' : 'running-right');
+    return;
+  }
+  pet.classList.remove('dragging');
+  playState(pointerOver ? 'waving' : 'idle');
+});
 
 /** Whether a point inside the window sits on the pet's own pixels. */
 function isOverPet(clientX, clientY) {
@@ -396,98 +489,6 @@ document.addEventListener('mousemove', (event) => {
   if (dragging) return;
   setPointerOver(isOverPet(event.clientX, event.clientY));
 });
-
-/**
- * Ends a drag the page can no longer see.
- *
- * A drag is released with a mouseup, and the page only receives one while the
- * pointer is over the window. Anything that separates the two — the pointer
- * outrunning the window, the window stopping at a screen edge, another app
- * taking the pointer — would otherwise leave the pet glued to the cursor with
- * no way to put it down.
- */
-function abandonDrag() {
-  if (!dragging) return;
-  dragging = false;
-  stopHeartbeat();
-  pet.classList.remove('dragging');
-  playState('idle');
-  bridge.endDrag();
-}
-
-/**
- * A pulse that means "the button is still down".
- *
- * The shell cannot read the mouse button, so it used to infer a finished drag
- * from the pointer leaving the window — which is wrong whenever a fast gesture
- * outruns the window for a moment, and it froze the drag mid-carry. This page
- * *does* know: it has the mousedown, and it gets the mouseup, the mouseleave or
- * the blur. So it says so, and the shell only gives up when this goes quiet.
- */
-function startHeartbeat() {
-  stopHeartbeat();
-  bridge.dragHeartbeat();
-  dragHeartbeat = window.setInterval(() => bridge.dragHeartbeat(), 200);
-}
-
-function stopHeartbeat() {
-  if (dragHeartbeat !== null) window.clearInterval(dragHeartbeat);
-  dragHeartbeat = null;
-}
-
-// Belt and braces with the shell's watchdog: whichever notices first wins, and
-// the cost of noticing late is a rectangle of desktop that ignores clicks — or
-// a pet that cannot be let go of.
-document.addEventListener('mouseleave', () => {
-  abandonDrag();
-  setPointerOver(false);
-});
-window.addEventListener('blur', () => {
-  abandonDrag();
-  setPointerOver(false);
-});
-
-pet.addEventListener('mousedown', (event) => {
-  if (event.button !== 0 || !isOverPet(event.clientX, event.clientY)) return;
-  event.preventDefault();
-
-  dragging = true;
-  startHeartbeat();
-  pet.classList.add('dragging');
-  playState(facing === 'left' ? 'running-left' : 'running-right');
-
-  // No coordinates: the shell works out the grab offset from the cursor and the
-  // window position, both of which it can read in one coordinate system. The
-  // renderer's screenX is not reliably in the same units as the window's
-  // position, and the error grows with distance from the origin — which is
-  // exactly the drift of a pet that falls behind the further you drag it.
-  bridge.startDrag();
-});
-
-// On the document, not the sprite: the pointer routinely ends a fast drag
-// outside the pet, and a mouseup missed there would leave the window stuck
-// interactive and still following the cursor.
-document.addEventListener('mouseup', () => {
-  if (!dragging) return;
-  dragging = false;
-  stopHeartbeat();
-  pet.classList.remove('dragging');
-  playState('idle');
-  bridge.endDrag();
-  setPointerOver(false);
-});
-
-/**
- * No zooming the pet.
- *
- * Ctrl+wheel over this window is Chromium's zoom gesture, and the window is
- * interactive whenever the pointer is on the sprite — so an ordinary scroll
- * with Ctrl held, aimed at whatever is behind the pet, used to resize the pet
- * instead. The shell resets any zoom that gets through; this stops it starting.
- */
-window.addEventListener('wheel', (event) => {
-  if (event.ctrlKey) event.preventDefault();
-}, { passive: false });
 
 document.addEventListener('contextmenu', (event) => {
   event.preventDefault();

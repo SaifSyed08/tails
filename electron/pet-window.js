@@ -42,24 +42,14 @@ const DEFAULT_SIZE = { width: 160, height: 180 };
  */
 const MAX_WINDOW = { width: 320, height: 360 };
 
-/** Gap between drag frames. One frame at 60Hz, measured from the end of the last. */
-const DRAG_INTERVAL_MS = 16;
-
 /**
- * How long the page may go quiet during a drag before the shell gives up on it.
+ * Quiet time after the last move before the pet is considered put down.
  *
- * The page pulses every 200ms while the button is held, so silence means the
- * page is gone, hung, or never saw the mouseup — the state that would otherwise
- * leave a pet glued to the cursor.
- *
- * This replaces an earlier rule that abandoned the drag when the *pointer* left
- * the window. That was a bad proxy: a fast gesture outruns the window for a
- * moment, and the geometry made it worse in one direction — the sprite sits at
- * the bottom of its window, so a downward drag has only a few pixels of margin
- * below the grab point while an upward one has the whole box. It froze
- * downward drags first, and the pet was left behind.
+ * The OS move loop reports no beginning and no end, only positions, so the drop
+ * is inferred. Long enough to survive a pause mid-drag, short enough that the
+ * pet stops running promptly once it is set down.
  */
-const SILENT_PAGE_MS = 1200;
+const SETTLE_MS = 220;
 
 /**
  * How far the OS may disagree with our record before we believe the OS.
@@ -107,15 +97,23 @@ let suppressed = false;
  */
 let trackedPosition = null;
 
+/**
+ * True while the OS is moving the window for us.
+ *
+ * There is no drag loop any more: the sprite carries a `-webkit-app-region`
+ * handle, so Windows performs the move and we learn of it through the window's
+ * own `move` events. This flag is for the two things that must stand back
+ * during a gesture — the click-through watchdog and the resize handler.
+ */
+let carrying = false;
+let carryFacing = null;
+let carryFrom = null;
+let settleTimer = null;
+let moveCount = 0;
+
 let interactive = false;
 let watchdogTimer = null;
-let dragTimer = null;
-let dragOffset = null;
-let lastFacing = null;
-let lastHeartbeat = 0;
-let lastDragX = null;
 /** Frames since the current drag began, so the trace can sample rather than flood. */
-let frameCount = 0;
 
 /**
  * Three drag mechanisms, switchable at runtime.
@@ -211,10 +209,6 @@ function persistPosition() {
   writeState({ petWindow: { x, y, hidden } });
 }
 
-function schedulePersist() {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(persistPosition, 400);
-}
 
 /**
  * Keeps the whole window inside the work area of the display it is on.
@@ -298,7 +292,7 @@ function setInteractive(next) {
 function startWatchdog() {
   if (watchdogTimer) return;
   watchdogTimer = setInterval(() => {
-    if (!isAlive() || !interactive || dragTimer) return;
+    if (!isAlive() || !interactive || carrying) return;
 
     const cursor = screen.getCursorScreenPoint();
     const at = positionNow();
@@ -324,184 +318,51 @@ function stopWatchdog() {
  * pointer's position *inside* the page barely changes during a drag, so the
  * page cannot see the gesture it is making. Screen coordinates can.
  */
-function startDrag() {
-  if (!isAlive() || dragTimer) return;
-
-  // Seeded here so a drag is never abandoned before the first pulse arrives.
-  lastHeartbeat = Date.now();
-
-  const cursor = screen.getCursorScreenPoint();
-
-  // Which position the grab offset is measured against is exactly the question
-  // the three modes exist to answer, so it is the one thing they differ on here.
-  const size = sizeNow();
-
-  /**
-   * The grab offset has to be a point *inside* the window.
-   *
-   * A drag only ever starts from a mousedown on the sprite, so by construction
-   * the pointer is over the window and the offset lies within its box. When it
-   * does not, the origin it was measured against is wrong — and the consequence
-   * is not subtle: an offset of 766px on a 152px-tall window sends the very
-   * first frame to `cursor - 766`, which is how the pet ended up pinned at 0,0
-   * and impossible to pick up. An impossible offset is refused, not used.
-   */
-  const withinBox = (candidate) => candidate.x >= 0 && candidate.x <= size.width
-    && candidate.y >= 0 && candidate.y <= size.height;
-
-  const recorded = positionNow();
-  const [osX, osY] = petWindow.getPosition();
-  let offset = { x: cursor.x - recorded.x, y: cursor.y - recorded.y };
-
-  if (!withinBox(offset)) {
-    // Our record disagrees with reality; the OS is the tie-breaker.
-    const fromOs = { x: cursor.x - osX, y: cursor.y - osY };
-    logDrag('bad-offset', { offset, fromOs, recorded, os: { x: osX, y: osY }, size });
-    trackedPosition = { x: osX, y: osY };
-    offset = fromOs;
+/**
+ * The window moved and we did not move it.
+ *
+ * Which means the user is carrying it by the handle. This is the whole of the
+ * drag now: no grab offset, no per-frame writes, no position arithmetic — the
+ * three things that produced six rounds of bugs. What is left is telling the
+ * pet which way it is going, so it can face that way and run.
+ */
+function onCarried(x, y) {
+  if (!carrying) {
+    carrying = true;
+    carryFrom = { x, y };
+    moveCount = 0;
+    logDrag('carry-start', { at: { x, y }, size: sizeNow() });
+    petWindow.webContents.send('pet:carry', true);
   }
 
-  if (!withinBox(offset)) {
-    // Neither answer is usable, so the pointer genuinely is not over this
-    // window. Grab it by the middle: the pet stays under the cursor rather than
-    // leaping to wherever the arithmetic pointed.
-    offset = { x: Math.round(size.width / 2), y: Math.round(size.height / 2) };
-    logDrag('offset-fallback', { offset, size });
+  moveCount += 1;
+  // Sampled: a drag emits a move event per frame and this log is for reading.
+  if (moveCount % 10 === 0) logDrag('carry', { n: moveCount, at: { x, y } });
+
+  if (Math.abs(x - carryFrom.x) > 2) {
+    const direction = x < carryFrom.x ? 'left' : 'right';
+    if (direction !== carryFacing) {
+      carryFacing = direction;
+      petWindow.webContents.send('pet:facing', direction);
+    }
+    carryFrom = { x, y };
   }
 
-  dragOffset = offset;
+  // The OS reports no drop, so the end of the gesture is inferred from the
+  // moves stopping. Only the animation and the save depend on it, so guessing
+  // slightly early or late costs nothing.
+  if (settleTimer) clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    carrying = false;
+    carryFacing = null;
+    moveCount = 0;
+    if (!isAlive()) return;
 
-  lastDragX = cursor.x;
-  setInteractive(true);
-
-  // The offset recorded here is the number that matters: if it walks between
-  // one drag and the next, the pet ends up somewhere other than under the hand
-  // carrying it. `os` is logged beside `tracked` because a disagreement between
-  // them is the specific failure three previous fixes were aimed at.
-  // Bounds and display, because the offsets recorded so far are impossible for
-  // the window this is supposed to be: a 766px grab offset cannot happen on a
-  // 152px-tall sprite box, so either the window is not the size we think or the
-  // cursor and the window are not being measured in the same space.
-  const bounds = isAlive() ? petWindow.getBounds() : null;
-  const display = screen.getDisplayNearestPoint(cursor);
-
-  logDrag('start', {
-    cursor,
-    tracked: recorded,
-    os: [osX, osY],
-    offset: dragOffset,
-    bounds,
-    scale: display.scaleFactor,
-    workArea: display.workArea,
-  });
-  frameCount = 0;
-
-  /**
-   * A self-scheduling frame, not `setInterval`.
-   *
-   * `setPosition` on a transparent always-on-top window is a synchronous
-   * compositor call, and when one takes longer than the interval, `setInterval`
-   * queues the next tick immediately — so the loop falls behind by a little
-   * more every frame and the pet trails further from the cursor the longer the
-   * drag goes on. Scheduling the next frame only after this one finishes makes
-   * a slow frame cost one frame, not a growing backlog.
-   */
-  const step = () => {
-    if (!isAlive() || !dragOffset) return stopDrag();
-
-    const cursor = screen.getCursorScreenPoint();
-    // Absolute, every frame: the window is placed where the cursor says it
-    // should be, never moved by a delta and never derived from where it
-    // currently is. Nothing accumulates, so nothing drifts.
-    //
-    // And deliberately **unclamped** while the button is down. Clamping here
-    // pins the window at a screen edge while the pointer keeps going, and the
-    // moment they separate the page stops receiving mouse events — so the
-    // mouseup never arrives, the drag never ends, and the pet is stuck to the
-    // cursor with no way to release it. Dragging straight up hit this every
-    // time, because the sprite sits at the bottom of its window and the pointer
-    // clears the top edge almost immediately. The pet is put back inside the
-    // work area when it is dropped instead.
-    const next = {
-      x: Math.round(cursor.x - dragOffset.x),
-      y: Math.round(cursor.y - dragOffset.y),
-    };
-
-    // `moveTo` skips a write when nothing moved, so a stationary hand costs no
-    // compositor calls.
-    moveTo(next.x, next.y);
-
-    // Every tenth frame, so a long drag stays readable. `live` is what the
-    // offset has become *now* — it must equal the offset recorded at `start`
-    // for the whole gesture, and any walk in it is the drift, measured on the
-    // user's own hand rather than a synthetic one.
-    frameCount += 1;
-    if (frameCount % 10 === 0) {
-      const at = positionNow();
-      logDrag('frame', {
-        n: frameCount,
-        cursor,
-        tracked: at,
-        os: petWindow.getPosition(),
-        live: { x: cursor.x - at.x, y: cursor.y - at.y },
-      });
-    }
-
-    // Face the way it is being thrown. The threshold keeps a hand that is
-    // holding still from flickering the sprite back and forth.
-    if (Math.abs(cursor.x - lastDragX) > 2) {
-      const direction = cursor.x < lastDragX ? 'left' : 'right';
-      if (direction !== lastFacing) {
-        petWindow.webContents.send('pet:facing', direction);
-        lastFacing = direction;
-      }
-      lastDragX = cursor.x;
-    }
-
-    // The page says when the gesture is over — by sending `pet:drag-end`, or by
-    // falling silent. Where the pointer happens to be is not evidence either
-    // way, and treating it as evidence is what froze fast drags.
-    if (Date.now() - lastHeartbeat > SILENT_PAGE_MS) {
-      logDrag('abandon', { reason: 'page-silent', silentMs: Date.now() - lastHeartbeat });
-      return stopDrag();
-    }
-
-    dragTimer = setTimeout(step, DRAG_INTERVAL_MS);
-    return undefined;
-  };
-
-  step();
-}
-
-function stopDrag() {
-  if (dragTimer) clearTimeout(dragTimer);
-  dragTimer = null;
-  dragOffset = null;
-  lastFacing = null;
-  lastDragX = null;
-
-  // Put it back on a screen. The drag itself is unclamped so the window can
-  // always stay under the pointer; this is where a pet that was carried off the
-  // edge comes back — clamped to the display it was dropped nearest, not to the
-  // primary one.
-  if (isAlive()) {
-    const at = positionNow();
-    const size = sizeNow();
-    const settled = clampToDisplay(at.x, at.y, size.width, size.height);
-    moveTo(settled.x, settled.y);
-
-    // A clamp that actually moved the pet is worth seeing: the release is the
-    // one moment the position is rewritten by something other than the cursor,
-    // so it is where a per-drag bias would enter.
-    logDrag('end', {
-      tracked: at,
-      settled,
-      clamped: settled.x !== at.x || settled.y !== at.y,
-      os: petWindow.getPosition(),
-    });
-  }
-
-  schedulePersist();
+    logDrag('carry-end', { at: positionNow(), os: petWindow.getPosition() });
+    petWindow.webContents.send('pet:carry', false);
+    persistPosition();
+  }, SETTLE_MS);
 }
 
 function applyVisibility() {
@@ -515,7 +376,6 @@ function applyVisibility() {
   }
 
   if (petWindow.isVisible()) {
-    stopDrag();
     setInteractive(false);
     petWindow.hide();
   }
@@ -611,7 +471,7 @@ function installIpc() {
     const size = sizeNow();
     const settled = Math.abs(size.width - width) <= POSITION_TOLERANCE
       && Math.abs(size.height - height) <= POSITION_TOLERANCE;
-    if (dragTimer || settled) return;
+    if (carrying || settled) return;
 
     const at = positionNow();
     petWindow.setContentSize(width, height);
@@ -630,14 +490,6 @@ function installIpc() {
   });
 
   ipcMain.on('pet:interactive', (_event, payload) => setInteractive(Boolean(payload?.over)));
-
-  ipcMain.on('pet:drag-start', () => startDrag());
-
-  ipcMain.on('pet:drag-end', () => stopDrag());
-
-  ipcMain.on('pet:drag-heartbeat', () => {
-    lastHeartbeat = Date.now();
-  });
 
   ipcMain.on('pet:menu', (_event, payload) => openContextMenu(
     typeof payload?.petId === 'string' ? payload.petId : null,
@@ -681,7 +533,9 @@ export function createPetWindow(options) {
     backgroundColor: '#00000000',
     hasShadow: false,
     resizable: false,
-    movable: false,
+    // The OS moves this window now, via the drag handle on the sprite. A window
+    // marked immovable simply ignores the gesture.
+    movable: true,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
@@ -753,28 +607,29 @@ export function createPetWindow(options) {
   trackedPosition = { x: start.x, y: start.y };
 
   /**
-   * Something outside this module moved the window.
+   * The window moved.
    *
-   * Our own moves go through `moveTo`, which records them, so a `move` event
-   * that disagrees with the record by more than a rounding step came from the
-   * OS — a display being unplugged, a workspace change. Trusting it keeps the
-   * record honest without letting the OS's rounded read-backs creep into the
-   * drag maths, which is the whole reason the record exists.
+   * This is now the drag. A move we did not make came either from the user
+   * carrying the pet by its handle — the OS doing the work — or from the system
+   * relocating the window. Both mean the same thing here: the record follows
+   * reality, and the pet is told it is being carried.
+   *
+   * Moves we made ourselves come through `moveTo`, which records the position
+   * first, so they land inside the tolerance and are ignored.
    */
   petWindow.on('move', () => {
-    if (!isAlive() || dragTimer) return;
+    if (!isAlive()) return;
     const [x, y] = petWindow.getPosition();
     const at = positionNow();
-    if (Math.abs(x - at.x) > 2 || Math.abs(y - at.y) > 2) {
-      // Adopting the OS value is the one path that can move the baseline
-      // without the cursor asking, so it is logged whenever it happens.
-      logDrag('reconcile', { from: at, to: { x, y } });
-      trackedPosition = { x, y };
+    if (Math.abs(x - at.x) <= POSITION_TOLERANCE && Math.abs(y - at.y) <= POSITION_TOLERANCE) {
+      return;
     }
+
+    trackedPosition = { x, y };
+    onCarried(x, y);
   });
 
   petWindow.on('closed', () => {
-    stopDrag();
     stopWatchdog();
     petWindow = null;
   });
@@ -804,7 +659,6 @@ export function setPetSuppressed(next) {
 export function resetPetPosition() {
   if (!isAlive()) return;
 
-  stopDrag();
   const size = sizeNow();
   const home = defaultPosition(size.width, size.height);
 
@@ -834,7 +688,7 @@ export function refreshPetWindow() {
 
 export function destroyPetWindow() {
   if (saveTimer) persistPosition();
-  stopDrag();
+  if (settleTimer) clearTimeout(settleTimer);
   stopWatchdog();
   if (isAlive()) petWindow.destroy();
   petWindow = null;
