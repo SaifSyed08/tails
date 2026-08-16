@@ -3,8 +3,18 @@ import { z } from 'zod';
 
 import { controlsPayloadSchema } from '@/modules/appearance/controls.js';
 import { APPEARANCE_GUIDE } from '@/modules/appearance/guide.js';
+import { isSubstantialChange, PROPOSAL_REQUIRED } from '@/modules/appearance/proposal-gate.js';
 import { themeService } from '@/modules/appearance/theme.service.js';
-import { themeSpecV2Schema } from '@/modules/appearance/theme-spec.js';
+import {
+  themeSpecV2Schema,
+  upgradeSpec,
+  type ThemeSpec,
+  type ThemeSpecV2,
+} from '@/modules/appearance/theme-spec.js';
+
+/** A v1 spec compares structurally as the v2 it means; nothing compares as nothing. */
+const upgradeSpecOrNull = (spec: ThemeSpec | null): ThemeSpecV2 | null =>
+  (spec ? upgradeSpec(spec) : null);
 
 /**
  * The appearance tools exposed to the running agent.
@@ -137,12 +147,31 @@ const themeApplyTool = tool(
         }, true);
       }
 
+      // The gate on structural changes. It lives here rather than in the
+      // service because this is the only place that knows *who decided*: a
+      // `spec` is a look the model composed, and a `themeId` is one the user
+      // named. Only the first needs showing before it lands — refusing to apply
+      // a preset the user just asked for by name would be obstruction, not
+      // care.
+      if (args.spec) {
+        const parsed = themeSpecV2Schema.safeParse(args.spec);
+        const scopeKey = args.scope === 'conversation' ? args.sessionId ?? '' : '';
+
+        if (parsed.success
+          && isSubstantialChange(parsed.data, upgradeSpecOrNull(themeService.currentSpec(scopeKey)))
+          && !themeService.hasOpenProposal(scopeKey)) {
+          return textResult({ ok: false, needsProposal: true, error: PROPOSAL_REQUIRED }, true);
+        }
+      }
+
       const themeId = args.themeId ?? themeService.saveTheme(args.spec, 'generated').id;
       const resolved = themeService.applyTheme(
         themeId,
         args.scope === 'conversation' ? 'session' : 'global',
         args.scope === 'conversation' ? args.sessionId ?? '' : '',
       );
+
+      themeService.consumeProposal(args.scope === 'conversation' ? args.sessionId ?? '' : '');
 
       return textResult({
         ok: true,

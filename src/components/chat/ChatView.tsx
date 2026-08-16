@@ -81,7 +81,10 @@ function UserText({ content }: { content: string }) {
   const command = readStyledCommand(content);
   if (!command) return <>{content}</>;
 
-  const token = `/${command}`;
+  // The token is echoed exactly as it was typed — `/ultracode`, `\ultracode`
+  // or the bare word — because the transcript should read back as what the
+  // user wrote, not as the canonical spelling of what it meant.
+  const { name, token } = command;
   const rest = content.trimStart().slice(token.length);
 
   return (
@@ -94,7 +97,7 @@ function UserText({ content }: { content: string }) {
         theme, and this gives the colour a consistent ground to sit on.
       */}
       <span className="rounded bg-primary-foreground/90 px-1.5 py-0.5">
-        <CommandToken name={command} />
+        <CommandToken name={name}>{token}</CommandToken>
       </span>
       {rest}
     </>

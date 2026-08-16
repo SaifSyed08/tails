@@ -210,7 +210,40 @@ primitive rather than approximate with the nearest preset.
   independent and retracts to nothing when the pointer stops, instead of pooling
   into a blob under a stationary cursor.
 
+- **Textures the model draws itself.** `texture.kind: "pixels"` takes a grid of
+  palette indices and a palette of colour *roles*, and the app renders the SVG.
+  This came directly from "I tried asking it to make it look like Minecraft, it
+  came out hideous" — which was not a taste failure. A blocky earth surface
+  needs a pixel tile; textures were a fixed app-owned set; the model was asked
+  for something it had no primitive for and approximated with gradients. Exactly
+  the case this document says to answer by naming the missing primitive.
+
+  The channel is data, not markup, and that is the whole design. The obvious
+  version lets the model write SVG which we parse, allowlist and re-serialise —
+  the shape `freeform-css.ts` uses for CSS. It is the wrong trade here: there is
+  no XML parser in this project, and hand-rolling a tokeniser to guard
+  `<script>`, `<foreignObject>`, `<image>`, `<use href>` and `url()` inside a
+  style attribute is precisely the "parse, never pattern-match" mistake that
+  file exists to warn against. Supplying indices instead means nothing authored
+  is ever parsed, which is a stronger guarantee than any allowlist and costs no
+  validator anyone has to trust.
+
+- **`chroma` on a colour reference**, 0-1, multiplying its saturation. Every
+  role derives from the palette's single surface hue, so a brown theme had no
+  way to express grey. That is what lets stone sit beside earth. It removes
+  colour and cannot add it, so a reference stays a reference to the theme.
+
 **Gaps still open**, named rather than quietly left:
+
+- **Curves, glyphs and pictures.** A grid draws blocks, bricks, weaves, checks,
+  dithers and pixel art. It does not draw a paisley, a crest or a logo, and
+  no amount of grid resolution fixes that — it is the wrong representation.
+  Closing it means the authored-SVG channel above, which means an XML parser.
+- **A texture cannot introduce a hue the palette does not have.** `chroma` can
+  desaturate toward grey; nothing can reach a colour outside the surface,
+  accent, support and semantic roles. That is deliberate — literal colours would
+  freeze the tile against the theme — but it does mean a look wanting four
+  unrelated hues has three.
 
 - **An imported cursor image** is not coming. `cursor: url(...)` is the one
   thing the validator will not yield on, so the drawn shapes are the ceiling.
@@ -235,9 +268,23 @@ about what the system can do.
 For a **substantial** change the agent shows two readings of the request — one
 drastic, one conservative — as live miniatures of the real app chrome, and then
 asks which with `AskUserQuestion`. Substantial means the change alters
-structure: fills, shadows, borders, corners, backdrops, ambient motion, or
-pinning the colour mode. A hue rotation, a font swap or a density change is not,
-and putting one of those behind a comparison modal is its own kind of bad job.
+structure: fills, shadows, borders, corners, backdrops, textures, ambient
+motion, the caret or pointer, where the ramp is anchored, or pinning the colour
+mode. A hue rotation, a font swap or a density change is not, and putting one of
+those behind a comparison modal is its own kind of bad job.
+
+**This is enforced rather than advised, and it had to become so.** The threshold
+was written in three places — the tool description, the guide, `/personalize` —
+and "make it look like Minecraft" went straight to `theme_apply` anyway. Advice
+that is ignored is decoration, which is this project's recurring bug wearing
+another hat. `theme_apply` now evaluates the change against the look currently
+on screen and refuses a structural one with no proposal behind it, handing back
+the reason. Applying by `themeId` is exempt: the user named that look, so they
+have already chosen.
+
+It is not an adversarial check. A model can propose two variants and apply one
+immediately; the point is that the user *sees* the comparison, not that the
+model is prevented from having opinions.
 
 The miniatures are the candidate's **real derived stylesheet**, scoped to a
 class, painting a scaled mock of the sidebar, header, chat rows and composer.

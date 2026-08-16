@@ -235,8 +235,11 @@ const tierOf = (values: number[], tier: number): number =>
  * the first time the user toggled dark mode.
  */
 export function resolveColorRef(ref: ColorRef, ramp: Ramp): { color: Hsl; alpha: number } {
-  const { ladder, surfaceHue, surfaceSaturation: saturation } = ramp;
+  const { ladder, surfaceHue } = ramp;
   const alpha = ref.alpha ?? 1;
+  // Applied to the ramp's saturation before any role reads it, so `chroma`
+  // desaturates uniformly rather than each role needing to remember it.
+  const saturation = ramp.surfaceSaturation * (ref.chroma ?? 1);
 
   const surfaceTone = (lightness: number, scale: number): Hsl =>
     ({ h: surfaceHue, s: saturation * scale, l: lightness });
@@ -258,7 +261,7 @@ export function resolveColorRef(ref: ColorRef, ramp: Ramp): { color: Hsl; alpha:
       return {
         color: {
           h: ramp.accentHue,
-          s: ramp.accentSaturation,
+          s: ramp.accentSaturation * (ref.chroma ?? 1),
           l: ref.tier === undefined ? ramp.accentLightness : tierOf(ladder.toward, ref.tier),
         },
         alpha,
@@ -267,7 +270,7 @@ export function resolveColorRef(ref: ColorRef, ramp: Ramp): { color: Hsl; alpha:
       return {
         color: {
           h: ramp.supportHue,
-          s: ramp.accentSaturation * 0.8,
+          s: ramp.accentSaturation * 0.8 * (ref.chroma ?? 1),
           l: ref.tier === undefined ? ramp.accentLightness : tierOf(ladder.toward, ref.tier),
         },
         alpha,
@@ -280,7 +283,11 @@ export function resolveColorRef(ref: ColorRef, ramp: Ramp): { color: Hsl; alpha:
     case 'destructive': {
       const solved = ramp.statusColors[ref.role];
       return {
-        color: { ...solved, ...(ref.tier === undefined ? {} : { l: tierOf(ladder.toward, ref.tier) }) },
+        color: {
+          ...solved,
+          s: solved.s * (ref.chroma ?? 1),
+          ...(ref.tier === undefined ? {} : { l: tierOf(ladder.toward, ref.tier) }),
+        },
         alpha,
       };
     }
@@ -742,8 +749,23 @@ function buildSurfaceTokens(
       return formatColor(color, alpha);
     })();
 
+  // The palette is resolved here rather than in `textures.ts` for the same
+  // reason every other recipe colour is: the generator draws, the derivation
+  // decides what colour means. Alpha carries the authored opacity so the tile
+  // arrives with its strength in the pixels, matching every other texture —
+  // see `alphaOf` for why that convention exists.
+  const pixels = recipe.texture.kind === 'pixels' && recipe.texture.pixels
+    ? {
+      grid: recipe.texture.pixels.grid,
+      colors: recipe.texture.pixels.palette.map((ref) => {
+        const { color, alpha } = resolveColorRef(ref, ramp);
+        return formatColor(color, alpha * recipe.texture.opacity);
+      }),
+    }
+    : null;
+
   const texture = readTexturePaint(
-    recipe.texture.kind, recipe.texture.scale, recipe.texture.opacity,
+    recipe.texture.kind, recipe.texture.scale, recipe.texture.opacity, pixels,
   );
   const tint = {
     light: (alpha: number) => {

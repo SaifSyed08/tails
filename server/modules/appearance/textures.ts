@@ -96,8 +96,49 @@ export type TexturePaint = { image: string; size: string };
  * ask for coarser grain without changing what the generator draws — only
  * `background-size` moves.
  */
+/**
+ * A model-authored pixel tile, rendered to SVG by us.
+ *
+ * The safety property here is structural rather than enforced: the model never
+ * supplies markup, only a grid of palette indices and a list of colour roles,
+ * so there is nothing authored to parse and nothing to allowlist. Every byte of
+ * the document below is written by this function. That is a stronger guarantee
+ * than validating authored SVG would be, and it costs no parser — which matters
+ * because there is no XML parser in this project and hand-rolling one to guard
+ * a security boundary is exactly the mistake `freeform-css.ts` exists to avoid.
+ *
+ * Horizontal runs are merged into single rects. A 16x16 tile is 256 cells and
+ * one rect each would be roughly 15KB of data URI sitting in a custom property;
+ * real tiles are mostly runs, so merging typically cuts that by three or four
+ * times. `shape-rendering="crispEdges"` is what keeps the result blocky —
+ * without it the rasteriser antialiases every cell boundary and a pixel tile
+ * arrives looking like a soft check.
+ */
+function pixelTile(grid: string[], colors: string[]): string {
+  const width = grid[0].length;
+  const rects: string[] = [];
+
+  grid.forEach((row, y) => {
+    let runStart = 0;
+    for (let x = 1; x <= width; x += 1) {
+      const cell = row[runStart];
+      if (x < width && row[x] === cell) continue;
+      if (cell !== '.') {
+        rects.push(`<rect x="${runStart}" y="${y}" width="${x - runStart}" height="1" fill="${colors[Number(cell)]}"/>`);
+      }
+      runStart = x;
+    }
+  });
+
+  return encodeSvg(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${grid.length}" shape-rendering="crispEdges">
+      ${rects.join('')}
+    </svg>
+  `);
+}
+
 const TEXTURE_PAINTS: Record<
-  Exclude<TextureKind, 'none'>,
+  Exclude<TextureKind, 'none' | 'pixels'>,
   (scale: number, alpha: number) => TexturePaint
 > = {
   grain: (scale, alpha) => ({
@@ -141,8 +182,21 @@ export function readTexturePaint(
   kind: TextureKind,
   scale: number,
   opacity: number,
+  pixels?: { grid: string[]; colors: string[] } | null,
 ): TexturePaint | null {
   if (kind === 'none' || opacity <= 0) return null;
+
+  if (kind === 'pixels') {
+    if (!pixels || pixels.grid.length === 0) return null;
+    return {
+      image: `url("data:image/svg+xml,${pixelTile(pixels.grid, pixels.colors)}")`,
+      // One cell per 4 device pixels at scale 1. A tile drawn at its own cell
+      // count would be invisible, and sizing off the grid rather than a fixed
+      // number keeps an 8x8 and a 16x16 tile the same physical coarseness.
+      size: `${Math.round(pixels.grid[0].length * 4 * scale)}px ${Math.round(pixels.grid.length * 4 * scale)}px`,
+    };
+  }
+
   return TEXTURE_PAINTS[kind](scale, opacity);
 }
 

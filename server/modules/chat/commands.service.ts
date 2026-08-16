@@ -155,10 +155,34 @@ export async function listSlashCommands(cwd: string): Promise<SlashCommandEntry[
  * Claude Code's own commands are passed through untouched — it interprets them
  * itself, and rewriting them here would break them.
  */
+/**
+ * Commands that also answer to their bare name at the very start of a message.
+ *
+ * Just `ultracode`, because it was asked for and because the cost is specific
+ * to it: opting a command in means "ultracode the parser" can never be sent as
+ * ordinary prose. That is an acceptable trade for one deliberately unusual
+ * word and a bad default for a name like `personalize`, which people write in
+ * sentences.
+ */
+const BARE_TRIGGERS = new Set(['ultracode']);
+
+/**
+ * Expands a local command into the prompt the model actually receives.
+ *
+ * Three spellings reach the same place: `/ultracode`, the `\ultracode` people
+ * type when they miss the key, and the bare word. The name is matched greedily
+ * so `ultracoded` stays a word rather than becoming the command plus a stray
+ * `d`, and only position zero counts — a command mid-sentence is prose.
+ */
 export function expandLocalCommand(content: string): string {
-  const match = /^\/([a-z][\w-]*)\s*([\s\S]*)$/i.exec(content.trim());
+  const trimmed = content.trim();
+  const match = /^([/\\]?)([a-z][\w-]*)\s*([\s\S]*)$/i.exec(trimmed);
   if (!match) return content;
 
-  const command = LOCAL_COMMANDS[match[1].toLowerCase()];
-  return command ? command.expand(match[2] ?? '') : content;
+  const [, prefix, rawName, args = ''] = match;
+  const name = rawName.toLowerCase();
+  if (prefix !== '/' && !BARE_TRIGGERS.has(name)) return content;
+
+  const command = LOCAL_COMMANDS[name];
+  return command ? command.expand(args) : content;
 }

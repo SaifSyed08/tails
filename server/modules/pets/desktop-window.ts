@@ -83,10 +83,10 @@ export function renderDesktopWindowHtml(): string {
     transition: filter 120ms ease-out;
   }
 
-  #pet.dragging {
-    cursor: grabbing;
-    filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
-  }
+  /* No shadow while carried. The window is transparent and sits over whatever
+     is behind it, so a drop shadow is a grey smudge following the pointer
+     across the desktop rather than a sense of depth. */
+  #pet.dragging { cursor: grabbing; }
 
   #pet.mirrored { transform: scaleX(-1); }
 
@@ -396,10 +396,34 @@ document.addEventListener('mousemove', (event) => {
   setPointerOver(isOverPet(event.clientX, event.clientY));
 });
 
+/**
+ * Ends a drag the page can no longer see.
+ *
+ * A drag is released with a mouseup, and the page only receives one while the
+ * pointer is over the window. Anything that separates the two — the pointer
+ * outrunning the window, the window stopping at a screen edge, another app
+ * taking the pointer — would otherwise leave the pet glued to the cursor with
+ * no way to put it down.
+ */
+function abandonDrag() {
+  if (!dragging) return;
+  dragging = false;
+  pet.classList.remove('dragging');
+  playState('idle');
+  bridge.endDrag();
+}
+
 // Belt and braces with the shell's watchdog: whichever notices first wins, and
-// the cost of noticing late is a rectangle of desktop that ignores clicks.
-document.addEventListener('mouseleave', () => setPointerOver(false));
-window.addEventListener('blur', () => { if (!dragging) setPointerOver(false); });
+// the cost of noticing late is a rectangle of desktop that ignores clicks — or
+// a pet that cannot be let go of.
+document.addEventListener('mouseleave', () => {
+  abandonDrag();
+  setPointerOver(false);
+});
+window.addEventListener('blur', () => {
+  abandonDrag();
+  setPointerOver(false);
+});
 
 pet.addEventListener('mousedown', (event) => {
   if (event.button !== 0 || !isOverPet(event.clientX, event.clientY)) return;

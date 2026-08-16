@@ -164,6 +164,7 @@ test('the composed glass stylesheet names no remote resource', () => {
   // itself writes must be one, or the derivation is making exactly the request
   // the freeform validator exists to stop.
   const css = serializeStylesheet(deriveTokens(GLASS));
-  assert.match(css, /--t-texture-image: url\("data:image\/svg\+xml,/);
+  assert.match(css, /url\("data:image\/svg\+xml,/);
+  assert.match(css, /--t-texture-image: (url\("data:|var\(--tex-)/);
   assert.doesNotMatch(css, /url\("(?!data:)/);
 });

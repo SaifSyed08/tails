@@ -150,6 +150,48 @@ in a light theme and a dark one alike — which is why it is the role to use whe
 a surface has to separate in **both** ramps. \`light\` and \`shadow\` each run
 out of headroom at one end.
 
+## Drawing your own texture
+
+Seven textures are app-owned and chosen by name. The eighth, \`pixels\`, you draw
+yourself — as a grid, not as an image:
+
+\`\`\`
+texture: {
+  kind: 'pixels', opacity: 0.85, scale: 2, blend: 'normal',
+  pixels: {
+    palette: [{ role: 'surface', tier: 3 }, { role: 'surface', tier: 5 },
+              { role: 'shadow', tier: 4 }, { role: 'surface', tier: 1 }],
+    grid: ['01302130', '30012301', '12330012', '03121300',
+           '21003231', '30210103', '01330210', '13002130'],
+  },
+}
+\`\`\`
+
+Each character indexes the \`palette\`, or is \`.\` for a hole. Rows must be equal length,
+2-16 of them, palette up to eight. This is how a blocky earth or stone surface
+gets built — the thing gradients could only approximate.
+
+Three things to get right:
+
+- **Irregularity is the whole job.** A regular pattern reads as a grid, not as a
+  material. Scatter the indices; do not lay down stripes and expect dirt.
+- **Small tile, then \`scale\`.** An 8x8 of three tones reads as earth. A 16x16
+  mostly reads as noise, and costs four times the bytes.
+- **\`opacity\` near 1 and \`blend: 'normal'\`** when the tile *is* the surface. The
+  defaults assume a texture sitting lightly on a fill, which is the opposite.
+
+You cannot supply an image, SVG markup, or a URL — the palette is role
+references so the tile re-tints with the theme instead of freezing today's
+colours, and the app writes the actual SVG. A grid draws blocks, bricks, weaves,
+checks, dithers and pixel art. It does not draw curves, glyphs or a paisley; if
+a look needs one of those, say so rather than approximating.
+
+**\`chroma\` on any colour reference** multiplies its saturation, 0-1. Every role
+comes from the palette's single surface hue, so this is the only way to reach a
+neutral: \`{ role: 'surface', tier: 4, chroma: 0.06 }\` is the grey at that
+lightness, which is how stone sits beside earth in a theme whose surface hue is
+brown. It removes colour; it cannot add it.
+
 ## The cursor
 
 \`cursor: url(...)\` is refused and always will be, so a custom cursor is never
@@ -240,14 +282,24 @@ bind it.
 ## Showing your work before committing
 
 For a **substantial** change, call **\`theme_propose\`** with two variants — one
-bold, one restrained — before applying anything. The user sees both rendered as
+bold, one restrained — before applying anything. **This is enforced, not
+advised:** \`theme_apply\` refuses a structural change that no proposal
+preceded, and hands you back the reason. It was advice first, and "make it look
+like Minecraft" went straight to applying anyway. The user sees both rendered as
 live miniatures of the real app chrome, then you ask with \`AskUserQuestion\`
 which they want.
 
 Substantial means the change alters *structure*: fills, shadows, borders,
-corners, backdrops, ambient motion, or pinning the colour mode. A hue rotation,
-a font swap, a density change or a radius nudge is not substantial — preview it
-and get on with it. Asking about a font swap is its own kind of bad job.
+corners, backdrops, textures, ambient motion, the caret or pointer, where the
+ramp is anchored, or pinning the colour mode. A hue rotation, a font swap, a
+density change or a motion change is not — those apply straight through. Asking
+about a font swap is its own kind of bad job.
+
+**A named style is always substantial.** Minecraft, brutalism, cyberpunk, an
+era, a game, a brand: those requests carry a whole visual world, the user has a
+picture in their head you cannot see, and the odds of matching it first try are
+poor. Show two readings and ask. Applying by \`themeId\` — a preset or saved
+look the user named — is exempt, because they already chose.
 
 ## Judgement, which is now yours
 

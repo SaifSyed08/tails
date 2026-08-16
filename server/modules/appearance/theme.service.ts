@@ -76,6 +76,16 @@ const PRESET_PREFIX = 'preset:';
  */
 const lastShown = new Map<string, { spec: ThemeSpec | null; themeId: string | null }>();
 
+/**
+ * Scopes that have been shown a comparison and not yet spent it.
+ *
+ * One proposal, one commitment. Kept here rather than in the tool because the
+ * tool is stateless per call and this has to outlive one — and deliberately in
+ * memory, like `lastShown`: a proposal the user saw in a previous run of the
+ * app is not a proposal they remember.
+ */
+const openProposals = new Set<string>();
+
 const readPresetSpec = (themeId: string): ThemeSpec | null => {
   if (!themeId.startsWith(PRESET_PREFIX)) return null;
   return THEME_PRESETS[themeId.slice(PRESET_PREFIX.length)] ?? null;
@@ -466,6 +476,8 @@ export const themeService = {
       compiled: this.compile(variant.spec),
     }));
 
+    openProposals.add(sessionId);
+
     appBroadcast.publish(createMessage('appearance_changed', sessionId, {
       appearance: {
         layer: 'proposal',
@@ -509,6 +521,33 @@ export const themeService = {
         variants: [],
       },
     }));
+  },
+
+  /**
+   * The spec a scope is currently wearing, for anything that needs to compare
+   * against it. Falls back to the global scope, then to nothing at all — a
+   * window on the built-in floor has no spec, and that is a real answer.
+   */
+  currentSpec(scopeKey = ''): ThemeSpec | null {
+    const entry = lastShown.get(scopeKey) ?? lastShown.get('');
+    if (!entry) return null;
+    if (entry.spec) return entry.spec;
+    if (!entry.themeId) return null;
+
+    const preset = readPresetSpec(entry.themeId);
+    if (preset) return preset;
+    return themesRepository.getTheme(entry.themeId)?.spec ?? null;
+  },
+
+  /** Whether this scope has been shown a comparison it has not yet acted on. */
+  hasOpenProposal(scopeKey = ''): boolean {
+    return openProposals.has(scopeKey) || openProposals.has('');
+  },
+
+  /** Spends it. Applying a look is what a proposal was for. */
+  consumeProposal(scopeKey = ''): void {
+    openProposals.delete(scopeKey);
+    openProposals.delete('');
   },
 
   /**

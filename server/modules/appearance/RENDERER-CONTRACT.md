@@ -355,6 +355,23 @@ Neither property is ever *declared* — they resolve to their fallbacks until a
 published control sets one on `:root`, which is what lets "how fast" and "how
 blurred" be live knobs on a derived theme rather than a re-derivation (§10).
 
+**One texture kind is authored by the model.** `texture.kind: "pixels"` carries
+a grid of palette indices and a palette of colour *roles*; `textures.ts` renders
+the SVG. Nothing authored is ever parsed, because nothing authored is ever
+markup — the model supplies numbers, so there is no allowlist to trust and no
+XML parser to hand-roll. The tile is emitted with `shape-rendering="crispEdges"`
+(without it the rasteriser antialiases every cell and a pixel tile arrives as a
+soft check) and horizontal runs are merged into single rects.
+
+**Repeated data URIs are hoisted into `--tex-N`.** Every part inherits the
+default's texture and every part emits its full token set, so one authored tile
+was written ten times per ramp — 130KB of stylesheet for a single 8x8 image. The
+serializer replaces duplicates with a shared custom property on `:root`, so
+`--t-texture-image` may hold either an inline `url("data:…")` or a
+`var(--tex-N)`. A consumer must not assume which. `--tex-*` is deliberately
+outside the `--t-*` namespace this contract governs: it is an internal
+indirection, not a token anyone should read.
+
 **Strengths are baked into the images.** `texture.opacity` and
 `overlay.strength` are already in the pixels of `--t-texture-image` and the
 colour stops of `--t-overlay-image`. The `*-opacity` tokens are `0` or `1`, so

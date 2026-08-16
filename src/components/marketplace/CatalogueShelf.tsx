@@ -16,7 +16,7 @@ import {
 import { useState, type ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
-import { Reveal } from '@/shared/ui/Motion';
+import { Reveal, useReducedMotion } from '@/shared/ui/Motion';
 import { readStaggerDelay } from '@/theme/motion';
 
 import { CataloguePreview } from './CataloguePreview';
@@ -24,6 +24,7 @@ import { PetGlow } from './PetGlow';
 import type { CatalogueEntry, CataloguePage } from './marketplace-api';
 import { endPetDrag, startPetDrag } from './pet-drag';
 import { Pill } from './Pill';
+import { parallaxStyle, usePointerLocal } from './use-pointer-local';
 
 /**
  * The codex-pets.net shelf.
@@ -114,6 +115,8 @@ function CatalogueCard({
   onInstall: (entry: CatalogueEntry) => void;
 }) {
   const [hovered, setHovered] = useState(false);
+  const reduced = useReducedMotion();
+  const stageRef = usePointerLocal<HTMLDivElement>(hovered && !reduced);
 
   return (
     <div
@@ -134,17 +137,32 @@ function CatalogueCard({
         'hover:-translate-y-1 hover:outline hover:outline-2 hover:-outline-offset-2 hover:outline-primary/40',
       )}
     >
-      <div className="relative flex h-28 items-center justify-center bg-gradient-to-b from-muted/70 to-transparent">
+      <div
+        ref={stageRef}
+        className="relative flex h-28 items-center justify-center bg-gradient-to-b from-muted/70 to-transparent"
+      >
         {/* The same component the installed cards use — the two shelves light
             up identically, and there is one place to change it. */}
         <PetGlow active={hovered} />
-        {entry.posterUrl || entry.stripUrl ? (
-          <CataloguePreview entry={entry} size={96} hovered={hovered} />
-        ) : (
-          <PawPrint className="size-6 text-muted-foreground/40" aria-hidden="true" />
-        )}
+
+        {/* `z-10` is load-bearing: the poster is a statically positioned image,
+            and an absolutely positioned sibling paints above one of those. That
+            is why the glow was in front of these pets and behind the others. */}
+        <div
+          className={cn(
+            'relative z-10',
+            !reduced && 'transition-transform duration-quick ease-standard',
+          )}
+          style={hovered && !reduced ? parallaxStyle(6) : undefined}
+        >
+          {entry.posterUrl || entry.stripUrl ? (
+            <CataloguePreview entry={entry} size={96} hovered={hovered} />
+          ) : (
+            <PawPrint className="size-6 text-muted-foreground/40" aria-hidden="true" />
+          )}
+        </div>
         {installed ? (
-          <Pill tone="positive" className="absolute left-2 top-2">
+          <Pill tone="positive" className="absolute left-2 top-2 z-10">
             <Check className="size-2.5" aria-hidden="true" /> Installed
           </Pill>
         ) : null}

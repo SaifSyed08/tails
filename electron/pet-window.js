@@ -33,6 +33,15 @@ const DEFAULT_SIZE = { width: 160, height: 180 };
 /** Gap between drag frames. One frame at 60Hz, measured from the end of the last. */
 const DRAG_INTERVAL_MS = 16;
 
+/**
+ * How long the pointer may be outside the window before the drag is abandoned.
+ *
+ * A fast gesture outruns the window for a frame or two, which is fine. Longer
+ * than this means the two have genuinely separated and the mouseup is never
+ * coming — the state that used to leave a pet stuck to the cursor.
+ */
+const LOST_POINTER_MS = 400;
+
 /** How often to check that an interactive window still has the pointer over it. */
 const WATCHDOG_INTERVAL_MS = 250;
 
@@ -61,6 +70,7 @@ let dragOffset = null;
 let dragSize = null;
 let lastPosition = null;
 let lastFacing = null;
+let lostPointerSince = null;
 let lastDragX = null;
 let saveTimer = null;
 
@@ -223,12 +233,19 @@ function startDrag() {
     // Absolute, every frame: the window is placed where the cursor says it
     // should be, never moved by a delta and never derived from where it
     // currently is. Nothing accumulates, so nothing drifts.
-    const next = clampToDisplay(
-      cursor.x - dragOffset.x,
-      cursor.y - dragOffset.y,
-      dragSize.width,
-      dragSize.height,
-    );
+    //
+    // And deliberately **unclamped** while the button is down. Clamping here
+    // pins the window at a screen edge while the pointer keeps going, and the
+    // moment they separate the page stops receiving mouse events — so the
+    // mouseup never arrives, the drag never ends, and the pet is stuck to the
+    // cursor with no way to release it. Dragging straight up hit this every
+    // time, because the sprite sits at the bottom of its window and the pointer
+    // clears the top edge almost immediately. The pet is put back inside the
+    // work area when it is dropped instead.
+    const next = {
+      x: Math.round(cursor.x - dragOffset.x),
+      y: Math.round(cursor.y - dragOffset.y),
+    };
 
     // Skipped when nothing moved: a stationary hand should not cost sixty
     // compositor calls a second, and this is also what keeps the one-pixel
@@ -249,6 +266,18 @@ function startDrag() {
       lastDragX = cursor.x;
     }
 
+    // If the pointer has left the window's own box, the page can no longer
+    // receive the mouseup that would end this. Give it a moment — a fast drag
+    // legitimately outruns the window by a frame or two — and then let go.
+    const inside = cursor.x >= next.x && cursor.x <= next.x + dragSize.width
+      && cursor.y >= next.y && cursor.y <= next.y + dragSize.height;
+    if (inside) {
+      lostPointerSince = null;
+    } else {
+      lostPointerSince = lostPointerSince ?? Date.now();
+      if (Date.now() - lostPointerSince > LOST_POINTER_MS) return stopDrag();
+    }
+
     dragTimer = setTimeout(step, DRAG_INTERVAL_MS);
     return undefined;
   };
@@ -265,6 +294,20 @@ function stopDrag() {
   lastPosition = null;
   lastFacing = null;
   lastDragX = null;
+  lostPointerSince = null;
+
+  // Put it back on a screen. The drag itself is unclamped so the window can
+  // always stay under the pointer; this is where a pet that was carried off the
+  // edge comes back — clamped to the display it was dropped nearest, not to the
+  // primary one.
+  if (isAlive()) {
+    const bounds = petWindow.getBounds();
+    const settled = clampToDisplay(bounds.x, bounds.y, bounds.width, bounds.height);
+    if (settled.x !== bounds.x || settled.y !== bounds.y) {
+      petWindow.setPosition(settled.x, settled.y);
+    }
+  }
+
   schedulePersist();
 }
 
@@ -289,9 +332,18 @@ function applyVisibility() {
 function openContextMenu(petId) {
   if (!isAlive()) return;
 
+  /*
+   * Two different hides, so both labels say which one.
+   *
+   * The first closes this window and leaves the pet active everywhere else —
+   * the marketplace still shows it on stage, and it comes back on the next
+   * launch unless it is turned off again. The second unsets the active pet
+   * entirely, so there is no pet anywhere until one is chosen. "Stand down" was
+   * jargon for the second and read like the first.
+   */
   const menu = Menu.buildFromTemplate([
     {
-      label: 'Hide the desktop pet',
+      label: 'Hide pet from desktop',
       click: () => {
         hidden = true;
         persistPosition();
@@ -299,7 +351,7 @@ function openContextMenu(petId) {
       },
     },
     {
-      label: 'Stand down (no active pet)',
+      label: 'Hide pet everywhere (clears the active pet)',
       enabled: Boolean(petId),
       click: () => {
         // Straight to the server: the pet window has no app state of its own,

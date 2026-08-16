@@ -173,7 +173,11 @@ test('every emitted surface carries the complete token set', () => {
 
 test('a texture selection reaches the stylesheet as an app-owned image', () => {
   const css = serializeStylesheet(deriveTokens(THEME_PRESETS.paper));
-  assert.match(css, /--t-texture-image: url\("data:image\/svg\+xml,/);
+  // The tile may be inlined on the token or hoisted into a shared `--tex-N`
+  // when several parts share it, so the assertion is that the stylesheet names
+  // an app-owned data URI — not which of the two shapes it took.
+  assert.match(css, /url\("data:image\/svg\+xml,/);
+  assert.match(css, /--t-texture-image: (url\("data:|var\(--tex-)/);
   // Every url() the app itself writes must be a data URI. A remote one would
   // mean the generator is making the request the freeform validator exists to
   // stop. Only the quoted, top-level form is checked: the unquoted `url(%23n)`

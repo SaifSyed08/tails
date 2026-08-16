@@ -113,6 +113,40 @@ test('every kind in the newest vocabulary groups is named in the guide', () => {
   }
 });
 
+test('every capability that exists only in the guide is named there', () => {
+  // The narrow version of the same obligation. These have no `.describe()` a
+  // model reads in passing and no token table listing them — a spec field it is
+  // never told about is a spec field it never uses, which is this project's
+  // recurring bug in its purest form. `pixels` is the newest instance: it was
+  // added *because* "make it look like Minecraft" had no primitive behind it,
+  // and a texture channel nobody mentions would have reproduced the failure it
+  // was built to fix.
+  const capabilities: [string, string][] = [
+    ['pixels', 'the model-authored texture grid'],
+    ['chroma', 'the saturation multiplier on a colour reference'],
+    ['palette', 'the colour list a pixel tile indexes into'],
+    ['grid', 'the pixel tile itself'],
+  ];
+
+  const missing = capabilities
+    .filter(([token]) => !APPEARANCE_GUIDE.includes(`\`${token}\``))
+    .map(([token, what]) => `${token} (${what})`);
+
+  assert.deepEqual(missing, [], 'These are reachable in the schema and documented nowhere the model reads.');
+});
+
+test('the guide states that the proposal step is enforced, not advised', () => {
+  // It was advice, and it was ignored: "make it look like Minecraft" went
+  // straight to applying. Now `theme_apply` refuses a structural change with no
+  // proposal behind it, and the guide has to say so — a rule the model
+  // discovers by hitting it wastes a turn every time.
+  assert.match(APPEARANCE_GUIDE, /enforced, not\s+advised/);
+  assert.ok(
+    APPEARANCE_GUIDE.includes('named style is always substantial'),
+    'the guide must say that a named style — Minecraft, an era, a brand — always needs a proposal.',
+  );
+});
+
 test('every tool the agent may call is named in the guide', () => {
   const missing = APPEARANCE_ALLOWED_TOOLS
     .map((tool) => tool.replace('mcp__tails-appearance__', ''))

@@ -1,3 +1,4 @@
+import type { StyledCommandName } from '@/components/chat/commandNames';
 import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
@@ -27,7 +28,10 @@ const towardInk = (color: string, keep: number) =>
  *
  * Both gradients loop on the colour they open with, so the sweep has no seam.
  */
-export const COMMAND_STYLES = {
+export const COMMAND_STYLES: Record<StyledCommandName, {
+  gradient: string;
+  glow: string | null;
+}> = {
   personalize: {
     /*
       Every hue the theme owns, ordered by hue rather than by token name.
@@ -57,7 +61,7 @@ export const COMMAND_STYLES = {
       'hsl(var(--positive)),',
       `${towardInk('hsl(var(--destructive))', 92)})`,
     ].join(' '),
-    glow: null as string | null,
+    glow: null,
   },
   ultracode: {
     /*
@@ -91,24 +95,9 @@ export const COMMAND_STYLES = {
     // the full-strength violet the text cannot.
     glow: '0 0 14px color-mix(in oklab, transparent 55%, hsl(288 90% 62%))',
   },
-} as const;
+};
 
-export type StyledCommandName = keyof typeof COMMAND_STYLES;
-
-const COMMAND_PATTERN = /^\/([\w-]+)/;
-
-/**
- * Reads the styled command a piece of text opens with, if it opens with one.
- *
- * Anchored at the start because that is the only position where a slash is a
- * command — a path like `src/a.ts` mid-sentence is not one, and neither is a
- * message that merely mentions `/ultracode`.
- */
-export function readStyledCommand(text: string): StyledCommandName | null {
-  const match = COMMAND_PATTERN.exec(text.trimStart());
-  const name = match?.[1]?.toLowerCase();
-  return name && name in COMMAND_STYLES ? (name as StyledCommandName) : null;
-}
+export { readStyledCommand, STYLED_COMMANDS, type StyledCommandName } from '@/components/chat/commandNames';
 
 type CommandTokenProps = {
   name: StyledCommandName;

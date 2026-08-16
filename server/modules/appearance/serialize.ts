@@ -144,6 +144,44 @@ export function serializeScoped(theme: DerivedTheme, className: string): string 
 }
 
 /**
+ * Hoists repeated data URIs into shared custom properties.
+ *
+ * Every part inherits the default surface's texture unless it overrides it, and
+ * the serializer emits each part's full token set — so a theme with one
+ * model-authored pixel tile writes that tile's data URI ten times per ramp. A
+ * modest 8x8 tile is around 6KB, which turns into 130KB of stylesheet for a
+ * single image, almost all of it identical.
+ *
+ * Note what this is *not* fixing: the browser caches decoded images by URL, so
+ * twenty copies of one data URI already cost one decode. The cost is purely
+ * bytes — in the websocket frame, in the cached token blob, and in the CSS the
+ * engine parses. Hoisting removes it without changing a rendered pixel, and the
+ * URI stays readable in devtools, just in one place instead of twenty.
+ *
+ * Named `--tex-N` rather than `--t-tex-N` deliberately: `--t-*` is the token
+ * namespace the renderer contract governs, and this is an internal indirection
+ * no consumer should ever read.
+ */
+function hoistRepeatedImages(css: string): string {
+  const counts = new Map<string, number>();
+  for (const match of css.matchAll(/url\("data:image\/svg\+xml,[^"]*"\)/g)) {
+    counts.set(match[0], (counts.get(match[0]) ?? 0) + 1);
+  }
+
+  const shared = [...counts].filter(([, count]) => count > 1);
+  if (shared.length === 0) return css;
+
+  let body = css;
+  const declarations = shared.map(([uri], index) => {
+    const name = `--tex-${index + 1}`;
+    body = body.split(uri).join(`var(${name})`);
+    return `  ${name}: ${uri};`;
+  });
+
+  return `:root {\n${declarations.join('\n')}\n}\n\n${body}`;
+}
+
+/**
  * True when any surface in either ramp actually animates its ambient layer.
  *
  * Checked rather than assumed so a theme with no ambience carries no keyframes:
@@ -166,6 +204,6 @@ const usesAmbient = (theme: DerivedTheme): boolean =>
  */
 export function serializeStylesheet(theme: DerivedTheme): string {
   const { light, dark } = serializeToCss(theme);
-  const body = dark ? `${light}\n\n${dark}` : light;
+  const body = hoistRepeatedImages(dark ? `${light}\n\n${dark}` : light);
   return usesAmbient(theme) ? `${AMBIENT_KEYFRAMES}\n\n${body}` : body;
 }

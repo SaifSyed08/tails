@@ -1,5 +1,13 @@
 import { ArrowUp, ImagePlus, Mic, Paperclip, PawPrint, Plus, Sparkles, Square, Wand2, X } from 'lucide-react';
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   CommandToken,
@@ -108,24 +116,82 @@ const NOT_YET: Record<'generate' | 'voice', NotYetEntry> = {
 };
 
 /**
+ * How long the menu survives the pointer leaving it.
+ *
+ * Long enough to round the corner of the button or clip the edge of the panel
+ * without losing the menu, short enough that a deliberate exit still reads as
+ * a dismissal.
+ */
+const MENU_CLOSE_DELAY_MS = 200;
+
+/**
  * The `+` and the menu behind it.
  *
- * Hover opens it, but so does focus and so does a click — a menu that only
- * exists on hover is a menu a keyboard cannot reach. Closing is deliberately
- * lazier than opening: `pointerleave` on the whole group rather than on the
- * button, so crossing the gap between the button and the menu does not
- * dismiss it mid-reach.
+ * Three things keep it reachable, and it needed all three. The trigger and the
+ * panel share one hover region, so travelling between them never leaves it.
+ * The space between them is padding inside that region rather than margin
+ * outside it — that gap was the bug: the panel is a DOM child, so arriving is
+ * fine, but the 8px of dead space on the way closed the menu before the
+ * pointer could get there. And leaving is deferred, so clipping an edge does
+ * not dismiss it.
+ *
+ * A menu opened by click or by keyboard is pinned: pointer drift must not take
+ * away something deliberately opened. Those close on Escape, on a click
+ * outside, or when focus leaves.
  */
 function ComposerMenu({
   onPickFiles, onPickImages, onPersonalize, onAssignPet, petName,
 }: ComposerMenuProps) {
   const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
   const [notYet, setNotYet] = useState<NotYetEntry | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeTimerRef = useRef<number | undefined>(undefined);
 
-  const close = () => {
+  // Both stable: they touch only refs and setters. That matters for the
+  // outside-click listener below, which would otherwise be torn down and
+  // re-attached on every render.
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current !== undefined) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = undefined;
+    }
+  }, []);
+
+  const close = useCallback((returnFocus = false) => {
+    cancelClose();
     setOpen(false);
+    setPinned(false);
     setNotYet(null);
+    if (returnFocus) triggerRef.current?.focus();
+  }, [cancelClose]);
+
+  /** Pointer-driven exit only; a pinned menu ignores it. */
+  const scheduleClose = () => {
+    if (pinned) return;
+    cancelClose();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = undefined;
+      setOpen(false);
+      setNotYet(null);
+    }, MENU_CLOSE_DELAY_MS);
   };
+
+  useEffect(() => cancelClose, [cancelClose]);
+
+  // A pinned menu has to answer to the rest of the window, since the pointer
+  // leaving is no longer what dismisses it.
+  useEffect(() => {
+    if (!open || !pinned) return undefined;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node | null)) close();
+    };
+
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open, pinned, close]);
 
   const choose = (pick: () => void) => {
     close();
@@ -138,10 +204,19 @@ function ComposerMenu({
 
   return (
     <div
+      ref={rootRef}
       className="relative"
-      onPointerEnter={() => setOpen(true)}
-      onPointerLeave={close}
-      onFocus={() => setOpen(true)}
+      onPointerEnter={() => {
+        cancelClose();
+        setOpen(true);
+      }}
+      onPointerLeave={scheduleClose}
+      onFocus={() => {
+        // Arriving by keyboard pins it: there is no pointer to keep it alive.
+        cancelClose();
+        setOpen(true);
+        setPinned(true);
+      }}
       onBlur={(event) => {
         // Only when focus actually left the group; moving between the button
         // and a menu item fires blur too.
@@ -150,13 +225,23 @@ function ComposerMenu({
       onKeyDown={(event) => {
         if (event.key === 'Escape' && open) {
           event.stopPropagation();
-          close();
+          close(true);
         }
       }}
     >
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          if (open && pinned) {
+            close();
+            return;
+          }
+          // Opened deliberately, so it stays until dismissed deliberately.
+          cancelClose();
+          setOpen(true);
+          setPinned(true);
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="More"
@@ -171,6 +256,10 @@ function ComposerMenu({
       </button>
 
       {open ? (
+        // `pb-2` here rather than `mb-2` on the panel: the spacing sits inside
+        // this element's box, so it is part of the hover region instead of a
+        // hole between two of them.
+        <div className="absolute bottom-full left-0 z-30 pb-2">
         <div
           role="menu"
           data-tails-part="popover"
@@ -178,7 +267,7 @@ function ComposerMenu({
           // properties inherit — without this the menu would take the
           // composer's pill corners.
           style={{ '--t-radius': 'var(--radius)' } as React.CSSProperties}
-          className="animate-scale-in absolute bottom-full left-0 z-30 mb-2 w-60 overflow-hidden py-1 shadow-lg"
+          className="animate-scale-in w-60 overflow-hidden py-1 shadow-lg"
         >
           {notYet ? (
             <div className="px-3 py-2">
@@ -239,6 +328,7 @@ function ComposerMenu({
               </button>
             </>
           )}
+        </div>
         </div>
       ) : null}
     </div>
@@ -694,9 +784,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             also survives the user scrolling the input. */}
         {armedCommand ? (
           <span className="flex items-center gap-1 text-xs">
-            <CommandToken name={armedCommand} className="text-xs" />
+            <CommandToken name={armedCommand.name} className="text-xs">
+              {armedCommand.token}
+            </CommandToken>
+            {/* Named, not just coloured. `ultracode` arms on the bare word, so
+                someone who typed it without meaning to needs to be told what
+                it is about to do, not merely that something is highlighted. */}
             <span className="text-muted-foreground">
-              {armedCommand === 'ultracode' ? 'subagents, in parallel' : 'redesigning the app'}
+              {armedCommand.name === 'ultracode' ? 'subagents, in parallel' : 'redesigning the app'}
             </span>
           </span>
         ) : null}
