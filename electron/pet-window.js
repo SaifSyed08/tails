@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, app, ipcMain, screen } from 'electron';
+import { BrowserWindow, Menu, app, globalShortcut, ipcMain, screen } from 'electron';
 import path from 'node:path';
 
 import { closeDragLog, logDrag, openDragLog } from './pet-log.js';
@@ -98,6 +98,34 @@ let lastHeartbeat = 0;
 let lastDragX = null;
 /** Frames since the current drag began, so the trace can sample rather than flood. */
 let frameCount = 0;
+
+/**
+ * Three drag mechanisms, switchable at runtime.
+ *
+ * Four fixes have shipped for "the pet drifts" and the trace now shows the
+ * window tracking the cursor to the pixel for an entire gesture — so the
+ * remaining disagreement is between what we believe the position is and what
+ * is actually drawn, and arguing about which read is authoritative has not
+ * settled it. These are the three candidate answers, running side by side, so
+ * the question can be decided by looking instead of by reasoning.
+ *
+ *   1 `tracked`   Baseline from our own record. `setPosition` is write-only and
+ *                 the OS is never asked. Correct if the OS read-back is lossy.
+ *
+ *   2 `os`        Baseline from `getPosition()` at grab time. Correct if the OS
+ *                 is telling the truth about where the window really is and our
+ *                 record is the thing that has drifted.
+ *
+ *   3 `closed`    Baseline from the OS, then every frame reads back where the
+ *                 window actually landed and folds the error into the next
+ *                 target. Self-correcting: converges even if each individual
+ *                 write loses a fraction, at the cost of one extra read per
+ *                 frame. Correct if the loss is real but unpredictable.
+ */
+const DRAG_MODES = ['tracked', 'os', 'closed'];
+let dragMode = 'tracked';
+/** Accumulated write error, mode 3 only. Reset at the start of every drag. */
+let dragError = { x: 0, y: 0 };
 let saveTimer = null;
 
 function isAlive() {
@@ -253,12 +281,15 @@ function startDrag() {
   lastHeartbeat = Date.now();
 
   const cursor = screen.getCursorScreenPoint();
-  const origin = positionNow();
 
-  // Against our own record of the position, never the OS's. Deriving this from
-  // `getPosition()` is what made each successive drag hand the pet a pixel
-  // further down relative to the pointer.
+  // Which position the grab offset is measured against is exactly the question
+  // the three modes exist to answer, so it is the one thing they differ on here.
+  const recorded = positionNow();
+  const [osX, osY] = petWindow.getPosition();
+  const origin = dragMode === 'tracked' ? recorded : { x: osX, y: osY };
+
   dragOffset = { x: cursor.x - origin.x, y: cursor.y - origin.y };
+  dragError = { x: 0, y: 0 };
 
   lastDragX = cursor.x;
   setInteractive(true);
@@ -268,9 +299,10 @@ function startDrag() {
   // carrying it. `os` is logged beside `tracked` because a disagreement between
   // them is the specific failure three previous fixes were aimed at.
   logDrag('start', {
+    mode: dragMode,
     cursor,
-    tracked: origin,
-    os: isAlive() ? petWindow.getPosition() : null,
+    tracked: recorded,
+    os: [osX, osY],
     offset: dragOffset,
   });
   frameCount = 0;
@@ -302,13 +334,23 @@ function startDrag() {
     // clears the top edge almost immediately. The pet is put back inside the
     // work area when it is dropped instead.
     const next = {
-      x: Math.round(cursor.x - dragOffset.x),
-      y: Math.round(cursor.y - dragOffset.y),
+      x: Math.round(cursor.x - dragOffset.x + dragError.x),
+      y: Math.round(cursor.y - dragOffset.y + dragError.y),
     };
 
     // `moveTo` skips a write when nothing moved, so a stationary hand costs no
     // compositor calls.
     moveTo(next.x, next.y);
+
+    // Mode 3 closes the loop: ask where the window actually landed and carry
+    // the difference into the next frame, so a write that loses a fraction is
+    // corrected rather than compounded. The extra `getPosition` per frame is
+    // the whole cost of the mode, and skipping the correction when it is
+    // already zero keeps a well-behaved display from paying for it.
+    if (dragMode === 'closed') {
+      const [landedX, landedY] = petWindow.getPosition();
+      dragError = { x: next.x - landedX, y: next.y - landedY };
+    }
 
     // Every tenth frame, so a long drag stays readable. `live` is what the
     // offset has become *now* — it must equal the offset recorded at `start`
@@ -383,6 +425,25 @@ function stopDrag() {
   schedulePersist();
 }
 
+/**
+ * Switches drag mechanism and says so on screen.
+ *
+ * Bound to Ctrl+Alt+1/2/3 rather than to plain 1/2/3: a bare number registered
+ * as a global shortcut is swallowed everywhere on the machine, so typing "1" in
+ * any application would stop working. The pet window is deliberately
+ * unfocusable, so it cannot take the keystroke itself.
+ */
+function setDragMode(next) {
+  if (!DRAG_MODES.includes(next) || next === dragMode) return;
+
+  dragMode = next;
+  logDrag('mode', { mode: dragMode });
+
+  // Announced in the window itself, because the point of switching is to feel
+  // the difference immediately and guessing which one is live defeats that.
+  if (isAlive()) petWindow.webContents.send('pet:drag-mode', dragMode);
+}
+
 function applyVisibility() {
   if (!isAlive()) return;
 
@@ -435,6 +496,18 @@ function openContextMenu(petId) {
           body: JSON.stringify({ active: false }),
         }).catch(() => {});
       },
+    },
+    { type: 'separator' },
+    // A second way in, because a global shortcut can be taken by another
+    // application and there would then be no way to switch at all.
+    {
+      label: 'Drag mechanism (testing)',
+      submenu: DRAG_MODES.map((mode, index) => ({
+        label: `${index + 1}  ${mode}   —   Ctrl+Alt+${index + 1}`,
+        type: 'radio',
+        checked: dragMode === mode,
+        click: () => setDragMode(mode),
+      })),
     },
     { type: 'separator' },
     { label: 'Settings…', click: () => onOpenSettings() },
@@ -514,6 +587,18 @@ export function createPetWindow(options) {
   // append to userData; the cost is far smaller than another round of guessing
   // at a gesture that cannot be reproduced on the machine doing the guessing.
   openDragLog(app.getPath('userData'));
+
+  // Global, because the pet is unfocusable and the gesture being diagnosed
+  // happens with the pointer on the pet rather than in any window. Failures are
+  // ignored: another application may already hold the combination, and a
+  // diagnostic that refuses to start the app would be a poor trade.
+  DRAG_MODES.forEach((mode, index) => {
+    try {
+      globalShortcut.register(`CommandOrControl+Alt+${index + 1}`, () => setDragMode(mode));
+    } catch {
+      // Nothing to recover: the context menu still switches modes.
+    }
+  });
 
   const stored = readState().petWindow;
   hidden = Boolean(stored?.hidden);
@@ -615,5 +700,16 @@ export function destroyPetWindow() {
   stopWatchdog();
   if (isAlive()) petWindow.destroy();
   petWindow = null;
+
+  // Global shortcuts outlive the window that registered them, so they have to
+  // be handed back explicitly or they keep swallowing the combination.
+  DRAG_MODES.forEach((_mode, index) => {
+    try {
+      globalShortcut.unregister(`CommandOrControl+Alt+${index + 1}`);
+    } catch {
+      // Already gone, or never registered.
+    }
+  });
+
   closeDragLog();
 }

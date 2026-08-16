@@ -52,4 +52,13 @@ contextBridge.exposeInMainWorld('petBridge', {
   /** The shell tells the page which way the drag is going, and when to re-read the pet. */
   onFacing: (handler) => ipcRenderer.on('pet:facing', (_event, facing) => handler(facing)),
   onRefresh: (handler) => ipcRenderer.on('pet:refresh', () => handler()),
+
+  /**
+   * Which drag mechanism is live, while three are being compared.
+   *
+   * Temporary, and worth removing once one is chosen — the page has no business
+   * knowing how the shell moves the window, and only shows it so the person
+   * switching can tell which one they are feeling.
+   */
+  onDragMode: (handler) => ipcRenderer.on('pet:drag-mode', (_event, mode) => handler(mode)),
 });
