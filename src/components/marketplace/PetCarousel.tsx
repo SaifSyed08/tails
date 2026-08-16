@@ -3,9 +3,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
-import { petsApi, type InstalledPet } from './marketplace-api';
+import { petsApi, usePetLibraryVersion, type InstalledPet } from './marketplace-api';
+import { usePetCarry } from './pet-carry';
 import { isUntried, orderForCarousel } from './pet-filters';
-import { endPetDrag, startPetDrag } from './pet-drag';
+import type { PetDragPayload, PetDropTarget } from './pet-drag';
 import { PetThumbnail } from './PetThumbnail';
 
 /**
@@ -22,9 +23,12 @@ import { PetThumbnail } from './PetThumbnail';
  * put this pet on screen, which is the one fact a row of faces cannot otherwise
  * convey — a pet you imported and forgot looks exactly like your favourite.
  *
- * Dragging an icon onto a conversation uses the same drag contract as the
+ * Dragging an icon onto a conversation publishes the same drag record as the
  * marketplace cards, so the sidebar rows that already accept a pet accept these
- * without knowing where they came from.
+ * without knowing where they came from. The *gesture* is not the same one: a
+ * pet leaving the tray is picked up and carried (`pet-carry.ts`), because he is
+ * supposed to hang from the cursor and swing, and an HTML5 drag image is a
+ * bitmap that cannot do either.
  */
 
 export type PetCarouselProps = {
@@ -32,16 +36,29 @@ export type PetCarouselProps = {
   refreshToken?: number;
   /** Opens this pet in the marketplace. */
   onEdit: (pet: InstalledPet) => void;
+  /**
+   * Where a carried pet landed.
+   *
+   * Omitted, the pets can still be picked up and the affordances still appear —
+   * they simply have nowhere to go. The carousel deliberately does not know how
+   * a chat gets a pet; that is the sidebar's business.
+   */
+  onCarryDrop?: (target: PetDropTarget, payload: PetDragPayload) => void;
   className?: string;
 };
 
 type MenuState = { pet: InstalledPet; x: number; y: number } | null;
 
-export function PetCarousel({ refreshToken = 0, onEdit, className }: PetCarouselProps) {
+export function PetCarousel({ refreshToken = 0, onEdit, onCarryDrop, className }: PetCarouselProps) {
   const [pets, setPets] = useState<InstalledPet[]>([]);
   const [menu, setMenu] = useState<MenuState>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { carryingId, getCarryProps } = usePetCarry(onCarryDrop);
+  // Any write to the library anywhere in the window, including the marketplace
+  // two panes over installing something. Without it a pet the user has just
+  // downloaded is missing from the strip until the app is reloaded.
+  const libraryVersion = usePetLibraryVersion();
 
   const load = useCallback(() => petsApi.listPets()
     .then((library) => setPets(orderForCarousel(library.pets)))
@@ -51,7 +68,7 @@ export function PetCarousel({ refreshToken = 0, onEdit, className }: PetCarousel
 
   useEffect(() => {
     void load();
-  }, [load, refreshToken]);
+  }, [load, refreshToken, libraryVersion]);
 
   // Dismissed by anything that is not the menu itself, the way the sidebar's
   // other popovers behave.
@@ -103,19 +120,14 @@ export function PetCarousel({ refreshToken = 0, onEdit, className }: PetCarousel
       >
         {pets.map((pet) => {
           const untried = isUntried(pet);
+          const carrying = carryingId === pet.definition.id;
 
           return (
             <button
               key={pet.definition.id}
               type="button"
               role="listitem"
-              draggable
-              onDragStart={(event) => startPetDrag(event, {
-                kind: 'installed',
-                id: pet.definition.id,
-                displayName: pet.definition.displayName,
-              })}
-              onDragEnd={endPetDrag}
+              {...getCarryProps(pet)}
               onClick={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
                 setMenu({ pet, x: rect.left, y: rect.top - 8 });
@@ -124,12 +136,24 @@ export function PetCarousel({ refreshToken = 0, onEdit, className }: PetCarousel
               aria-label={pet.definition.displayName}
               className={cn(
                 'relative grid size-9 shrink-0 cursor-grab place-items-center rounded-md active:cursor-grabbing',
-                'transition-colors duration-quick hover:bg-accent',
+                'transition-[background-color,opacity] duration-quick hover:bg-accent',
                 pet.active && 'bg-primary/15 outline outline-1 -outline-offset-1 outline-primary',
                 busyId === pet.definition.id && 'opacity-50',
+                // He is out of the tray. The slot he came from stays where it
+                // is — the strip must not reflow around a gap while the user is
+                // still deciding where to put him — but it stops pretending he
+                // is in it.
+                carrying && 'opacity-30',
               )}
             >
-              <PetThumbnail pet={pet} size={26} />
+              {/* Clipped, because a pet whose grid the server could not work out
+                  is stored as one enormous cell: a 5472x104 filmstrip becomes a
+                  1368px-wide box in a 36px slot. On screen the strip's own
+                  scroller hid that; a drag image rasterises the node's real
+                  bounds, which is how the ghost ended up an invisible sliver. */}
+              <span className="pointer-events-none flex size-full items-center justify-center overflow-hidden">
+                <PetThumbnail pet={pet} size={26} />
+              </span>
 
               {pet.starred ? (
                 <Star

@@ -42,9 +42,33 @@ export { SpritePreview, SPRITE_KEYFRAMES } from './SpritePreview';
 export { frameOffset, resolveCellBox } from './sprite-geometry';
 export type { CellBox, SpriteGrid } from './sprite-geometry';
 
-/** Dragging a pet onto something. The drop target reads these; see `pet-drag.ts`. */
-export { endPetDrag, isPetDrag, readPetDrag, startPetDrag, usePetDrag, PET_DRAG_MIME } from './pet-drag';
-export type { PetDragPayload } from './pet-drag';
+/**
+ * Dragging a pet onto something. The drop target reads these; see `pet-drag.ts`.
+ *
+ * Two gestures share one record — HTML5 for the marketplace cards, a pointer
+ * carry for the tray — so a drop target asks what is in flight and where it
+ * would land without knowing which one is carrying it.
+ *
+ * `PetDragLayer` draws everything the gesture puts on screen: the pet under the
+ * cursor and both drop affordances. Mount it once, next to whatever can accept
+ * a drop, or nothing is drawn at all.
+ */
+export {
+  clearPetDropTarget,
+  endPetDrag,
+  isPetDrag,
+  publishPetDragFrame,
+  readPetDrag,
+  resolvePetDropTarget,
+  setPetDropTarget,
+  startPetDrag,
+  usePetDrag,
+  usePetDragState,
+  PET_DRAG_MIME,
+} from './pet-drag';
+export type { PetDragFrame, PetDragPayload, PetDragState, PetDropTarget } from './pet-drag';
+export { PetDragLayer } from './PetDragLayer';
+export type { PetDragLayerProps } from './PetDragLayer';
 
 /** The always-on-top desktop pet, for the in-window handoff. */
 export {
@@ -55,7 +79,7 @@ export {
   suppressDesktopPet,
 } from './desktop-pet';
 
-export { petsApi } from './marketplace-api';
+export { petsApi, usePetLibraryVersion } from './marketplace-api';
 export type {
   CatalogueEntry,
   CataloguePage,

@@ -1,11 +1,14 @@
-import { AlertTriangle, CornerDownLeft, Loader2, MoreHorizontal, Pin } from 'lucide-react';
+import { AlertTriangle, Loader2, MoreHorizontal, Pin } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import {
+  clearPetDropTarget,
   isPetDrag,
   PetThumbnail,
+  publishPetDragFrame,
   readPetDrag,
-  usePetDrag,
+  setPetDropTarget,
+  usePetDragState,
   type InstalledPet,
   type PetDragPayload,
 } from '@/components/marketplace';
@@ -97,11 +100,20 @@ export function SessionRow({
 }: SessionRowProps) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
 
-  // What is being dragged right now, so the row can name it before the drop.
-  const dragging = usePetDrag();
+  /**
+   * What is in flight, and what it is over.
+   *
+   * Both come from the drag record rather than from this row's own state,
+   * because the pointer-driven carry has no `dragover` to listen to — it finds
+   * its target by hit-testing the document for `data-pet-drop-session`. One
+   * source of truth means the row highlights identically whichever gesture is
+   * carrying the pet.
+   */
+  const { payload: dragging, target } = usePetDragState();
+  const rowTarget = { kind: 'session', sessionId: session.id } as const;
   const droppable = Boolean(onAssignPet) && dragging !== null;
+  const dragOver = droppable && target?.kind === 'session' && target.sessionId === session.id;
 
   if (renaming) {
     return (
@@ -126,10 +138,16 @@ export function SessionRow({
   return (
     <div
       ref={rowRef}
+      // How a pointer-driven carry finds this row. It hit-tests the document on
+      // release, so a row that cannot accept a pet must not answer to the name.
+      data-pet-drop-session={onAssignPet ? session.id : undefined}
       className="group/row relative"
       onMouseEnter={() => {
         setHovered(true);
-        onHover(rowRef.current);
+        // A pointer carry does not suppress mouse events the way an HTML5 drag
+        // does, so without this the folder card would open under a pet being
+        // carried past — on top of the label saying what the drop will do.
+        onHover(dragging ? null : rowRef.current);
       }}
       onMouseLeave={() => {
         setHovered(false);
@@ -142,17 +160,21 @@ export function SessionRow({
         // the cursor keeps showing "no entry" the whole way down the list.
         event.preventDefault();
         event.dataTransfer.dropEffect = 'copy';
-        setDragOver(true);
+        setPetDropTarget(rowTarget);
+        // The label beside the cursor is drawn by the drag layer, and an HTML5
+        // drag is the one gesture that does not otherwise report where the
+        // pointer is.
+        publishPetDragFrame({ x: event.clientX, y: event.clientY, angle: 0 });
       }}
       onDragLeave={(event) => {
         // Ignore the leave events fired while crossing this row's own children.
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-        setDragOver(false);
+        clearPetDropTarget(rowTarget);
       }}
       onDrop={(event) => {
         if (!onAssignPet || !isPetDrag(event)) return;
         event.preventDefault();
-        setDragOver(false);
+        clearPetDropTarget(rowTarget);
         const payload = readPetDrag(event);
         if (payload) onAssignPet(payload);
       }}
@@ -168,8 +190,13 @@ export function SessionRow({
           // One line, fixed height. The folder and the timestamp used to live
           // on a second line inside the row, which made every pill twice as
           // tall as the name it was showing; they are in the hover card now.
-          'flex h-8 w-full items-center gap-1.5 rounded-sm pl-2.5 pr-7 text-left text-sm',
+          'flex h-8 w-full items-center gap-1.5 rounded-sm pl-2.5 text-left text-sm',
           'transition-colors duration-quick',
+          // Room at the right end for the options button, and for the pet
+          // beside it when there is one. Reserved by the title rather than
+          // taken from it, so a long name is truncated instead of running
+          // underneath them.
+          pet ? 'pr-14' : 'pr-7',
           active
             ? 'bg-accent text-accent-foreground'
             : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
@@ -183,24 +210,8 @@ export function SessionRow({
           <Pin className="size-3 shrink-0 rotate-45 opacity-70" aria-hidden="true" />
         ) : null}
 
-        {/* Kept inside the fixed-height row: the thumbnail is the cell's own
-            aspect at 18px, which fits an h-8 row without changing it. */}
-        {pet ? <PetThumbnail pet={pet} size={18} className="-my-1" /> : null}
-
-        <MarqueeTitle text={session.title} active={hovered && !dragOver} />
+        <MarqueeTitle text={session.title} active={hovered && !dragging} />
       </button>
-
-      {/* The promise, made before the drop. The user asked to know what will
-          happen before letting go, so this replaces the row's contents rather
-          than sitting beside them where it could be missed. */}
-      {dragOver && dragging ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center gap-1.5 rounded-sm bg-primary/15 px-2.5 text-xs font-medium text-primary">
-          <CornerDownLeft className="size-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">
-            Assign {dragging.displayName} to this chat
-          </span>
-        </div>
-      ) : null}
 
       {dropStatus ? (
         <div
@@ -218,25 +229,46 @@ export function SessionRow({
         </div>
       ) : null}
 
-      {/* A sibling rather than a child: a button cannot be nested in a button,
-          and this has to be reachable by keyboard in its own right. */}
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          const rect = event.currentTarget.getBoundingClientRect();
-          onOpenMenu(rect.right, rect.bottom + 4);
-        }}
-        aria-label={`Options for ${session.title}`}
-        title="Options"
-        className={cn(
-          'absolute right-1 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground',
-          'opacity-0 transition-opacity duration-quick hover:bg-accent hover:text-foreground',
-          'focus-visible:opacity-100 group-hover/row:opacity-100',
-        )}
-      >
-        <MoreHorizontal className="size-3.5" aria-hidden="true" />
-      </button>
+      {/*
+        The right-hand end of the row.
+
+        Siblings of the title rather than children: a button cannot be nested in
+        a button, and the options control has to be reachable by keyboard in its
+        own right. They share one track so the pet sits where the options button
+        does rather than beside the name — and because the options button fades
+        rather than unmounts, it holds its width and the pet never shifts when
+        the row is hovered.
+      */}
+      <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+        {pet ? (
+          // Clipped for the same reason as the carousel icon: a pet with an
+          // un-inferred grid is one very wide cell, and this row is 32px tall
+          // and must stay that way. No tooltip, deliberately — the thumbnail
+          // names itself to assistive tech, and making this hoverable would
+          // put a dead 18px hole in the row's own click target.
+          <span className="flex h-[18px] max-w-[22px] items-center justify-center overflow-hidden">
+            <PetThumbnail pet={pet} size={18} />
+          </span>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onOpenMenu(rect.right, rect.bottom + 4);
+          }}
+          aria-label={`Options for ${session.title}`}
+          title="Options"
+          className={cn(
+            'pointer-events-auto rounded-sm p-1 text-muted-foreground',
+            'opacity-0 transition-opacity duration-quick hover:bg-accent hover:text-foreground',
+            'focus-visible:opacity-100 group-hover/row:opacity-100',
+          )}
+        >
+          <MoreHorizontal className="size-3.5" aria-hidden="true" />
+        </button>
+      </div>
     </div>
   );
 }

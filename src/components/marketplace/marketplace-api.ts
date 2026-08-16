@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react';
+
 /**
  * The pets HTTP surface, as the marketplace sees it.
  *
@@ -220,6 +222,58 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
+ * "The library changed", announced to the rest of the window.
+ *
+ * The shelves that install a pet are in the main pane and the carousel that has
+ * to show it is in the sidebar, with the app shell between them. Handing a
+ * refresh callback down both branches means every surface that ever installs
+ * anything has to remember to call it, and the first one that forgets is a pet
+ * the user has to reload the app to see — which is exactly what happened.
+ *
+ * So the write announces itself instead. Every mutation below goes through
+ * `writing`, nothing polls, and a new surface that installs a pet gets the
+ * behaviour for free because it cannot install one without going through here.
+ *
+ * Deliberately in-document. The app has an `appBroadcast` for facts every open
+ * window needs — an appearance change, the conversation list moving — but the
+ * pets module publishes nothing on it yet, so a pet installed in one window
+ * does not reach another. When `pets_changed` exists, subscribing to it here is
+ * the entire change and every consumer of `usePetLibraryVersion` inherits it.
+ */
+let libraryVersion = 0;
+const libraryListeners = new Set<() => void>();
+
+function subscribeToLibrary(listener: () => void): () => void {
+  libraryListeners.add(listener);
+  return () => {
+    libraryListeners.delete(listener);
+  };
+}
+
+/**
+ * Announces a write once it has actually landed.
+ *
+ * A failed install has changed nothing, and re-reading the library to be told
+ * so is a request nobody asked for.
+ */
+async function writing<T>(pending: Promise<T>): Promise<T> {
+  const result = await pending;
+  libraryVersion += 1;
+  for (const listener of libraryListeners) listener();
+  return result;
+}
+
+/**
+ * Bumped whenever the pet library changes anywhere in this window.
+ *
+ * Use it as an effect dependency next to whatever loads pets; the number itself
+ * means nothing beyond "not what you last saw".
+ */
+export function usePetLibraryVersion(): number {
+  return useSyncExternalStore(subscribeToLibrary, () => libraryVersion, () => libraryVersion);
+}
+
+/**
  * Which pet a surface should put on screen.
  *
  * `source` says why: a pet assigned to the conversation, the global active pet,
@@ -249,17 +303,17 @@ export const petsApi = {
 
   /** Copies a pet folder from anywhere on disk into `~/.tails/pets`. */
   importFromPath: (folderPath: string) =>
-    request<InstalledPet>('/import', {
+    writing(request<InstalledPet>('/import', {
       method: 'POST',
       body: JSON.stringify({ path: folderPath }),
-    }),
+    })),
 
   /** Uploads a `pet.json` plus its spritesheet, the image as a base64 data URL. */
   importUpload: (definition: PetFileDraft, image: { fileName: string; data: string }) =>
-    request<InstalledPet>('/import', {
+    writing(request<InstalledPet>('/import', {
       method: 'POST',
       body: JSON.stringify({ definition, image }),
-    }),
+    })),
 
   /**
    * Saves anything the user can change about a pet.
@@ -275,19 +329,19 @@ export const petsApi = {
     assignedTheme?: string | null;
     thinkingPhrases?: string[] | null;
   }) =>
-    request<InstalledPet>(`/${encodeURIComponent(id)}`, {
+    writing(request<InstalledPet>(`/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
-    }),
+    })),
 
   setActive: (id: string, active: boolean) =>
-    request<{ activePetId: string | null }>(`/${encodeURIComponent(id)}/activate`, {
+    writing(request<{ activePetId: string | null }>(`/${encodeURIComponent(id)}/activate`, {
       method: 'POST',
       body: JSON.stringify({ active }),
-    }),
+    })),
 
   removePet: (id: string) =>
-    request<{ id: string }>(`/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    writing(request<{ id: string }>(`/${encodeURIComponent(id)}`, { method: 'DELETE' })),
 
   /**
    * Hides a pet from the library, or brings it back.
@@ -296,17 +350,17 @@ export const petsApi = {
    * belong to Codex, so the listing is the only thing we may change.
    */
   setHidden: (id: string, hidden: boolean) =>
-    request<InstalledPet>(`/${encodeURIComponent(id)}/hidden`, {
+    writing(request<InstalledPet>(`/${encodeURIComponent(id)}/hidden`, {
       method: 'POST',
       body: JSON.stringify({ hidden }),
-    }),
+    })),
 
   /** Stars a pet, or unstars it. Starred pets lead the carousel. */
   setStarred: (id: string, starred: boolean) =>
-    request<InstalledPet>(`/${encodeURIComponent(id)}/starred`, {
+    writing(request<InstalledPet>(`/${encodeURIComponent(id)}/starred`, {
       method: 'POST',
       body: JSON.stringify({ starred }),
-    }),
+    })),
 
   /**
    * Records that a pet was chosen for a conversation.
@@ -315,7 +369,7 @@ export const petsApi = {
    * belongs to the sessions module while the tally belongs to pets.
    */
   markUsed: (id: string) =>
-    request<InstalledPet>(`/${encodeURIComponent(id)}/used`, { method: 'POST' }),
+    writing(request<InstalledPet>(`/${encodeURIComponent(id)}/used`, { method: 'POST' })),
 
   /** One page of codex-pets.net, sorted by views, proxied through our server. */
   listCatalogue: (options: { page?: number; pageSize?: number; query?: string } = {}) => {
@@ -329,5 +383,5 @@ export const petsApi = {
 
   /** Downloads and installs one catalogue pet. The id is all the server accepts. */
   installFromCatalogue: (id: string) =>
-    request<InstalledPet>(`/catalogue/${encodeURIComponent(id)}/install`, { method: 'POST' }),
+    writing(request<InstalledPet>(`/catalogue/${encodeURIComponent(id)}/install`, { method: 'POST' })),
 };

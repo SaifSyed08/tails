@@ -303,7 +303,11 @@ function createMainWindow() {
         titleBarOverlay: {
           color: '#00000000',
           symbolColor: '#a1a1aa',
-          height: 44,
+          // The constant, not a copy of what it used to be. This was left at 44
+          // when the header grew to 56, so the caption strip was 12px short
+          // until the first zoom change re-applied it correctly — the initial
+          // paint being the one place that did not go through `applyZoomLevel`.
+          height: HEADER_HEIGHT,
         },
       }),
     webPreferences: {

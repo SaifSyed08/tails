@@ -6,9 +6,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   PetCarousel,
+  PetDragLayer,
   petsApi,
+  usePetLibraryVersion,
   type InstalledPet,
   type PetDragPayload,
+  type PetDropTarget,
 } from '@/components/marketplace';
 import { FloatingCard } from '@/components/sidebar/FloatingCard';
 import { SessionRow } from '@/components/sidebar/SessionRow';
@@ -98,8 +101,12 @@ export function Sidebar({
   /** `sessionId -> petId`, from the pets module. The sessions list payload does not carry it. */
   const [assignments, setAssignments] = useState<Record<string, string>>({});
   const [dropStatus, setDropStatus] = useState<DropStatus>(null);
-  /** Bumped whenever this sidebar changes a pet, so the carousel re-reads. */
-  const [petsToken, setPetsToken] = useState(0);
+  /**
+   * Bumped by every write to the pet library, wherever in the window it
+   * happened — this sidebar assigning one, or the marketplace two panes over
+   * installing one. The rows' icons and the carousel both re-read on it.
+   */
+  const petLibraryVersion = usePetLibraryVersion();
   const [hover, setHover] = useState<HoverState>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -172,7 +179,7 @@ export function Sidebar({
 
   useEffect(() => {
     void loadPets();
-  }, [loadPets]);
+  }, [loadPets, petLibraryVersion]);
 
   // A failed drop explains itself and then gets out of the way, rather than
   // leaving a red row the user has to work out how to dismiss.
@@ -269,33 +276,51 @@ export function Sidebar({
    * never arrived would leave the user with a conversation referencing nothing.
    * Nothing is assigned unless the pet is actually on disk.
    */
-  const assignPet = useCallback(async (session: SessionListItem, payload: PetDragPayload) => {
-    setDropStatus({ id: session.id, state: 'installing', message: `Installing ${payload.displayName}…` });
+  const assignPet = useCallback(async (sessionId: string, payload: PetDragPayload) => {
+    setDropStatus({ id: sessionId, state: 'installing', message: `Installing ${payload.displayName}…` });
 
     try {
-      await ensureOwned(session);
+      // A conversation from Claude Code's own history has no row here to hang
+      // an assignment on and has to be adopted first. A draft has no row
+      // either, but the assignment itself creates one — so a pet dropped into
+      // a brand-new chat is also the thing that writes it down.
+      const session = sessions.find((entry) => entry.id === sessionId);
+      if (session) await ensureOwned(session);
 
       if (payload.kind === 'catalogue' && !pets.has(payload.id)) {
         await petsApi.installFromCatalogue(payload.id);
       }
 
-      await api.setSessionPet(session.id, payload.id);
+      await api.setSessionPet(sessionId, payload.id);
       // Assignment is a write the sessions module owns; the pet's own record of
-      // having been chosen is ours, and it is what the carousel orders by.
+      // having been chosen is ours, and it is what the carousel orders by. It
+      // is also what tells the library it changed, which is what re-reads the
+      // pets behind these rows.
       await petsApi.markUsed(payload.id).catch(() => {});
 
-      setAssignments((current) => ({ ...current, [session.id]: payload.id }));
+      setAssignments((current) => ({ ...current, [sessionId]: payload.id }));
       setDropStatus(null);
-      setPetsToken((current) => current + 1);
-      void loadPets();
+      requestReload();
     } catch (error) {
       setDropStatus({
-        id: session.id,
+        id: sessionId,
         state: 'failed',
         message: error instanceof Error ? error.message : `${payload.displayName} could not be added.`,
       });
     }
-  }, [ensureOwned, loadPets, pets]);
+  }, [ensureOwned, pets, requestReload, sessions]);
+
+  /**
+   * A pet let go of, from either gesture and over either kind of target.
+   *
+   * The chat resolves to whichever conversation it is showing: "drop anywhere
+   * in the chat" is only offered when there is one, so a target of `chat`
+   * without an active conversation is a state the layer does not produce.
+   */
+  const handlePetDrop = useCallback((target: PetDropTarget, payload: PetDragPayload) => {
+    const sessionId = target.kind === 'chat' ? activeSessionId : target.sessionId;
+    if (sessionId) void assignPet(sessionId, payload);
+  }, [activeSessionId, assignPet]);
 
   const unassignPet = useCallback(async (session: SessionListItem) => {
     setAssignments((current) => {
@@ -601,7 +626,7 @@ export function Sidebar({
               onCancelRename={() => setRenamingId(null)}
               pet={pets.get(assignments[session.id] ?? '') ?? null}
               dropStatus={dropStatus?.id === session.id ? dropStatus : null}
-              onAssignPet={(payload) => void assignPet(session, payload)}
+              onAssignPet={(payload) => void assignPet(session.id, payload)}
             />
           ))}
         </div>
@@ -693,7 +718,13 @@ export function Sidebar({
 
       {/* Above Settings, where the hand already is: swapping companions should
           not need a trip to the marketplace. */}
-      <PetCarousel refreshToken={petsToken} onEdit={() => onOpenMarketplace()} />
+      <PetCarousel onCarryDrop={handlePetDrop} onEdit={() => onOpenMarketplace()} />
+
+      {/* Everything a drag draws — the pet under the cursor and both drop
+          affordances — portalled out of here. It lives beside the carousel
+          because that is where pets are picked up, and it covers the whole
+          window because that is where they are put down. */}
+      <PetDragLayer chatSessionId={activeSessionId} onAssign={handlePetDrop} />
 
       <div className="border-t border-border p-2">
         <button
