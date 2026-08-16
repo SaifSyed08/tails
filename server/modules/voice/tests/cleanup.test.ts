@@ -22,15 +22,15 @@ test('the mis-hearings the benchmark actually found are repaired', () => {
   assert.match(cleanTranscript('over a binary web socket'), /websocket/);
 });
 
-test('a retraction drops the clause it interrupts, not the whole sentence', () => {
-  assert.equal(
-    cleanTranscript('Open the config file, no wait, the manifest instead.'),
-    'Open the config file, the manifest instead.',
-  );
+test('a retraction removes what was retracted and keeps the correction', () => {
+  // The thing being taken back must not survive — that is the entire job.
+  const cleaned = cleanTranscript('Open the config file, no wait, the manifest instead.');
+  assert.doesNotMatch(cleaned, /config file/);
+  assert.match(cleaned, /manifest instead/);
 });
 
-test('a trailing retraction removes what came before it', () => {
-  assert.equal(cleanTranscript('Delete the migration, scratch that.'), 'Delete the migration,');
+test('retracting the only instruction leaves nothing rather than half of it', () => {
+  assert.equal(cleanTranscript('Delete the migration, scratch that.'), '');
 });
 
 test('"scratch that" mid-clause keeps only what follows', () => {

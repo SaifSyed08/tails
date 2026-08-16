@@ -216,17 +216,59 @@ to do that, and it costs 50 ms.
 is likely an artifact of how the synthesizer pronounces it rather than a model
 limitation.
 
+### Robustness: noise, reverberation, and a second speaker
+
+The clean-room objection to the numbers above is the obvious one, so the corpus
+was degraded toward what a laptop microphone in a room actually delivers —
+pink-ish room tone at three signal-to-noise ratios, three early reflections, and
+a slow gain drift standing in for someone leaning toward and away from the
+machine — and re-run against a second synthetic speaker at a different pace.
+`base.en` q8_0, seeded, key tokens being the identifiers and commands whose loss
+actually costs the user something:
+
+| Condition | WER% (bare) | WER% (seeded) | Key tokens (seeded) |
+|---|---:|---:|---:|
+| Speaker A, clean | 14.6 | 9.7 | 34/36 |
+| Speaker A, 20 dB SNR | 14.6 | 9.7 | 34/36 |
+| Speaker A, 12 dB SNR | 16.8 | 9.2 | 34/36 |
+| Speaker A, 6 dB SNR | 18.4 | 12.4 | 32/36 |
+| Speaker B, clean | 14.6 | 8.6 | 33/36 |
+| Speaker B, 6 dB SNR | 17.8 | 11.9 | 34/36 |
+
+Three things worth keeping:
+
+**It degrades gracefully rather than falling over.** Six decibels SNR is a
+genuinely noisy room. It costs about three points of WER and two key tokens.
+
+**Seeding helps *more* as conditions worsen** — 18.4% → 12.4% at 6 dB, a third
+of the errors removed, against 14.6% → 9.7% when clean. That is the expected
+shape: the language prior is doing more work precisely when the acoustics are
+doing less.
+
+**Latency is unaffected by noise**, which follows from the encoder cost being
+fixed per 30-second window.
+
+Across all eight conditions, seeded key-token recall was **92.7%**, and the
+residual misses were not spread out: `sqlite` and `exec` accounted for 15 of 21.
+Two words. That is a lookup table, not a model problem — and it is why
+`cleanup.ts` carries a small, specific mis-hearing map rather than a fuzzy
+matcher that would start "correcting" words the user really said.
+
 ### What the benchmark does not prove
 
-**The audio is synthesised, not human.** Latency is unaffected by this — compute
-is driven by audio duration, and every clip is real 16 kHz PCM. Accuracy is
-optimistic: TTS has no room noise, no microphone colouration, no accent, no
-disfluency, and even pace. The *identifier-mangling* failure mode is a language
-prior rather than an acoustic one, so it transfers, but the absolute error rate
-on a real voice in a real room will be worse. The 3–4× latency headroom is large
-enough to absorb a worse model later if the real-voice error rate demands it;
-the accuracy number should be re-measured with an actual recording during
-implementation.
+**The audio is synthesised, not human.** Latency is unaffected — compute is
+driven by duration, and every clip is real 16 kHz PCM. Accuracy remains
+optimistic even after the degradation study above: added noise and reverb
+simulate a *room*, but nothing here simulates an *accent*, a disfluency, an
+uneven pace, or the particular way one person's voice hits one microphone. The
+identifier-mangling mode is a language prior rather than an acoustic one, so it
+transfers; the absolute rate will still be worse than measured.
+
+Closing that gap needs a recording, which is a two-minute job and is the one
+piece of evidence this document cannot generate for itself. `recorder.html`
+alongside the benchmark harness reads the same eleven sentences back to a person
+and saves them as 16 kHz WAVs in exactly the format the app captures, so the
+accuracy half re-runs unchanged against real speech.
 
 Also unmeasured: sustained thermal behaviour, and battery. This ran on AC. A
 laptop on battery with a conservative power profile will be slower, and that is

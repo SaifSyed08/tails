@@ -8,7 +8,9 @@ import { app, BrowserWindow, Menu, ipcMain, nativeImage, shell } from 'electron'
 import {
   createPetWindow,
   destroyPetWindow,
+  clearPetAlert,
   isPetHidden,
+  notifyPetOfCompletion,
   placePetFromWindow,
   refreshPetWindow,
   resetPetPosition,
@@ -298,6 +300,21 @@ const PANIC_RESET_SCRIPT = `(() => {
 })()`;
 
 /**
+ * Whether the user is dictating right now.
+ *
+ * The main process cannot see a button being pressed, so the renderer raises
+ * this immediately before `getUserMedia` and lowers it the moment capture ends.
+ * Without it the only options are a standing microphone grant or no microphone,
+ * and a standing grant in an app that lets an agent rewrite the page is not a
+ * trade worth making.
+ *
+ * Lowered defensively on blur and hide as well: a window that loses focus
+ * mid-dictation should not leave the grant open behind it, and the cost of
+ * being wrong in that direction is a refused permission rather than a hot mic.
+ */
+let voiceIntent = false;
+
+/**
  * Refuses every device permission the app has not asked for.
  *
  * Electron's default is to **grant**, which is the wrong default for any app
@@ -316,17 +333,16 @@ const PANIC_RESET_SCRIPT = `(() => {
  * requests leaves a second door open.
  */
 function installPermissionHandlers(session) {
-  session.setPermissionRequestHandler((_contents, permission, callback) => {
-    callback(false);
-    if (permission === 'media') {
-      console.warn('[tails] denied a media permission request; nothing should be asking yet');
-    }
-  });
+  const allow = (permission) => permission === 'media' && voiceIntent;
 
-  session.setPermissionCheckHandler(() => false);
+  session.setPermissionRequestHandler((_contents, permission, callback) => callback(allow(permission)));
+  session.setPermissionCheckHandler((_contents, permission) => allow(permission));
 
   // A device the page cannot enumerate is one it cannot quietly start using.
-  session.setDevicePermissionHandler(() => false);
+  // Microphones are allowed through the same gate, and nothing else ever is.
+  session.setDevicePermissionHandler((details) => (
+    details.deviceType === 'audioInput' && voiceIntent
+  ));
 }
 
 function createMainWindow() {
@@ -368,6 +384,12 @@ function createMainWindow() {
   });
 
   installPermissionHandlers(mainWindow.webContents.session);
+
+  // Belt and braces around the grant: whatever the renderer believes, a window
+  // that is not in front of the user is not one they are dictating into.
+  for (const event of ['blur', 'hide', 'minimize']) {
+    mainWindow.on(event, () => { voiceIntent = false; });
+  }
 
   // Fires in the main process before the page sees the event, so neither a
   // theme nor a focused text field can swallow it.
@@ -446,6 +468,22 @@ function startPetWindow() {
      * floats above everything, so clicking him while the app is behind another
      * window would open a panel nobody can see.
      */
+    /**
+     * The pet's bubble was clicked: show that conversation.
+     *
+     * Raising the window is the shell's half — the app may be minimised behind
+     * everything, which is the only situation in which this bubble exists — and
+     * choosing the chat is the renderer's, because the session list and the
+     * view state are its.
+     */
+    onOpenSession: (sessionId) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('tails:open-session', sessionId);
+    },
+
     onOpenPetDetails: (petId) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -464,7 +502,25 @@ function startPetWindow() {
  * never overwrite a preference. `refresh` exists so activating a pet shows it
  * immediately instead of at the window's next poll.
  */
+/**
+ * Whether the user is actually looking at the app.
+ *
+ * The one fact in this feature that only the shell can answer, so it is
+ * answered here and nowhere else. "Not on top" is deliberately as broad as the
+ * user described it: minimised, behind another window, or on another desktop
+ * all mean the same thing — he is not going to see a turn finish.
+ */
+function appIsInFront() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  return mainWindow.isFocused() && mainWindow.isVisible() && !mainWindow.isMinimized();
+}
+
 function installPetBridge() {
+  // The one thing that opens the microphone gate. Registered here with the
+  // other renderer channels rather than beside the permission handlers,
+  // because it is a message from the page, not a policy.
+  ipcMain.on('tails:voice-intent', (_event, wanted) => { voiceIntent = wanted === true; });
+
   ipcMain.on('tails:desktop-pet', (event, payload) => {
     const action = payload?.action;
     if (action === 'suppress') setPetSuppressed(payload?.value !== false);
@@ -487,6 +543,33 @@ function installPetBridge() {
   });
 
   ipcMain.handle('tails:desktop-pet-state', () => ({ hidden: isPetHidden() }));
+
+  /*
+   * Turn completion, from the renderer, filtered by what only the shell knows.
+   *
+   * The renderer sees the turn finish over its websocket — it keeps running
+   * while minimised — and it is the only side that knows whose pet that chat
+   * has. The shell knows whether the window is in front of the user. Neither
+   * half can decide this alone, so each supplies what it has: the renderer
+   * reports, and this decides.
+   */
+  ipcMain.on('tails:pet-alert', (_event, payload) => {
+    const action = payload?.action;
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : '';
+
+    if (action === 'completed') {
+      // He is looking right at the app. Whatever finished, he watched it
+      // finish, and a pet jumping about to tell him so is noise.
+      if (appIsInFront()) return;
+      notifyPetOfCompletion({ sessionId, title: String(payload?.title || ''), at: Date.now() });
+      return;
+    }
+
+    // "Viewing" is only true if the window is actually in front: a chat open
+    // behind three other windows has not been read, and the requirement is that
+    // he keeps asking until it has been.
+    if (action === 'viewing' && appIsInFront()) clearPetAlert(sessionId);
+  });
 }
 
 /**

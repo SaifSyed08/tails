@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'node:path';
 
+import { addAlert, clearAlert, describeAlerts } from './pet-alerts.js';
 import { clientPointToDip, sizeForScaleFactor } from './pet-geometry.js';
 
 
@@ -89,6 +90,17 @@ let petWindow = null;
 let readState = () => ({});
 let writeState = () => {};
 let onOpenPetDetails = () => {};
+let onOpenSession = () => {};
+
+/**
+ * Conversations that finished while the user was elsewhere.
+ *
+ * Held here rather than in the renderer because the pet has to be able to say
+ * so while the app is minimised, and here rather than in the pet page because
+ * the page is reloaded whenever the active pet changes — an announcement should
+ * survive the pet changing his shirt.
+ */
+let alerts = [];
 
 /** Set by the page: whether a pet is active at all. */
 let hasPet = false;
@@ -608,12 +620,18 @@ function applyReportedSize() {
     petWindow.setContentSize(width, height);
   }
 
-  // Kept on the same spot rather than the same corner, so growing or shrinking
-  // him does not also move him, and re-clamped because a window that just grew
-  // may now hang off the screen.
+  /*
+   * Anchored to his feet, not to the middle of the window.
+   *
+   * He stands on things, and everything that changes this window's height grows
+   * it upwards: a speech bubble above his head, a larger size from the slider.
+   * Anchoring the centre sank him through whatever he was standing on by half
+   * the difference every time. Horizontally the centre is right, because he
+   * grows sideways from the middle.
+   */
   const centreX = at.x + was.width / 2;
-  const centreY = at.y + was.height / 2;
-  const clamped = clampToDisplay(centreX - width / 2, centreY - height / 2, width, height);
+  const bottom = at.y + was.height;
+  const clamped = clampToDisplay(centreX - width / 2, bottom - height, width, height);
   moveTo(clamped.x, clamped.y);
 }
 
@@ -641,6 +659,43 @@ function applyVisibility() {
 }
 
 /**
+ * Tells the page what he is holding up, or that he is holding up nothing.
+ *
+ * Sent on every change rather than polled: the whole point of this feature is
+ * that "your work is finished" arrives when it happens, and the page's own poll
+ * is 2.5 seconds wide in both directions — late to appear and late to clear.
+ */
+function pushAlerts() {
+  if (!isAlive()) return;
+  petWindow.webContents.send('pet:alert', describeAlerts(alerts));
+}
+
+/**
+ * A conversation finished while the user was not looking at it.
+ *
+ * Refused when the pet is not on screen, and *especially* when the user has
+ * hidden him: putting him back to deliver a notification would override a
+ * deliberate choice, which is the whole reason his hide and the app's
+ * suppression are two different switches.
+ */
+export function notifyPetOfCompletion({ sessionId, title, at }) {
+  if (!sessionId || !shouldShow()) return;
+
+  alerts = addAlert(alerts, { sessionId, title, at: at || Date.now() });
+  pushAlerts();
+}
+
+/** The user has looked at that conversation, so he has nothing left to say about it. */
+export function clearPetAlert(sessionId) {
+  if (!sessionId) return;
+  const next = clearAlert(alerts, sessionId);
+  if (next.length === alerts.length) return;
+
+  alerts = next;
+  pushAlerts();
+}
+
+/**
  * The pet's own hide, from the pill's X.
  *
  * The persisted one — the same switch the app's own control uses — so a pet put
@@ -650,6 +705,10 @@ function applyVisibility() {
  */
 function hideFromPill() {
   hidden = true;
+  // Put away is put away. Keeping the queue would mean he re-appeared holding a
+  // week-old announcement the next time he was let out.
+  alerts = [];
+  pushAlerts();
   persistPosition();
   applyVisibility();
 }
@@ -704,6 +763,24 @@ function installIpc() {
   ipcMain.on('pet:hide', () => hideFromPill());
 
   /*
+   * The bubble was clicked: go to that conversation.
+   *
+   * The obvious action, and the one that also clears the alert — an alert whose
+   * only exit is "go and do the thing" is a bad neighbour, so the bubble is
+   * both the notice and the way to answer it. The X beside it is the other way.
+   */
+  ipcMain.on('pet:alert-open', (_event, payload) => {
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : '';
+    if (!sessionId) return;
+    clearPetAlert(sessionId);
+    onOpenSession(sessionId);
+  });
+
+  ipcMain.on('pet:alert-dismiss', (_event, payload) => {
+    clearPetAlert(typeof payload?.sessionId === 'string' ? payload.sessionId : '');
+  });
+
+  /*
    * The desktop was rearranged.
    *
    * A monitor's scale factor changing, or a screen appearing or disappearing,
@@ -729,6 +806,7 @@ export function createPetWindow(options) {
   readState = options.readState;
   writeState = options.writeState;
   onOpenPetDetails = options.onOpenPetDetails ?? (() => {});
+  onOpenSession = options.onOpenSession ?? (() => {});
 
   // On by default while the drift is unexplained. It is a bounded, buffered
   // append to userData; the cost is far smaller than another round of guessing
@@ -851,6 +929,12 @@ export function createPetWindow(options) {
     stopWatchdog();
     petWindow = null;
   });
+
+  // The page is a document, and documents forget. Anything the shell is holding
+  // for it — the alert queue, and nothing else so far — is re-sent whenever it
+  // loads, so a pet who was announcing something goes on announcing it after a
+  // reload rather than falling silent with the chat still waiting.
+  petWindow.webContents.on('did-finish-load', () => pushAlerts());
 
   installIpc();
   void petWindow.loadURL(`${options.serverUrl}/api/pets/window`);

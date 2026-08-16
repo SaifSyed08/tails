@@ -12,6 +12,8 @@ import { createPetsRouter } from '@/modules/pets/index.js';
 import { createSessionsRouter } from '@/modules/sessions/sessions.routes.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { attachTerminalGateway } from '@/modules/terminal/terminal-gateway.js';
+import { createVoiceRouter } from '@/modules/voice/voice.routes.js';
+import { attachVoiceGateway } from '@/modules/voice/voice-gateway.js';
 import { AppError } from '@/shared/utils.js';
 
 const PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
@@ -54,6 +56,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/sessions', createSessionsRouter());
 app.use('/api/appearance', createAppearanceRouter());
 app.use('/api/pets', createPetsRouter());
+app.use('/api/voice', createVoiceRouter());
 
 // In production the built client is served from the same origin, so the app
 // and its API share cookies, websockets, and CSP with no special casing.
@@ -102,6 +105,10 @@ app.use((
 const server = http.createServer(app);
 attachChatGateway(server);
 attachTerminalGateway(server);
+// Each gateway chains the previous one's upgrade listeners, so the order here
+// is the order they get offered a handshake. Any of them may go first; none of
+// them may be a plain `new WebSocketServer({ server, path })`.
+attachVoiceGateway(server);
 
 getConnection();
 // A conversation with no messages is not a conversation. Earlier builds wrote

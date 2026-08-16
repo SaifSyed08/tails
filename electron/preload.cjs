@@ -12,6 +12,24 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
   isDesktop: true,
   platform: process.platform,
 
+  voice: {
+    /**
+     * Says the user has just asked to dictate.
+     *
+     * Device permissions are denied by default, and this is the only thing that
+     * opens one — `media` becomes grantable while this is raised and refused
+     * again the moment it drops. It is a bit rather than a request because the
+     * main process cannot otherwise know a button was pressed: without it the
+     * choice is a standing grant or no microphone at all.
+     *
+     * Raised immediately before `getUserMedia` and lowered as soon as capture
+     * ends, so the window it opens is as short as the gesture. Note Chromium's
+     * `media` covers camera and screen capture too — the narrowness here comes
+     * from how briefly the flag is up, not from the permission being specific.
+     */
+    setIntent: (wanted) => ipcRenderer.send('tails:voice-intent', wanted === true),
+  },
+
   /**
    * The always-on-top pet.
    *
@@ -41,6 +59,22 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
      */
     place: (x, y, holding) => ipcRenderer.send('tails:desktop-pet', { action: 'place', x, y, holding }),
     readState: () => ipcRenderer.invoke('tails:desktop-pet-state'),
+
+    /**
+     * A conversation finished while the user may not have been watching.
+     *
+     * Reported rather than decided: the renderer knows the turn ended and whose
+     * pet that chat has, and the shell knows whether the window is in front of
+     * anybody. The shell drops this on the floor when it is.
+     */
+    completed: (sessionId, title) => ipcRenderer.send('tails:pet-alert', {
+      action: 'completed', sessionId, title,
+    }),
+
+    /** The conversation on screen, so the pet can stop asking about it. */
+    viewing: (sessionId) => ipcRenderer.send('tails:pet-alert', {
+      action: 'viewing', sessionId,
+    }),
   },
 
   /** Fires when the pet's context menu asks for Settings. */
@@ -57,5 +91,10 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
    */
   onOpenPetDetails: (handler) => {
     ipcRenderer.on('tails:open-pet-details', (_event, petId) => handler(String(petId || '')));
+  },
+
+  /** Fires when the pet's notification bubble is clicked. Carries the chat to open. */
+  onOpenSession: (handler) => {
+    ipcRenderer.on('tails:open-session', (_event, sessionId) => handler(String(sessionId || '')));
   },
 });

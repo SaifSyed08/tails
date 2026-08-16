@@ -1,0 +1,47 @@
+import express from 'express';
+
+import { downloadModel, MODEL_MIB, readStatus } from '@/modules/voice/whisper.js';
+import { AppError } from '@/shared/utils.js';
+
+/**
+ * The non-streaming half of voice: can dictation run, and fetching the model.
+ *
+ * Audio never touches these routes — it goes over the `/voice` websocket. This
+ * exists so the microphone button can be disabled with a reason before anyone
+ * presses it, and so the one download this feature performs is a route someone
+ * had to call rather than something that happens on launch.
+ */
+export function createVoiceRouter(): express.Router {
+  const router = express.Router();
+
+  router.get('/status', (_req, res) => {
+    res.json(readStatus());
+  });
+
+  /**
+   * Fetches the model. Explicit, one-time, and never called on boot.
+   *
+   * The size is in the status payload so the UI can state it *before* this is
+   * called — the requirement is that a download is a visible decision, which
+   * means the number has to be on screen while the user is choosing.
+   */
+  router.post('/model', async (_req, res, next) => {
+    const status = readStatus();
+    if (status.modelPresent) {
+      res.json({ ok: true, alreadyPresent: true });
+      return;
+    }
+
+    try {
+      await downloadModel();
+      res.json({ ok: true, downloadedMiB: MODEL_MIB });
+    } catch (error) {
+      next(new AppError(
+        error instanceof Error ? error.message : 'Model download failed',
+        { code: 'VOICE_MODEL_DOWNLOAD_FAILED', statusCode: 502 },
+      ));
+    }
+  });
+
+  return router;
+}

@@ -35,8 +35,10 @@
  * which is the failure this whole module exists to avoid.
  */
 const MISHEARINGS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/\b(?:s(?:c?l|kl)(?:y|i|ei)te|sleight|splite)\s*(?=3\b|three\b)/gi, 'sqlite'],
-  [/\bbetter\s+(?:s(?:c?l|kl)(?:y|i|ei)te|sleight|splite)\b/gi, 'better-sqlite'],
+  // The package name has to be matched before the bare word, or the general
+  // rule rewrites the middle of it and leaves the hyphenation broken.
+  [/\bbetter[\s-]+(?:s(?:c?l|kl)(?:y|i|ei)te|sleight|splite)\s*(?:3|three)\b/gi, 'better-sqlite3'],
+  [/\b(?:s(?:c?l|kl)(?:y|i|ei)te|sleight|splite)\b/gi, 'sqlite'],
   [/\bexec\s*(?:pack|pak|path)\b/gi, 'execPath'],
   [/\bnode\s+pty\b/gi, 'node-pty'],
   [/\btype\s+check\b/gi, 'typecheck'],
@@ -79,10 +81,18 @@ function collapseRepeats(text: string): string {
 }
 
 /**
- * Applies retraction markers by dropping the clause they interrupt.
+ * Applies retraction markers by dropping what they retract.
  *
- * Only the text *before* the marker in the same clause is discarded; anything
- * after it is what the speaker settled on.
+ * The rule is one sentence, which is the point — a person can learn it and
+ * predict it: **a retraction deletes back to the start of the clause it sits
+ * in, and if it sits at the very start of its clause, it deletes the clause
+ * before it instead.** Whatever follows the marker is what the speaker settled
+ * on and always survives.
+ *
+ * That second half is what makes "open that one, I mean the other one" work.
+ * Without it the marker only ever cleared text inside its own clause, so the
+ * thing being retracted — sitting in the previous clause — was kept, and the
+ * output contradicted itself.
  */
 function applyRetractions(text: string): string {
   const parts = clauses(text);
@@ -100,11 +110,11 @@ function applyRetractions(text: string): string {
       continue;
     }
 
+    const before = part.slice(0, hit.at).replace(/[\s,.:;-]+$/, '');
     const after = part.slice(hit.at + hit.marker.length).replace(/^[\s,.:;-]+/, '');
-    // A marker with nothing after it retracts the clause before it instead —
-    // "open the file, scratch that" means the file part is gone.
+
+    if (!before) kept.pop();
     if (after) kept.push(after);
-    else kept.pop();
   }
 
   return kept.join(' ');

@@ -6,7 +6,6 @@ import remarkGfm from 'remark-gfm';
 import { CommandToken, readStyledCommand } from '@/components/chat/commandStyle';
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
 import { EmptyState, type ModelBadgeState } from '@/components/chat/EmptyState';
-import type { VoiceDictation } from '@/components/chat/voice-contract';
 import type { ModelChoice } from '@/types/chat';
 import { PetPicker } from '@/components/chat/PetPicker';
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
@@ -15,6 +14,7 @@ import { QuestionCard } from '@/components/chat/QuestionCard';
 import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
+import { useVoiceDictation } from '@/components/voice/useVoiceDictation';
 import { api } from '@/lib/api';
 import type { AttachmentPayload, ChatRow, MessageAttachment } from '@/types/chat';
 
@@ -177,24 +177,6 @@ type ChatViewProps = {
   onFirstMessage?: (content: string) => void;
 };
 
-/**
- * Dictation as it stands before the voice module is wired in.
- *
- * The whole of the swap is one line below: replace this with that module's
- * hook, and give it `composerRef.current?.append` as the place to put what it
- * hears. The button already reads its state from here — disabled, and saying
- * why — so nothing about the composer changes when it arrives.
- *
- * A module constant rather than an object literal in the render, so the
- * composer is not handed a new one on every keystroke.
- */
-const VOICE_NOT_WIRED: VoiceDictation = {
-  status: 'unavailable',
-  reason: 'Dictation is not available yet. It runs on this machine — nothing is uploaded — and needs a one-time 78 MB model download.',
-  start: () => {},
-  stop: () => {},
-};
-
 export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const {
     rows, busy, pendingPermissions, pendingPrompts, error, mode, changeMode,
@@ -204,6 +186,16 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true);
   const composerRef = useRef<ComposerHandle>(null);
+  /*
+    Dictated text is appended rather than returned through the contract, so it
+    lands in a draft someone may already have started typing. `cwd` goes with
+    it because the recogniser seeds its vocabulary from the conversation's
+    folder — that is what keeps filenames and identifiers intact.
+  */
+  const voice = useVoiceDictation({
+    onText: (text) => composerRef.current?.append(text),
+    cwd,
+  });
   const [petPickerOpen, setPetPickerOpen] = useState(false);
   const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);
   /*
@@ -446,7 +438,7 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
           fallbackModel={catalogue.current}
           turnSettings={turnSettings}
           onTurnSettingsChange={changeTurnSettings}
-          voice={VOICE_NOT_WIRED}
+          voice={voice}
         />
       </div>
 

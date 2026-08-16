@@ -67,6 +67,21 @@ contextBridge.exposeInMainWorld('petBridge', {
   onProbe: (handler) => ipcRenderer.on('pet:probe', (_event, point) => handler(point)),
 
   /**
+   * What he has to tell the user, or null for nothing.
+   *
+   * Pushed by the shell rather than polled: the page's own poll is 2.5 seconds
+   * wide, which is the wrong latency in both directions for "your work is
+   * finished" — late to appear, and still up after you have dealt with it.
+   */
+  onAlert: (handler) => ipcRenderer.on('pet:alert', (_event, alert) => handler(alert)),
+
+  /** The bubble was clicked: go to that conversation. */
+  openAlert: (sessionId) => ipcRenderer.send('pet:alert-open', { sessionId }),
+
+  /** The bubble's X: he stops asking about that one. */
+  dismissAlert: (sessionId) => ipcRenderer.send('pet:alert-dismiss', { sessionId }),
+
+  /**
    * Which drag mechanism is live, while three are being compared.
    *
    * Temporary, and worth removing once one is chosen — the page has no business

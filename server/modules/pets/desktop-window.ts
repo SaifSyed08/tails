@@ -34,6 +34,30 @@ const PET_HEIGHT = 128;
 /** Transparent room around the sprite, in CSS pixels. Mirrored in `pet-window.js`. */
 const PADDING = 12;
 
+/**
+ * Room above the sprite for a speech bubble, in CSS pixels.
+ *
+ * Only claimed while he has something to say — an empty window twice the height
+ * of the pet is a bigger click-through hole for no reason — so the window grows
+ * upward when a chat finishes and shrinks back when it is dealt with. Growth is
+ * anchored to his feet in the shell, so this appears above him without moving
+ * him.
+ */
+const BUBBLE_BAND = 44;
+
+/** The widest the bubble may be, in CSS pixels. Titles are ellipsised into it. */
+const BUBBLE_MAX_WIDTH = 210;
+
+/**
+ * How often he jumps while a chat is waiting, and for how long, in ms.
+ *
+ * A repeated gesture with a pause between reads as "over here"; a continuous
+ * one reads as broken. Roughly one hop every four seconds is about the cadence
+ * of someone tapping you on the shoulder rather than shaking you.
+ */
+const ALERT_JUMP_EVERY_MS = 4200;
+const ALERT_JUMP_MS = 1100;
+
 /** How far outside an opaque pixel still counts as "on the pet", in cell pixels. */
 const HIT_TOLERANCE = 6;
 
@@ -146,7 +170,78 @@ export function renderDesktopWindowHtml(): string {
 
   #pet.mirrored { transform: scaleX(-1); }
 
-  #stage, #pet, #pill { -webkit-app-region: no-drag; }
+  #stage, #pet, #pill, #bubble { -webkit-app-region: no-drag; }
+
+  /*
+   * What he holds up when a conversation has finished.
+   *
+   * A real control, not an overlay: the text is a button that opens the chat,
+   * because an alert whose only exit is "go and find the thing yourself" is a
+   * bad neighbour. The X beside it is for when you know and do not care yet.
+   *
+   * It lives above him in room the window only claims while this is up — see
+   * BUBBLE_BAND — and it is no-drag, so pressing it cannot start a window move.
+   */
+  #bubble {
+    position: absolute;
+    display: none;
+    align-items: stretch;
+    max-width: ${BUBBLE_MAX_WIDTH}px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    background: rgba(16, 16, 18, 0.96);
+    box-shadow: inset 0 0 0 1px rgba(148, 148, 156, 0.5), 0 6px 16px rgba(0, 0, 0, 0.35);
+    color: rgba(255, 255, 255, 0.96);
+    font: 500 12px/1.25 system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 160ms cubic-bezier(0.2, 0, 0, 1),
+                transform 160ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  #bubble.up { opacity: 1; transform: translateY(0); }
+
+  #bubble button {
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    padding: 7px 9px;
+  }
+
+  #bubble-open {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #bubble-more {
+    flex: 0 0 auto;
+    align-self: center;
+    margin-right: 2px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    font-size: 10px;
+  }
+
+  #bubble-close {
+    flex: 0 0 auto;
+    padding: 7px 8px 7px 4px;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  #bubble button:hover { background: rgba(255, 255, 255, 0.14); }
+  #bubble-close:hover { color: rgba(255, 255, 255, 0.95); }
+
+  @media (prefers-reduced-motion: reduce) {
+    #bubble { transition: none; }
+  }
 
   /*
    * The pill: a way into the pet's menu that you can see.
@@ -230,11 +325,15 @@ export function renderDesktopWindowHtml(): string {
 </style>
 </head>
 <body>
-<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
+<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="bubble"><button id="bubble-open" type="button"></button><span id="bubble-more" hidden></span><button id="bubble-close" type="button" aria-label="Dismiss">×</button></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
 <script type="module" nonce="${nonce}">
 const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
 const PADDING = ${PADDING};
+const BUBBLE_BAND = ${BUBBLE_BAND};
+const BUBBLE_MAX_WIDTH = ${BUBBLE_MAX_WIDTH};
+const ALERT_JUMP_EVERY_MS = ${ALERT_JUMP_EVERY_MS};
+const ALERT_JUMP_MS = ${ALERT_JUMP_MS};
 const HIT_TOLERANCE = ${HIT_TOLERANCE};
 const HANDLE_RIM = ${HANDLE_RIM};
 const ACTIVE_RATE = ${ACTIVE_RATE};
