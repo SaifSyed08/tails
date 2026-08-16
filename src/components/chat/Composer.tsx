@@ -890,13 +890,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           <span className="opacity-50">shift + tab</span>
         </button>
 
-        <ModelPicker
-          models={models}
-          fallback={fallbackModel}
-          settings={turnSettings}
-          onChange={onTurnSettingsChange}
-        />
-
         {/* A textarea cannot style a run of its own text, so the command the
             draft is carrying is shown beside it rather than inside it — which
             also survives the user scrolling the input. */}
@@ -913,6 +906,23 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             </span>
           </span>
         ) : null}
+
+        {/*
+          Right-aligned, and last in the row so the margin does the work rather
+          than a spacer element. It sits opposite the permission mode on
+          purpose: both answer "how will this turn run", and putting them at
+          either end keeps the middle free for the armed-command chip, which
+          appears and disappears as you type and would otherwise shove them
+          both sideways mid-sentence.
+        */}
+        <div className="ml-auto">
+          <ModelPicker
+            models={models}
+            fallback={fallbackModel}
+            settings={turnSettings}
+            onChange={onTurnSettingsChange}
+          />
+        </div>
       </div>
     </div>
   );
