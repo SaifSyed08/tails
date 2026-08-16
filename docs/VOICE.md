@@ -48,9 +48,9 @@ research is how much is missing.
 
 | Engine | Disk (English) | Licence (code / weights) | Windows Node path | Verdict |
 |---|---|---|---|---|
-| **whisper.cpp** `base.en` q5_1 | **57.0 MiB** | MIT / MIT | `@fugood/whisper.node` (prebuilt) or bundled `whisper-cli` | **Recommended** |
-| whisper.cpp `base.en` q8_0 | 78.0 MiB | MIT / MIT | same | Quality step up |
-| whisper.cpp `small.en` q5_1 | 181.3 MiB | MIT / MIT | same | Too slow on CPU for dictation |
+| **whisper.cpp** `base.en` **q8_0** | **78.0 MiB** | MIT / MIT | `@fugood/whisper.node` (prebuilt) or bundled `whisper-cli` | **Recommended** — 522 ms, and faster *and* more accurate than q5_1 |
+| whisper.cpp `base.en` q5_1 | 56.9 MiB | MIT / MIT | same | Smaller, but slower and worse — see benchmark |
+| whisper.cpp `small.en` q5_1 | 181.3 MiB | MIT / MIT | same | 2191 ms — over the bar, no accuracy gain |
 | **sherpa-onnx** (Whisper/Moonshine) | 118 MiB (moonshine-tiny int8) | Apache-2.0 / varies | `sherpa-onnx-node` + `sherpa-onnx-win-x64` (prebuilt, ~23 MB) | **Viable fallback** |
 | Moonshine tiny / base | 118 MiB / 272 MiB | MIT / MIT | via sherpa-onnx or `@huggingface/transformers` | Promising, unverified |
 | Vosk `small-en-us-0.15` | 40 MiB | Apache-2.0 / Apache-2.0 | **npm binding dead since 2022-05** | Rejected |
@@ -73,11 +73,16 @@ WER of 12.1 is *worse* than the large model it distils. Turbo cuts the decoder
 from 32 layers to 4, and community reports describe more hallucination on short
 or noisy clips. Both would be a bet against the only data available.
 
-### The latency number does not exist
+### The latency number did not exist, so it was measured
 
-This is the honest and slightly uncomfortable centre of the research. **No
-source anywhere gives a trustworthy real-time factor for any of these engines
-on a modern CPU-only Windows laptop.** What exists:
+**No source anywhere gives a trustworthy real-time factor for any of these
+engines on a modern CPU-only Windows laptop.** That gap is why phase 2 began
+with a benchmark rather than with code — the results are in
+[Benchmark](#benchmark-measured-on-this-machine) below, and they supersede the
+estimates in this section. Kept here because the absence is itself a finding:
+anyone else evaluating on-device STT will hit the same wall.
+
+What was published:
 
 - whisper.cpp [issue #89](https://github.com/ggml-org/whisper.cpp/issues/89),
   crowdsourced, **encoder forward pass only** — not full pipeline: Ryzen 9
@@ -102,8 +107,130 @@ Every plausible target machine has AVX2.
 **Bounding the problem rather than guessing it:** `base` encoder is ~421 ms on a
 fast desktop core and the full pipeline on a fifteen-year-old CPU is roughly
 real-time. A 6-second utterance on a current laptop should land somewhere
-between a few hundred milliseconds and two seconds. That is a range, not a
-measurement, and the first thing phase 2 should do is replace it with one.
+between a few hundred milliseconds and two seconds.
+
+That estimate turned out to be correct, at the fast end of the range. The
+measurement follows.
+
+---
+
+## Benchmark, measured on this machine
+
+**Machine.** AMD Ryzen 7 8845HS (Zen 4, 8 cores / 16 threads, AVX2 + AVX-512 +
+VNNI), 15.3 GB RAM, Windows 11, **on AC power**, CPU-only — whisper.cpp reported
+`no GPU found`. whisper.cpp **v1.9.2** (2026-08-04), the plain `whisper-bin-x64`
+release build.
+
+**Corpus.** Eleven utterances written as realistic dictation into *this* app's
+composer — commands, identifiers, file paths, spoken digits: `npm run
+typecheck`, `better sqlite three`, `src components petstage ChatPet tsx`, `four
+three one seven`. Eight short (3.6–5.5 s) and three long (13.0–14.2 s).
+Synthesised at 16 kHz mono 16-bit via Windows TTS, three repetitions each, 264
+runs total. Corpus and harness are reproducible; see the caveat below.
+
+### Latency
+
+Inference only — the cost with the model already resident, which is what a warm
+integration pays. Milliseconds.
+
+| Model | Disk | 4 threads short | 8 threads short | 8 threads p95 | 8 threads long |
+|---|---:|---:|---:|---:|---:|
+| `tiny.en` q5_1 | 30.7 MiB | 433 | 322 | 336 | 533 |
+| `base.en` q5_1 | 56.9 MiB | 854 | 630 | 702 | 919 |
+| **`base.en` q8_0** | **78.0 MiB** | **723** | **522** | **549** | **796** |
+| `small.en` q5_1 | 181.3 MiB | 2996 | 2191 | 2331 | 2695 |
+
+Model load, paid once when warm: 60 / 91 / 117 / 236 ms respectively. Cold
+subprocess wall-clock for `base.en` q8_0 at 8 threads — process spawn to exit,
+load included — is 728 ms short and 1003 ms long.
+
+Four things fall out of this:
+
+**`base.en` q8_0 beats q5_1 on both speed *and* accuracy.** 522 ms against
+630 ms, and a lower error rate, for 21 MiB more disk. The intuition that the
+smaller quantization must be faster is wrong here: q8_0 has the better SIMD
+path on AVX2/AVX-512. **This changes the recommendation** — q8_0 is the pick,
+and the extra 21 MiB is bought back several times over.
+
+**Latency is roughly flat under 30 seconds.** A 14-second utterance costs 796 ms
+against 522 ms for a 4-second one — not 3.5× more. Whisper pads every input to a
+30-second window, so the encoder cost is fixed and only decoding scales. Long
+dictation is cheap; the pricing is per-utterance, not per-second.
+
+**The 2-second bar is cleared with 3–4× headroom, and it holds under
+contention.** Even at 4 threads — the case where the machine is busy doing
+something else — q8_0 is 723 ms short and 1051 ms long.
+
+**`small.en` is correctly excluded.** 2191 ms at 8 threads is over the bar, and
+it buys no accuracy (below). OpenBLAS was also tried: 494 ms against 522 ms, a
+~5% gain for +12 MB of DLLs. Not worth it — **ship the 7.8 MB plain build.**
+
+### Accuracy, which is the more interesting result
+
+Raw word error rate over the technical corpus was **13.5–15.1%, and essentially
+flat across every model size** — `tiny.en` scored the same as `small.en`. A flat
+curve across a 6× parameter range is the signature of errors that are not
+acoustic, and reading the transcripts confirms it. The 28 "errors" on `base.en`
+split three ways:
+
+**Most are formatting, and most of those are improvements.** Asked for "line
+forty two" it wrote `line42`; "four three one seven" became `4317`; "sixteen
+kilohertz" became `16 kHz`; "composer component" became "Composer component".
+Scored as errors against a literal reference, these are what you actually want
+in a composer.
+
+**Some are compound splitting.** `typecheck` → "type check", `websocket` →
+"web socket". Real, trivial, and fixable.
+
+**A few are genuine mishearings, and they are all project nouns.** `plain node`
+→ "play note". `sqlite` → "Sleight". `silero` → "silro". `petstage ChatPet tsx`
+→ "Pet's Tage Chat Pet TSX". This is precisely the failure predicted for a
+caption-trained model in a coding tool — and it is the only category that
+matters.
+
+**True error rate, counting only genuine mishearings, is roughly 3–4%.**
+
+### Vocabulary seeding fixes most of what is left
+
+Whisper's `initial_prompt` conditions the decoder on supplied text. Seeding it
+with about forty words of project vocabulary, at a cost of **~50 ms (+9%)**:
+
+| | bare | seeded with project vocabulary |
+|---|---|---|
+| s1 | "npm run **type check**" | "npm run **typecheck**" |
+| s4 | "spawn plain **note**" | "**ensureServer** spawn plain **node** … **execPath**" |
+| l1 | "**Pet's Tage Chat Pet TSX**" | "**petstage, ChatPet.tsx**" |
+| l3 | "gated by **silro** VAD" | "gated by **Silero** VAD" |
+| s6 | "better **Sleight** 3" | "better **Sclyte3**" — still wrong |
+
+Four of five fixed, including every bad one. On `s4` the seeded output is
+*better than the reference*: it produced the camelCase identifiers
+`ensureServer` and `execPath` from speech that did not contain the casing.
+
+This is the design consequence: **the composer should seed the decoder from
+context it already has** — the session's `cwd` and the filenames in it, plus a
+static list of the project's own vocabulary. This app is unusually well placed
+to do that, and it costs 50 ms.
+
+`sqlite` resists seeding even though `better-sqlite3` was in the prompt, which
+is likely an artifact of how the synthesizer pronounces it rather than a model
+limitation.
+
+### What the benchmark does not prove
+
+**The audio is synthesised, not human.** Latency is unaffected by this — compute
+is driven by audio duration, and every clip is real 16 kHz PCM. Accuracy is
+optimistic: TTS has no room noise, no microphone colouration, no accent, no
+disfluency, and even pace. The *identifier-mangling* failure mode is a language
+prior rather than an acoustic one, so it transfers, but the absolute error rate
+on a real voice in a real room will be worse. The 3–4× latency headroom is large
+enough to absorb a worse model later if the real-voice error rate demands it;
+the accuracy number should be re-measured with an actual recording during
+implementation.
+
+Also unmeasured: sustained thermal behaviour, and battery. This ran on AC. A
+laptop on battery with a conservative power profile will be slower, and that is
+the case most likely to approach the bar.
 
 ### Is that fast enough to beat typing?
 
@@ -418,22 +545,30 @@ Concretely:
    held or toggled. VAD provides endpointing so the user does not have to press
    stop precisely.
 
-3. **whisper.cpp `base.en` q5_1 (57.0 MiB)** as the engine, reached through
-   `@fugood/whisper.node` — MIT end to end, real Windows x64 prebuilts, no
-   toolchain on install. `sherpa-onnx-node` is the fallback if that addon
-   disappoints, and a bundled `whisper-cli` subprocess is the fallback if native
-   addons prove hostile at all. All three sit behind one interface in
-   `server/modules/voice/`, so the choice is reversible.
+3. **whisper.cpp `base.en` q8_0 (78.0 MiB)** as the engine — **revised from
+   q5_1 by the benchmark**, which found q8_0 both faster (522 ms vs 630 ms) and
+   more accurate for 21 MiB more disk. Reached through `@fugood/whisper.node` —
+   MIT end to end, real Windows x64 prebuilts, no toolchain on install.
+   `sherpa-onnx-node` is the fallback if that addon disappoints, and a bundled
+   `whisper-cli` subprocess is the fallback if native addons prove hostile at
+   all — measured at 1003 ms wall-clock even cold, so that escape hatch is
+   affordable rather than theoretical. All three sit behind one interface in
+   `server/modules/voice/`, so the choice stays reversible.
 
-4. **The model is a deliberate, visible, one-time download of 57 MiB**, stated
+4. **The model is a deliberate, visible, one-time download of 78 MiB**, stated
    in the UI before it happens, stored under `~/.tails` next to the database.
    Never on launch, never implicit.
 
-5. **Correction is tiers 1 and 2 only.** Whisper's own normalisation, plus a
+5. **Seed the decoder with project vocabulary.** `initial_prompt` built from the
+   session `cwd`, the filenames in it, and a static project word list. ~50 ms,
+   and it is the difference between "Pet's Tage Chat Pet TSX" and
+   "petstage, ChatPet.tsx".
+
+6. **Correction is tiers 1 and 2 only.** Whisper's own normalisation, plus a
    documented deterministic pass. The transcript never leaves the machine, and
    there is no cloud fallback to accidentally leave enabled.
 
-6. **The wake word ships as a documented "not built" state**, replacing the
+7. **The wake word ships as a documented "not built" state**, replacing the
    current one — not because it is hard, but because every route to it either
    breaks the licence (openWakeWord's CC-BY-NC-SA weights), breaks the no-network
    rule (Porcupine's AccessKey validation), or cannot deliver the configurable
@@ -442,22 +577,28 @@ Concretely:
 
 ### The main risk
 
-**The latency number is unverified and it is the number the feature lives or
-dies on.** Nobody publishes a real-time factor for any of these engines on a
-CPU-only Windows laptop, and this document's estimate of "a few hundred
-milliseconds to two seconds for a 6-second utterance" is bracketed by an
-encoder-only measurement on a desktop Ryzen and a full-pipeline measurement on a
-2010 CPU with no AVX. Neither is the target machine.
+**The latency risk is retired.** It was the number the feature lived or died on,
+it was unverified, and it has now been measured on the target machine with 3–4×
+headroom against the bar — including at 4 threads, and including the cold
+subprocess path. Nothing in the remaining plan is gated on it.
 
-The mitigation is cheap and should be the first task of phase 2: a
-throwaway benchmark of `base.en` q5_1 and q8_0 on this actual machine against a
-handful of real 3–8 second utterances, before a line of feature code is written.
-If `base.en` lands above roughly two seconds, the honest answer is to ship
-nothing rather than ship dictation that loses to the keyboard.
+**The remaining risk is accuracy on a real voice**, and it is genuinely open.
+Every accuracy figure above comes from synthesised speech, which has no room
+noise, no accent and no disfluency. The category of error that matters —
+mangled identifiers and project nouns — is a language prior rather than an
+acoustic one and so should transfer, and vocabulary seeding demonstrably fixes
+most of it. But the absolute rate on a real microphone in a real room will be
+worse than 3–4%, and by an unknown factor.
 
-The secondary risk is accuracy rather than speed. `base.en` is a small model,
-and this is a *coding* app — it will be asked to transcribe identifiers, flags
-and file paths, which is close to the worst case for a model trained on
-podcasts and captions. Whisper's `initial_prompt` can be seeded with project
-vocabulary to help, and the benchmark above should include realistic technical
-phrasing rather than prose, or it will measure the wrong thing.
+The mitigation is that the latency headroom is large enough to spend. If a real
+recording shows the error rate is too high, `small.en` q5_1 is available at
+2191 ms — over the 2-second bar, but the bar was set for a model that turned out
+to be four times faster than needed, and a slower-but-right transcript may be
+the better trade. That is a decision to make with a real recording in hand, not
+before. **The first task of implementation is to record a dozen real utterances
+and re-run the accuracy half of this benchmark.**
+
+The second risk is the one this document cannot resolve from the outside:
+dictation that needs correcting is worse than typing, and whether a 3–4% error
+rate on identifiers crosses that line is a judgement about how it feels to use,
+not a number.

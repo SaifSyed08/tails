@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { CommandToken, readStyledCommand } from '@/components/chat/commandStyle';
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
 import { EmptyState, type ModelBadgeState } from '@/components/chat/EmptyState';
+import type { VoiceDictation } from '@/components/chat/voice-contract';
 import type { ModelChoice } from '@/types/chat';
 import { PetPicker } from '@/components/chat/PetPicker';
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
@@ -174,6 +175,24 @@ type ChatViewProps = {
   sessionId: string | null;
   cwd: string;
   onFirstMessage?: (content: string) => void;
+};
+
+/**
+ * Dictation as it stands before the voice module is wired in.
+ *
+ * The whole of the swap is one line below: replace this with that module's
+ * hook, and give it `composerRef.current?.append` as the place to put what it
+ * hears. The button already reads its state from here — disabled, and saying
+ * why — so nothing about the composer changes when it arrives.
+ *
+ * A module constant rather than an object literal in the render, so the
+ * composer is not handed a new one on every keystroke.
+ */
+const VOICE_NOT_WIRED: VoiceDictation = {
+  status: 'unavailable',
+  reason: 'Dictation is not available yet. It runs on this machine — nothing is uploaded — and needs a one-time 78 MB model download.',
+  start: () => {},
+  stop: () => {},
 };
 
 export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
@@ -427,6 +446,7 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
           fallbackModel={catalogue.current}
           turnSettings={turnSettings}
           onTurnSettingsChange={changeTurnSettings}
+          voice={VOICE_NOT_WIRED}
         />
       </div>
 

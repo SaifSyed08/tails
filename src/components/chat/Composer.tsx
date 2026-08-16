@@ -1,4 +1,17 @@
-import { ArrowUp, ImagePlus, Mic, Paperclip, PawPrint, Plus, Sparkles, Square, Wand2, X } from 'lucide-react';
+import {
+  ArrowUp,
+  Ear,
+  ImagePlus,
+  Loader2,
+  Mic,
+  Paperclip,
+  PawPrint,
+  Plus,
+  Sparkles,
+  Square,
+  Wand2,
+  X,
+} from 'lucide-react';
 import {
   forwardRef,
   useCallback,
@@ -10,6 +23,7 @@ import {
 } from 'react';
 
 import { ModelPicker } from '@/components/chat/ModelPicker';
+import { describeVoiceControl, type VoiceDictation } from '@/components/chat/voice-contract';
 import {
   CommandToken,
   readStyledCommand,
@@ -17,6 +31,7 @@ import {
 } from '@/components/chat/commandStyle';
 import { api, type SlashCommand } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useReducedMotion } from '@/shared/ui/Motion';
 import type {
   AttachmentPayload,
   ModelChoice,
@@ -106,18 +121,26 @@ type ComposerMenuProps = {
  */
 type NotYetEntry = { title: string; detail: string };
 
-const NOT_YET: Record<'generate' | 'voice', NotYetEntry> = {
+const NOT_YET: Record<'generate' | 'dictation' | 'wakeWord', NotYetEntry> = {
   generate: {
     title: 'Generate',
     detail: 'The entry point is here, but nothing is wired behind it yet — no generators have been defined. Ask for one and it lands here.',
   },
-  voice: {
-    // The ask was explicitly local-only. Chromium's speech recognition ships
-    // the audio to a cloud service, so wiring it up would quietly break the
-    // one requirement the feature had; on-device recognition needs a model
-    // this app does not carry. Saying so beats a button that leaks audio.
-    title: 'Voice mode',
-    detail: 'Not built. Speaking to T.A.I.L.S. should never send your audio anywhere, and the browser’s built-in speech recognition uploads it — so this waits for on-device recognition rather than shipping something that leaks.',
+  dictation: {
+    // The old copy blamed the browser's speech API for uploading audio. That
+    // stopped being the reason the day on-device transcription was benchmarked
+    // as workable, and a blocker that no longer exists is just a wrong answer.
+    title: 'Dictation',
+    detail: 'Dictation runs on-device — nothing is uploaded. It needs a one-time 78 MB model download first. The microphone button beside the send arrow is where it lives.',
+  },
+  wakeWord: {
+    /*
+      Not a to-do. Both usable engines are ruled out for reasons that will not
+      change by working harder at them, and an entry reading "soon" would imply
+      otherwise — so this says unavailable, and says why.
+    */
+    title: 'Wake word',
+    detail: '"Hey T.A.I.L.S." is not planned. The two usable engines are out: openWakeWord’s pretrained weights are non-commercial, which an MIT app cannot ship, and Porcupine now validates over the network and ended its free tier. A wake name you could choose yourself needs a classifier trained per phrase.',
   },
 };
 
@@ -325,12 +348,24 @@ function ComposerMenu({
               <button
                 type="button"
                 role="menuitem"
-                onClick={() => setNotYet(NOT_YET.voice)}
+                onClick={() => setNotYet(NOT_YET.dictation)}
                 className={itemClass}
               >
                 <Mic className="size-4 text-muted-foreground" aria-hidden="true" />
-                Voice mode
-                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">soon</span>
+                Dictation
+                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">on-device</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setNotYet(NOT_YET.wakeWord)}
+                className={itemClass}
+              >
+                <Ear className="size-4 text-muted-foreground" aria-hidden="true" />
+                Wake word
+                {/* Not "soon": this one is not coming, and the label should
+                    not promise otherwise. */}
+                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">unavailable</span>
               </button>
             </>
           )}
@@ -366,6 +401,14 @@ type ComposerProps = {
   onTurnSettingsChange: (settings: TurnSettings) => void;
   /** The conversation's assigned pet, shown against the menu entry. */
   petName?: string | null;
+  /**
+   * The dictation control, owned by the voice module.
+   *
+   * Absent means unavailable, which is the honest default until that module is
+   * wired: the button renders disabled and explains itself rather than
+   * pretending to work.
+   */
+  voice?: VoiceDictation;
 };
 
 /**
@@ -378,12 +421,22 @@ type ComposerProps = {
 export type ComposerHandle = {
   /** Replaces the draft and puts the caret in it. */
   fill: (text: string) => void;
+  /**
+   * Adds to the draft rather than replacing it.
+   *
+   * This is how dictated text arrives: someone may have typed half a sentence
+   * before reaching for the microphone, and losing it would be the worst
+   * possible response to speaking.
+   */
+  append: (text: string) => void;
 };
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer({
   sessionId, busy, mode, onModeChange, onSend, onAbort, suggestion, onSuggestionDismiss,
-  onAssignPet, petName, models, fallbackModel, turnSettings, onTurnSettingsChange,
+  onAssignPet, petName, models, fallbackModel, turnSettings, onTurnSettingsChange, voice,
 }, ref) {
+  const reduced = useReducedMotion();
+  const voiceControl = describeVoiceControl(voice);
   const [draft, setDraft] = useState('');
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [paletteIndex, setPaletteIndex] = useState(0);
@@ -415,6 +468,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   useImperativeHandle(ref, () => ({
     fill: (text: string) => {
       setDraft(text);
+      textareaRef.current?.focus();
+    },
+    append: (text: string) => {
+      const addition = text.trim();
+      if (!addition) return;
+      // Spaced against whatever is already there, unless the draft is empty or
+      // already ends in whitespace.
+      setDraft((current) => (current && !/\s$/.test(current) ? `${current} ${addition}` : `${current}${addition}`));
       textareaRef.current?.focus();
     },
   }), []);
@@ -742,6 +803,45 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             </>
           ) : null}
         </div>
+
+        {/*
+          The microphone, and the only honest indicator that this app is
+          listening. State is carried by shape as well as by colour and motion
+          — the icon changes, the accessible name changes — because an
+          indicator that exists only as a pulse is invisible to anyone who has
+          motion turned off, and this is the one control where "is it on?" must
+          never be a guess.
+        */}
+        <button
+          type="button"
+          onClick={() => (voiceControl.pressed ? voice?.stop() : voice?.start())}
+          disabled={voiceControl.disabled}
+          aria-label={voiceControl.label}
+          aria-pressed={voiceControl.pressed}
+          aria-busy={voiceControl.status === 'transcribing'}
+          title={voiceControl.title}
+          className={cn(
+            'relative rounded-full p-2 transition-colors duration-quick',
+            voiceControl.status === 'listening'
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+            voiceControl.disabled && 'opacity-40 hover:bg-transparent hover:text-muted-foreground',
+          )}
+        >
+          {voiceControl.status === 'listening' && !reduced ? (
+            // The same ping the thinking indicator uses, so "something is
+            // live" reads the same way everywhere in the app.
+            <span
+              className="absolute inset-0 animate-ping rounded-full bg-primary opacity-60"
+              aria-hidden="true"
+            />
+          ) : null}
+          {voiceControl.status === 'transcribing' ? (
+            <Loader2 className={cn('size-4', !reduced && 'animate-spin')} />
+          ) : (
+            <Mic className="relative size-4" />
+          )}
+        </button>
 
         {busy ? (
           <button
