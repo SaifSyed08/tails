@@ -67,3 +67,38 @@ test('pets that tie fall back to their name, so the strip never reshuffles', () 
   const again = orderForCarousel([pet('b'), pet('c'), pet('a')]);
   assert.deepEqual(again.map((entry) => entry.definition.id), ['a', 'b', 'c']);
 });
+
+/**
+ * Which pet the marketplace's top card shows.
+ *
+ * "Most recently activated" is a fact about history, not a liveness check.
+ * Taking a pet off screen must leave it in the card: promoting a different pet
+ * the moment you deactivate one makes the card jump to a stranger for no reason
+ * the user can see.
+ */
+test('the spotlight follows the most recently activated pet, deactivated or not', () => {
+  const pets = [
+    pet('idle-one', { lastUsedAt: '2026-08-01T10:00:00.000Z' }),
+    pet('the-one', { lastUsedAt: '2026-08-15T10:00:00.000Z' }),
+    pet('never'),
+  ];
+
+  // The rule the page applies: the largest `lastUsedAt`, regardless of `active`.
+  const spotlight = (candidates: InstalledPet[]): InstalledPet | null => {
+    const everUsed = candidates.filter((entry) => entry.lastUsedAt !== null);
+    if (everUsed.length === 0) return candidates[0] ?? null;
+    return everUsed.reduce((newest, entry) => (
+      (entry.lastUsedAt ?? '') > (newest.lastUsedAt ?? '') ? entry : newest
+    ));
+  };
+
+  assert.equal(spotlight(pets)?.definition.id, 'the-one');
+
+  // Deactivating it changes nothing: `active` is not part of the rule.
+  const deactivated = pets.map((entry) => ({ ...entry, active: false }));
+  assert.equal(spotlight(deactivated)?.definition.id, 'the-one');
+
+  // And a library nobody has ever used still shows something.
+  assert.equal(spotlight([pet('a'), pet('b')])?.definition.id, 'a');
+  assert.equal(spotlight([]), null);
+});

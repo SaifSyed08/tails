@@ -306,10 +306,27 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
     codex: countBySource(pets, 'codex'),
   };
 
-  // The window display ignores the filters: it shows whoever is on screen, or
-  // the first pet as the obvious way to put someone there. Searching should not
-  // empty the shop window.
-  const spotlight = pets.find((pet) => pet.active) ?? pets[0] ?? null;
+  /**
+   * The window display: the pet most recently *activated*.
+   *
+   * History, not liveness. Taking Sonic off screen must leave Sonic in the
+   * card — promoting some other pet the moment you deactivate one makes the
+   * card jump to a stranger for no reason the user can see. `lastUsedAt` is
+   * written on activation, so the most recent one is simply the largest, and it
+   * keeps its place afterwards.
+   *
+   * The filters do not reach here either: searching should not empty the shop
+   * window.
+   */
+  const spotlight = useMemo(() => {
+    const everUsed = pets.filter((pet) => pet.lastUsedAt !== null);
+    if (everUsed.length > 0) {
+      return everUsed.reduce((newest, pet) => (
+        (pet.lastUsedAt ?? '') > (newest.lastUsedAt ?? '') ? pet : newest
+      ));
+    }
+    return pets.find((pet) => pet.active) ?? pets[0] ?? null;
+  }, [pets]);
   const detailPet = detailId ? pets.find((pet) => pet.definition.id === detailId) ?? null : null;
 
   const filtersActive = query !== '' || source !== 'all' || kind !== null;

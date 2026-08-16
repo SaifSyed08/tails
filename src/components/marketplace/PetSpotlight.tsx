@@ -1,4 +1,5 @@
 import { Check, Info, Sparkles } from 'lucide-react';
+import { useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -29,15 +30,26 @@ type PetSpotlightProps = {
 };
 
 export function PetSpotlight({ pet, counts, busy, onSetActive, onOpen }: PetSpotlightProps) {
+  const [hovered, setHovered] = useState(false);
   const { definition } = pet;
 
   return (
     <section
       data-tails-part="card"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className={cn('overflow-hidden', busy && 'pointer-events-none opacity-60')}
     >
       <div className="grid gap-0 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-        <PetStage pet={pet} height={168} className="h-56 w-full md:h-full md:min-h-[15rem]" />
+        {/* The same reactions as the cards: a wave instead of the idle loop, the
+            glow and grid behind, and the lean toward the pointer. */}
+        <PetStage
+          pet={pet}
+          height={168}
+          state={hovered ? 'waving' : 'idle'}
+          glow={hovered}
+          className="h-56 w-full md:h-full md:min-h-[15rem]"
+        />
 
         <div className="flex min-w-0 flex-col justify-center gap-3 p-5">
           <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -82,7 +94,7 @@ export function PetSpotlight({ pet, counts, busy, onSetActive, onOpen }: PetSpot
                   : 'bg-primary text-primary-foreground',
               )}
             >
-              {pet.active ? 'Stand down' : `Put ${definition.displayName} on screen`}
+              {pet.active ? 'Take off screen' : `Put ${definition.displayName} on screen`}
             </button>
             <button
               type="button"

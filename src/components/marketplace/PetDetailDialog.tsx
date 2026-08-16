@@ -256,7 +256,7 @@ export function PetDetailDialog({
                 : 'bg-primary text-primary-foreground',
             )}
           >
-            {pet.active ? 'Stand down' : 'Set active'}
+            {pet.active ? 'Take off screen' : 'Set active'}
           </button>
 
           <button

@@ -32,6 +32,16 @@ import { closeDragLog, logDrag, openDragLog } from './pet-log.js';
 /** Fallback size before the page reports the sprite's real box. */
 const DEFAULT_SIZE = { width: 160, height: 180 };
 
+/**
+ * The largest this window may ever be.
+ *
+ * Generous next to the ~143x152 a pet actually needs, and far below the sizes a
+ * scaling bug produces. Its job is to keep a geometry fault visible and
+ * harmless instead of leaving a screen-sized transparent window over the
+ * desktop.
+ */
+const MAX_WINDOW = { width: 320, height: 360 };
+
 /** Gap between drag frames. One frame at 60Hz, measured from the end of the last. */
 const DRAG_INTERVAL_MS = 16;
 
@@ -170,10 +180,21 @@ function positionNow() {
   return trackedPosition;
 }
 
-/** The window's size, which the OS *is* authoritative about — we never set it by hand. */
+/**
+ * The size of the area the page draws into.
+ *
+ * Content size, not window size. On Windows a frameless transparent window
+ * still carries an invisible frame — here 20px across and 32px down — so
+ * `setSize(143, 152)` produces `getBounds() -> 163x184`. Comparing the page's
+ * measurement against the *window* size therefore never matched, and the resize
+ * handler re-sized and re-positioned the pet on every single poll, forever.
+ * Content size is what the page is talking about, so it is what we ask for and
+ * what we compare.
+ */
 function sizeNow() {
-  const bounds = isAlive() ? petWindow.getBounds() : { width: DEFAULT_SIZE.width, height: DEFAULT_SIZE.height };
-  return { width: bounds.width, height: bounds.height };
+  if (!isAlive()) return { width: DEFAULT_SIZE.width, height: DEFAULT_SIZE.height };
+  const [width, height] = petWindow.getContentSize();
+  return { width, height };
 }
 
 /** Whether the pet should be on screen right now. */
@@ -571,11 +592,19 @@ function installIpc() {
     // Nothing to do, and doing it anyway would matter: this reads the position
     // back and writes it again, so an unchanged size still nudged the window
     // every time the page polled — and mid-drag it fought the drag loop.
+    // The pet is one sprite in a small box. A request several times that size
+    // is not a resize, it is a symptom — the zoom bug produced exactly that for
+    // four sessions — so it is refused and recorded rather than applied.
+    if (width > MAX_WINDOW.width || height > MAX_WINDOW.height) {
+      logDrag('size-refused', { width, height, limit: MAX_WINDOW });
+      return;
+    }
+
     const size = sizeNow();
     if (dragTimer || (size.width === width && size.height === height)) return;
 
     const at = positionNow();
-    petWindow.setSize(width, height);
+    petWindow.setContentSize(width, height);
     // Re-clamped, because a window that just grew may now hang off the screen.
     const clamped = clampToDisplay(at.x, at.y, width, height);
     moveTo(clamped.x, clamped.y);
@@ -622,6 +651,9 @@ export function createPetWindow(options) {
 
   petWindow = new BrowserWindow({
     ...DEFAULT_SIZE,
+    // The numbers above and everything the page reports describe the drawing
+    // area, not the invisible frame Windows wraps around it.
+    useContentSize: true,
     x: start.x,
     y: start.y,
     show: false,
@@ -644,7 +676,36 @@ export function createPetWindow(options) {
       contextIsolation: true,
       sandbox: true,
       backgroundThrottling: false,
+      /**
+       * Its own session, purely to escape the app's zoom.
+       *
+       * Chromium stores zoom **per origin**, and in a packaged build this page
+       * is served from the same origin as the app itself. So every Ctrl+= the
+       * user pressed in the window silently scaled this page too: its CSS
+       * pixels grew, the size it reported stopped matching the window it needs,
+       * and a 143x152 pet became 163, then 401, then 671 pixels of transparent
+       * window with a sprite stranded at the bottom of it. Everything that
+       * followed — the huge grab offsets, the release clamp shoving the pet
+       * down, being unable to pick it up — came from that.
+       *
+       * A separate partition gives this window its own zoom, which is always 1.
+       */
+      partition: 'persist:tails-pet',
+      zoomFactor: 1,
     },
+  });
+
+  /**
+   * And held at 1, per load.
+   *
+   * The partition is what stops the app's zoom reaching this page; this is the
+   * belt to that pair of braces, because a zoom applied here by any other route
+   * breaks the same geometry in the same way. The pet is a fixed-size sprite —
+   * there is no reading to make larger.
+   */
+  petWindow.webContents.on('did-finish-load', () => {
+    petWindow?.webContents.setZoomLevel(0);
+    petWindow?.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
   });
 
   // Above full-screen applications, not merely above ordinary windows.
