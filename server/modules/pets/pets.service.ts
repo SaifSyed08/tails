@@ -896,11 +896,16 @@ export const petsService = {
    * user removed from their library should not reappear because a conversation
    * still points at it.
    */
-  resolveDisplayPet(sessionPetId?: string | null): {
+  resolveDisplayPet(sessionPetId?: string | null, sessionId?: string | null): {
     pet: InstalledPet | null;
     source: 'session' | 'global' | 'none';
   } {
-    const assigned = this.findPet(sessionPetId);
+    // A caller with only a conversation id gets the assignment looked up here,
+    // because the surface that needs this — the pet who walks out when you open
+    // a chat — knows which chat is open and nothing else about pets.
+    const assigned = this.findPet(
+      sessionPetId ?? (sessionId ? this.listAssignments()[sessionId] : null),
+    );
     if (assigned && !assigned.hidden) return { pet: assigned, source: 'session' };
 
     const active = this.findPet(petsRepository.getActivePetId());

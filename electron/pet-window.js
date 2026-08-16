@@ -1,7 +1,6 @@
-import { BrowserWindow, Menu, app, ipcMain, screen } from 'electron';
+import { BrowserWindow, Menu, ipcMain, screen } from 'electron';
 import path from 'node:path';
 
-import { closeDragLog, logDrag, openDragLog } from './pet-log.js';
 
 /**
  * The desktop pet.
@@ -109,7 +108,6 @@ let carrying = false;
 let carryFacing = null;
 let carryFrom = null;
 let settleTimer = null;
-let moveCount = 0;
 
 let interactive = false;
 let watchdogTimer = null;
@@ -165,7 +163,6 @@ function moveTo(x, y) {
   const [actualX, actualY] = petWindow.getPosition();
   if (Math.abs(actualX - next.x) > POSITION_TOLERANCE
     || Math.abs(actualY - next.y) > POSITION_TOLERANCE) {
-    logDrag('diverged', { wanted: next, actual: { x: actualX, y: actualY } });
     trackedPosition = { x: actualX, y: actualY };
   }
 }
@@ -264,7 +261,6 @@ function restorePosition(width, height) {
     });
 
     if (reachable) return clampToDisplay(x, y, width, height);
-    logDrag('stored-position-rejected', { stored: { x, y }, width, height });
   }
 
   return defaultPosition(width, height);
@@ -330,14 +326,10 @@ function onCarried(x, y) {
   if (!carrying) {
     carrying = true;
     carryFrom = { x, y };
-    moveCount = 0;
-    logDrag('carry-start', { at: { x, y }, size: sizeNow() });
     petWindow.webContents.send('pet:carry', true);
   }
 
-  moveCount += 1;
   // Sampled: a drag emits a move event per frame and this log is for reading.
-  if (moveCount % 10 === 0) logDrag('carry', { n: moveCount, at: { x, y } });
 
   if (Math.abs(x - carryFrom.x) > 2) {
     const direction = x < carryFrom.x ? 'left' : 'right';
@@ -356,10 +348,8 @@ function onCarried(x, y) {
     settleTimer = null;
     carrying = false;
     carryFacing = null;
-    moveCount = 0;
     if (!isAlive()) return;
 
-    logDrag('carry-end', { at: positionNow(), os: petWindow.getPosition() });
     petWindow.webContents.send('pet:carry', false);
     persistPosition();
   }, SETTLE_MS);
@@ -456,7 +446,6 @@ function installIpc() {
     // is not a resize, it is a symptom — the zoom bug produced exactly that for
     // four sessions — so it is refused and recorded rather than applied.
     if (width > MAX_WINDOW.width || height > MAX_WINDOW.height) {
-      logDrag('size-refused', { width, height, limit: MAX_WINDOW });
       return;
     }
 
@@ -476,13 +465,15 @@ function installIpc() {
     const at = positionNow();
     petWindow.setContentSize(width, height);
 
-    // Verified, like the position is. A content size that does not come back as
-    // the one we asked for means something is scaling this window underneath
-    // us, and that is the fault that has been mistaken for drift twice.
+    // Verified, like the position is. A content size that does not come back
+    // as the one we asked for means something is scaling this window underneath
+    // us — the fault that was mistaken for drift twice. One retry, because the
+    // usual cause is a zoom that has just been reset.
     const applied = sizeNow();
     if (Math.abs(applied.width - width) > POSITION_TOLERANCE
       || Math.abs(applied.height - height) > POSITION_TOLERANCE) {
-      logDrag('size-mismatch', { wanted: { width, height }, applied });
+      petWindow.webContents.setZoomLevel(0);
+      petWindow.setContentSize(width, height);
     }
     // Re-clamped, because a window that just grew may now hang off the screen.
     const clamped = clampToDisplay(at.x, at.y, width, height);
@@ -513,7 +504,6 @@ export function createPetWindow(options) {
   // On by default while the drift is unexplained. It is a bounded, buffered
   // append to userData; the cost is far smaller than another round of guessing
   // at a gesture that cannot be reproduced on the machine doing the guessing.
-  openDragLog(app.getPath('userData'));
 
   const stored = readState().petWindow;
   hidden = Boolean(stored?.hidden);
@@ -595,7 +585,6 @@ export function createPetWindow(options) {
    */
   petWindow.webContents.on('zoom-changed', () => {
     if (!isAlive()) return;
-    logDrag('zoom-refused', { level: petWindow.webContents.getZoomLevel() });
     petWindow.webContents.setZoomLevel(0);
   });
 
@@ -662,7 +651,6 @@ export function resetPetPosition() {
   const size = sizeNow();
   const home = defaultPosition(size.width, size.height);
 
-  logDrag('reset', { from: positionNow(), to: home, size });
   moveTo(home.x, home.y);
 
   hidden = false;
@@ -693,5 +681,4 @@ export function destroyPetWindow() {
   if (isAlive()) petWindow.destroy();
   petWindow = null;
 
-  closeDragLog();
 }

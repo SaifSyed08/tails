@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { AppearancePanel } from '@/components/appearance/AppearancePanel';
 import { ChatView } from '@/components/chat/ChatView';
+import { ChatPet } from '@/components/petstage/ChatPet';
 import { Intro } from '@/components/intro/Intro';
 import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
@@ -178,6 +179,11 @@ export default function App() {
                   onFirstMessage={() => setRefreshToken((current) => current + 1)}
                 />
               )}
+
+              {/* Portalled into the chat view's overlay layer rather than
+                  rendered by it: an assigned pet is the pet feature's business,
+                  and the chat view only publishes the boxes it needs. */}
+              <ChatPet sessionId={view === 'chat' ? sessionId : null} />
 
               {terminalOpen ? (
                 <TerminalPanel cwd={cwd} onClose={() => setTerminalOpen(false)} />

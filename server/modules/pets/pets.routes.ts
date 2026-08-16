@@ -73,6 +73,7 @@ export function createPetsRouter(): express.Router {
 
   router.get('/display', respond((req) => petsService.resolveDisplayPet(
     typeof req.query.sessionPetId === 'string' ? req.query.sessionPetId : null,
+    typeof req.query.sessionId === 'string' ? req.query.sessionId : null,
   )));
 
   /**
