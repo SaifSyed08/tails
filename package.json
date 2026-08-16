@@ -2,7 +2,7 @@
   "name": "@tails/app",
   "productName": "T.A.I.L.S.",
   "version": "0.1.0",
-  "description": "The Actually Intelligent Little Sidekick — a persistent AI companion built on Claude Code",
+  "description": "Totally Awesome Intelligent Local Sidekick — a persistent AI companion built on Claude Code",
   "type": "module",
   "license": "MIT",
   "author": "Saif Syed",

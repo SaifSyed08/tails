@@ -24,6 +24,14 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
     suppress: (value) => ipcRenderer.send('tails:desktop-pet', { action: 'suppress', value }),
     hide: (value) => ipcRenderer.send('tails:desktop-pet', { action: 'hide', value }),
     refresh: () => ipcRenderer.send('tails:desktop-pet', { action: 'refresh' }),
+
+    /**
+     * Brings the pet back to its corner and shows it.
+     *
+     * The recovery path for a pet that has ended up somewhere it cannot be
+     * clicked — every other control needs the pointer to hit the sprite first.
+     */
+    resetPosition: () => ipcRenderer.send('tails:desktop-pet', { action: 'reset' }),
     readState: () => ipcRenderer.invoke('tails:desktop-pet-state'),
   },
 

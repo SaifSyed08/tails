@@ -22,6 +22,7 @@ type DesktopPetBridge = {
   suppress: (value: boolean) => void;
   hide: (value: boolean) => void;
   refresh: () => void;
+  resetPosition: () => void;
   readState: () => Promise<{ hidden: boolean }>;
 };
 
@@ -52,6 +53,14 @@ export const hideDesktopPet = (value: boolean): void => bridge()?.hide(value);
  * when a companion appearing late feels broken.
  */
 export const refreshDesktopPet = (): void => bridge()?.refresh();
+
+/**
+ * Brings the pet back to its corner and shows it.
+ *
+ * The only control that does not require hitting the sprite first, which is
+ * what makes it the way out of a pet that has ended up somewhere unclickable.
+ */
+export const resetDesktopPetPosition = (): void => bridge()?.resetPosition();
 
 export const readDesktopPetState = async (): Promise<{ hidden: boolean } | null> =>
   (await bridge()?.readState()) ?? null;

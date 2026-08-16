@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 
 import { CommandToken, readStyledCommand } from '@/components/chat/commandStyle';
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
-import { EmptyState } from '@/components/chat/EmptyState';
+import { EmptyState, type ModelBadgeState } from '@/components/chat/EmptyState';
 import { PetPicker } from '@/components/chat/PetPicker';
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
 import { PlanCard } from '@/components/chat/PlanCard';
@@ -186,7 +186,9 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const composerRef = useRef<ComposerHandle>(null);
   const [petPickerOpen, setPetPickerOpen] = useState(false);
   const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);
-  const [model, setModel] = useState<string | null>(null);
+  // Starts as "still reading" rather than "nothing": the badge holds its place
+  // from the first frame, so the name arriving is a text swap and not a jolt.
+  const [model, setModel] = useState<ModelBadgeState>({ status: 'resolving' });
 
   // Follow the stream only while the user is already at the bottom; yanking
   // them down while they're reading earlier output is the classic chat-UI sin.
@@ -242,20 +244,28 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
    * Reads the model this conversation runs on.
    *
    * Per conversation rather than per app, because the folder a chat runs in
-   * can carry its own model override. Failure is silent by design: the badge
-   * that shows this is absent rather than approximate.
+   * can carry its own model override. Failure stays silent: the badge is
+   * absent rather than approximate, and "unavailable" is what says so.
+   *
+   * Switching conversations deliberately leaves the previous name on screen
+   * until the next one resolves. Dropping back to "resolving" would flash the
+   * placeholder for a frame on every switch, which is the flicker this whole
+   * change exists to remove.
    */
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
-      let name: string | null = null;
+      let next: ModelBadgeState = { status: 'unavailable' };
       try {
-        if (sessionId) name = (await api.getSessionModel(sessionId))?.displayName ?? null;
+        if (sessionId) {
+          const resolved = await api.getSessionModel(sessionId);
+          if (resolved?.displayName) next = { status: 'ready', name: resolved.displayName };
+        }
       } catch {
         // Nothing to say, so nothing is said.
       }
-      if (!cancelled) setModel(name);
+      if (!cancelled) setModel(next);
     })();
 
     return () => {

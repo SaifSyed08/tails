@@ -60,5 +60,4 @@ contextBridge.exposeInMainWorld('petBridge', {
    * knowing how the shell moves the window, and only shows it so the person
    * switching can tell which one they are feeling.
    */
-  onDragMode: (handler) => ipcRenderer.on('pet:drag-mode', (_event, mode) => handler(mode)),
 });

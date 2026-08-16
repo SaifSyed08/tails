@@ -10,6 +10,7 @@ import {
   destroyPetWindow,
   isPetHidden,
   refreshPetWindow,
+  resetPetPosition,
   setPetHidden,
   setPetSuppressed,
 } from './pet-window.js';
@@ -407,6 +408,7 @@ function installPetBridge() {
     if (action === 'suppress') setPetSuppressed(payload?.value !== false);
     else if (action === 'hide') setPetHidden(payload?.value !== false);
     else if (action === 'refresh') refreshPetWindow();
+    else if (action === 'reset') resetPetPosition();
   });
 
   ipcMain.handle('tails:desktop-pet-state', () => ({ hidden: isPetHidden() }));

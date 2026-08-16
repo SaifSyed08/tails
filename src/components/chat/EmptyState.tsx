@@ -102,11 +102,22 @@ function JumpingWord({ word, animate }: { word: string; animate: boolean }) {
   );
 }
 
+/**
+ * What we know about the model, which is three things rather than two.
+ *
+ * "Not yet" and "never" look identical if both are modelled as `null`, and
+ * they must not be drawn the same way: one has to hold its place, the other
+ * has to leave.
+ */
+export type ModelBadgeState =
+  | { status: 'resolving' }
+  | { status: 'ready'; name: string }
+  | { status: 'unavailable' };
+
 type EmptyStateProps = {
   /** The folder this conversation runs in, shown as the one bit of real context. */
   cwd: string;
-  /** The model this chat runs on, when it could be read. */
-  model?: string | null;
+  model?: ModelBadgeState;
   onPick: (prompt: string) => void;
 };
 
@@ -159,17 +170,48 @@ export function EmptyState({ cwd, model, onPick }: EmptyStateProps) {
           The model, or no badge at all. "Ready" said nothing the rest of the
           screen was not already saying, and a guessed model name would be
           worse than the silence — so when the CLI cannot tell us, this is
-          simply absent.
+          absent.
+
+          While it is still being read, though, the pill is present and says
+          so. Absent-then-present is an insertion, and an insertion moves
+          everything under it a beat after the screen has already settled; the
+          placeholder turns that into a text swap inside a box that never
+          moved. `min-w` sized to a representative name keeps even the swap
+          from twitching, since most names land inside it.
+
+          "Absent" is therefore `invisible` rather than unmounted. Removing it
+          outright would trade the insertion for a collapse — and a worse one,
+          because a failed read can take seconds, so the jump would land well
+          after the screen looked finished. Nothing is drawn and nothing is
+          announced either way; the only difference is that the space it would
+          have taken stays taken.
         */}
         {model ? (
           <span
             className={cn(
-              'mb-5 flex items-center gap-1.5 rounded-full border border-border/70 bg-card/60 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground backdrop-blur',
+              'mb-5 flex min-w-[11rem] items-center justify-center gap-1.5 rounded-full border border-border/70 bg-card/60 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-muted-foreground backdrop-blur',
+              model.status === 'unavailable' && 'invisible',
               !reduced && 'animate-rise-in',
             )}
+            aria-hidden={model.status === 'unavailable'}
+            aria-live="polite"
           >
-            <Sparkles className="size-3 text-primary" aria-hidden="true" />
-            {model}
+            <Sparkles
+              className={cn(
+                'size-3 shrink-0 text-primary',
+                // The one honest signal that something is still happening.
+                model.status === 'resolving' && !reduced && 'animate-pulse',
+              )}
+              aria-hidden="true"
+            />
+            <span
+              // Keyed so the arriving name fades rather than snapping in. The
+              // pill itself is not keyed, so the frame stays put through it.
+              key={model.status}
+              className={!reduced ? 'animate-fade-in' : undefined}
+            >
+              {model.status === 'ready' ? model.name : 'Loading model…'}
+            </span>
           </span>
         ) : null}
 
@@ -198,18 +240,24 @@ export function EmptyState({ cwd, model, onPick }: EmptyStateProps) {
           T.A.I.L.S. runs Claude Code with your tools, your files, and your machine.
         </p>
 
-        {folder ? (
-          <span
-            className={cn(
-              'mt-4 flex items-center gap-1.5 font-mono text-xs text-muted-foreground/80',
-              !reduced && 'animate-fade-in',
-            )}
-            style={reduced ? undefined : { animationDelay: '460ms' }}
-          >
-            <FolderOpen className="size-3.5" aria-hidden="true" />
-            {folder}
-          </span>
-        ) : null}
+        {/*
+          Always rendered, hidden until known. The folder arrives a moment
+          after this screen does, and dropping the row in at that point shoves
+          the openers below it down — the same insertion problem as the pill,
+          one element further down. Reserving the line costs nothing and the
+          cards never move.
+        */}
+        <span
+          className={cn(
+            'mt-4 flex items-center gap-1.5 font-mono text-xs text-muted-foreground/80',
+            !folder && 'invisible',
+            folder && !reduced && 'animate-fade-in',
+          )}
+          aria-hidden={!folder}
+        >
+          <FolderOpen className="size-3.5" aria-hidden="true" />
+          {folder ?? 'resolving'}
+        </span>
       </div>
 
       <div className="relative mt-9 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">

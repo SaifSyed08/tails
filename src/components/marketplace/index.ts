@@ -51,6 +51,7 @@ export {
   hasDesktopPet,
   hideDesktopPet,
   refreshDesktopPet,
+  resetDesktopPetPosition,
   suppressDesktopPet,
 } from './desktop-pet';
 

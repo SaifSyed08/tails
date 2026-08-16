@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, app, globalShortcut, ipcMain, screen } from 'electron';
+import { BrowserWindow, Menu, app, ipcMain, screen } from 'electron';
 import path from 'node:path';
 
 import { closeDragLog, logDrag, openDragLog } from './pet-log.js';
@@ -50,6 +50,14 @@ const DRAG_INTERVAL_MS = 16;
  * downward drags first, and the pet was left behind.
  */
 const SILENT_PAGE_MS = 1200;
+
+/**
+ * How far the OS may disagree with our record before we believe the OS.
+ *
+ * A DIP round trip loses at most a pixel on a fractionally scaled display, so
+ * anything larger is not rounding — it is the record having come adrift.
+ */
+const POSITION_TOLERANCE = 2;
 
 /** How often to check that an interactive window still has the pointer over it. */
 const WATCHDOG_INTERVAL_MS = 250;
@@ -122,10 +130,7 @@ let frameCount = 0;
  *                 write loses a fraction, at the cost of one extra read per
  *                 frame. Correct if the loss is real but unpredictable.
  */
-const DRAG_MODES = ['tracked', 'os', 'closed'];
-let dragMode = 'tracked';
 /** Accumulated write error, mode 3 only. Reset at the start of every drag. */
-let dragError = { x: 0, y: 0 };
 let saveTimer = null;
 
 function isAlive() {
@@ -140,6 +145,21 @@ function moveTo(x, y) {
 
   trackedPosition = next;
   petWindow.setPosition(next.x, next.y);
+
+  // Then check the OS actually did it.
+  //
+  // The record exists because `getPosition` rounds, so a one-pixel difference
+  // is expected and must be ignored — reading it back every frame is what used
+  // to accumulate. A *large* difference is different in kind: the window is not
+  // where we think it is, and that never recovers on its own. The next grab
+  // measures against a fiction, computes a target hundreds of pixels away, and
+  // strands the pet in a corner. Believing the OS at that point costs nothing.
+  const [actualX, actualY] = petWindow.getPosition();
+  if (Math.abs(actualX - next.x) > POSITION_TOLERANCE
+    || Math.abs(actualY - next.y) > POSITION_TOLERANCE) {
+    logDrag('diverged', { wanted: next, actual: { x: actualX, y: actualY } });
+    trackedPosition = { x: actualX, y: actualY };
+  }
 }
 
 /** Where the pet is. Falls back to the OS only before we have ever placed it. */
@@ -215,12 +235,21 @@ function restorePosition(width, height) {
   const y = Number(stored?.y);
 
   if (Number.isFinite(x) && Number.isFinite(y)) {
-    const onScreen = screen.getAllDisplays().some((display) => {
+    // Most of the window has to land on a real work area, not merely touch
+    // one. The old test accepted a pet parked in the very corner — including
+    // 0,0, where a bad drag used to strand it, which then survived every
+    // restart because it still counted as "on screen".
+    const visible = Math.round(Math.min(width, height) * 0.6);
+    const reachable = screen.getAllDisplays().some((display) => {
       const area = display.workArea;
-      return x >= area.x - width && x <= area.x + area.width
-        && y >= area.y - height && y <= area.y + area.height;
+      return x + width - visible >= area.x
+        && x + visible <= area.x + area.width
+        && y + height - visible >= area.y
+        && y + visible <= area.y + area.height;
     });
-    if (onScreen) return clampToDisplay(x, y, width, height);
+
+    if (reachable) return clampToDisplay(x, y, width, height);
+    logDrag('stored-position-rejected', { stored: { x, y }, width, height });
   }
 
   return defaultPosition(width, height);
@@ -284,12 +313,42 @@ function startDrag() {
 
   // Which position the grab offset is measured against is exactly the question
   // the three modes exist to answer, so it is the one thing they differ on here.
+  const size = sizeNow();
+
+  /**
+   * The grab offset has to be a point *inside* the window.
+   *
+   * A drag only ever starts from a mousedown on the sprite, so by construction
+   * the pointer is over the window and the offset lies within its box. When it
+   * does not, the origin it was measured against is wrong — and the consequence
+   * is not subtle: an offset of 766px on a 152px-tall window sends the very
+   * first frame to `cursor - 766`, which is how the pet ended up pinned at 0,0
+   * and impossible to pick up. An impossible offset is refused, not used.
+   */
+  const withinBox = (candidate) => candidate.x >= 0 && candidate.x <= size.width
+    && candidate.y >= 0 && candidate.y <= size.height;
+
   const recorded = positionNow();
   const [osX, osY] = petWindow.getPosition();
-  const origin = dragMode === 'tracked' ? recorded : { x: osX, y: osY };
+  let offset = { x: cursor.x - recorded.x, y: cursor.y - recorded.y };
 
-  dragOffset = { x: cursor.x - origin.x, y: cursor.y - origin.y };
-  dragError = { x: 0, y: 0 };
+  if (!withinBox(offset)) {
+    // Our record disagrees with reality; the OS is the tie-breaker.
+    const fromOs = { x: cursor.x - osX, y: cursor.y - osY };
+    logDrag('bad-offset', { offset, fromOs, recorded, os: { x: osX, y: osY }, size });
+    trackedPosition = { x: osX, y: osY };
+    offset = fromOs;
+  }
+
+  if (!withinBox(offset)) {
+    // Neither answer is usable, so the pointer genuinely is not over this
+    // window. Grab it by the middle: the pet stays under the cursor rather than
+    // leaping to wherever the arithmetic pointed.
+    offset = { x: Math.round(size.width / 2), y: Math.round(size.height / 2) };
+    logDrag('offset-fallback', { offset, size });
+  }
+
+  dragOffset = offset;
 
   lastDragX = cursor.x;
   setInteractive(true);
@@ -306,7 +365,6 @@ function startDrag() {
   const display = screen.getDisplayNearestPoint(cursor);
 
   logDrag('start', {
-    mode: dragMode,
     cursor,
     tracked: recorded,
     os: [osX, osY],
@@ -344,23 +402,13 @@ function startDrag() {
     // clears the top edge almost immediately. The pet is put back inside the
     // work area when it is dropped instead.
     const next = {
-      x: Math.round(cursor.x - dragOffset.x + dragError.x),
-      y: Math.round(cursor.y - dragOffset.y + dragError.y),
+      x: Math.round(cursor.x - dragOffset.x),
+      y: Math.round(cursor.y - dragOffset.y),
     };
 
     // `moveTo` skips a write when nothing moved, so a stationary hand costs no
     // compositor calls.
     moveTo(next.x, next.y);
-
-    // Mode 3 closes the loop: ask where the window actually landed and carry
-    // the difference into the next frame, so a write that loses a fraction is
-    // corrected rather than compounded. The extra `getPosition` per frame is
-    // the whole cost of the mode, and skipping the correction when it is
-    // already zero keeps a well-behaved display from paying for it.
-    if (dragMode === 'closed') {
-      const [landedX, landedY] = petWindow.getPosition();
-      dragError = { x: next.x - landedX, y: next.y - landedY };
-    }
 
     // Every tenth frame, so a long drag stays readable. `live` is what the
     // offset has become *now* — it must equal the offset recorded at `start`
@@ -435,25 +483,6 @@ function stopDrag() {
   schedulePersist();
 }
 
-/**
- * Switches drag mechanism and says so on screen.
- *
- * Bound to Ctrl+Alt+1/2/3 rather than to plain 1/2/3: a bare number registered
- * as a global shortcut is swallowed everywhere on the machine, so typing "1" in
- * any application would stop working. The pet window is deliberately
- * unfocusable, so it cannot take the keystroke itself.
- */
-function setDragMode(next) {
-  if (!DRAG_MODES.includes(next) || next === dragMode) return;
-
-  dragMode = next;
-  logDrag('mode', { mode: dragMode });
-
-  // Announced in the window itself, because the point of switching is to feel
-  // the difference immediately and guessing which one is live defeats that.
-  if (isAlive()) petWindow.webContents.send('pet:drag-mode', dragMode);
-}
-
 function applyVisibility() {
   if (!isAlive()) return;
 
@@ -506,18 +535,6 @@ function openContextMenu(petId) {
           body: JSON.stringify({ active: false }),
         }).catch(() => {});
       },
-    },
-    { type: 'separator' },
-    // A second way in, because a global shortcut can be taken by another
-    // application and there would then be no way to switch at all.
-    {
-      label: 'Drag mechanism (testing)',
-      submenu: DRAG_MODES.map((mode, index) => ({
-        label: `${index + 1}  ${mode}   —   Ctrl+Alt+${index + 1}`,
-        type: 'radio',
-        checked: dragMode === mode,
-        click: () => setDragMode(mode),
-      })),
     },
     { type: 'separator' },
     { label: 'Settings…', click: () => onOpenSettings() },
@@ -598,18 +615,6 @@ export function createPetWindow(options) {
   // at a gesture that cannot be reproduced on the machine doing the guessing.
   openDragLog(app.getPath('userData'));
 
-  // Global, because the pet is unfocusable and the gesture being diagnosed
-  // happens with the pointer on the pet rather than in any window. Failures are
-  // ignored: another application may already hold the combination, and a
-  // diagnostic that refuses to start the app would be a poor trade.
-  DRAG_MODES.forEach((mode, index) => {
-    try {
-      globalShortcut.register(`CommandOrControl+Alt+${index + 1}`, () => setDragMode(mode));
-    } catch {
-      // Nothing to recover: the context menu still switches modes.
-    }
-  });
-
   const stored = readState().petWindow;
   hidden = Boolean(stored?.hidden);
 
@@ -688,6 +693,31 @@ export function setPetSuppressed(next) {
   applyVisibility();
 }
 
+/**
+ * Puts the pet back in its corner, and un-hides it.
+ *
+ * The way out of a pet you cannot reach. Every other control — the context
+ * menu, dragging, the click-through toggle — needs the pointer to land on the
+ * sprite first, so when the window ends up somewhere unusable there is no way
+ * back from inside the app. This is reachable from the marketplace instead, and
+ * takes no argument on purpose: it is for the case where nobody can say where
+ * the pet currently is.
+ */
+export function resetPetPosition() {
+  if (!isAlive()) return;
+
+  stopDrag();
+  const size = sizeNow();
+  const home = defaultPosition(size.width, size.height);
+
+  logDrag('reset', { from: positionNow(), to: home, size });
+  moveTo(home.x, home.y);
+
+  hidden = false;
+  applyVisibility();
+  persistPosition();
+}
+
 /** The user's own hide/show, which survives a restart. */
 export function setPetHidden(next) {
   hidden = Boolean(next);
@@ -710,16 +740,6 @@ export function destroyPetWindow() {
   stopWatchdog();
   if (isAlive()) petWindow.destroy();
   petWindow = null;
-
-  // Global shortcuts outlive the window that registered them, so they have to
-  // be handed back explicitly or they keep swallowing the combination.
-  DRAG_MODES.forEach((_mode, index) => {
-    try {
-      globalShortcut.unregister(`CommandOrControl+Alt+${index + 1}`);
-    } catch {
-      // Already gone, or never registered.
-    }
-  });
 
   closeDragLog();
 }

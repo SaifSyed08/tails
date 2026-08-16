@@ -116,7 +116,7 @@ const HIT_TOLERANCE = ${HIT_TOLERANCE};
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
   startDrag() {}, endDrag() {}, dragHeartbeat() {}, openMenu() {},
-  onFacing() {}, onRefresh() {}, onDragMode() {},
+  onFacing() {}, onRefresh() {},
 };
 
 const stage = document.getElementById('stage');
@@ -490,40 +490,6 @@ bridge.onFacing((next) => {
 });
 bridge.onRefresh(() => void poll());
 
-/**
- * A label naming the live drag mechanism, while three are being compared.
- *
- * Temporary scaffolding for a bug that has survived four fixes: without it,
- * switching modes is indistinguishable from nothing happening. Built in JS
- * rather than in the page's markup and CSS so that deleting this block is the
- * whole removal.
- */
-bridge.onDragMode((mode) => {
-  let label = document.getElementById('drag-mode');
-  if (!label) {
-    label = document.createElement('div');
-    label.id = 'drag-mode';
-    // Inline, because it outlives no one: this element is deleted with the
-    // experiment and should not leave a rule behind in the stylesheet.
-    label.style.cssText = [
-      'position:fixed', 'left:50%', 'top:2px', 'transform:translateX(-50%)',
-      'font:600 10px/1.4 ui-monospace,monospace', 'letter-spacing:.08em',
-      'padding:2px 6px', 'border-radius:4px', 'white-space:nowrap',
-      'background:rgba(0,0,0,.72)', 'color:#ffb454', 'pointer-events:none',
-      'transition:opacity .3s', 'opacity:1',
-    ].join(';');
-    document.body.appendChild(label);
-  }
-
-  const index = ['tracked', 'os', 'closed'].indexOf(mode) + 1;
-  label.textContent = index + '  ' + mode;
-  label.style.opacity = '1';
-
-  // Fades rather than persists: it is a confirmation of a keystroke, and a
-  // permanent badge on a desktop companion would be its own annoyance.
-  clearTimeout(label.dataset.timer);
-  label.dataset.timer = String(setTimeout(() => { label.style.opacity = '0'; }, 1600));
-});
 
 /**
  * Asks the server which pet belongs on screen.

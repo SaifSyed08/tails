@@ -80,7 +80,11 @@ export function Intro({ onDone }: IntroProps) {
       />
 
       <div className="relative flex flex-col items-center">
-        <h1 className="flex font-display text-5xl font-black tracking-[0.2em] text-foreground sm:text-6xl">
+        <h1 // 300 rather than 900: Segoe UI and SF Pro both ship a real Light face,
+        // so this is a drawn weight rather than a synthesised one. The wide
+        // tracking is what makes "TAILS" read as an initialism, and the heavy
+        // weight was working against it.
+        className="flex font-display text-5xl font-light tracking-[0.2em] text-foreground sm:text-6xl">
           {'TAILS'.split('').map((letter, index) => (
             <span
               key={letter}
@@ -101,7 +105,7 @@ export function Intro({ onDone }: IntroProps) {
             phase === 'mark' ? 'translate-y-1 opacity-0' : 'translate-y-0 opacity-100',
           )}
         >
-          The Actually Intelligent Little Sidekick
+          Totally Awesome Intelligent Local Sidekick
         </p>
       </div>
 

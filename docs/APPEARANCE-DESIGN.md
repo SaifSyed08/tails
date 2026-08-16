@@ -351,6 +351,27 @@ theme, which left a hand-written CSS layer and a set of published controls on
 screen; "reset" meaning "reset some of it" is how a user learns not to trust the
 button.
 
+## The user's bubble takes each ramp's own ink
+
+`[data-tails-part="bubbleUser"]` is a solid `--primary` fill with
+`--primary-foreground` ink. The two candidate treatments — a slightly dark amber
+carrying white text, or black text on a bright amber — turn out to be the two
+ramps rather than two options: `--primary` is 34% lightness in the light ramp,
+where white reads at 5.5:1 and near-black at 3.3:1, and 58% in the dark ramp,
+where those swap to 2.4:1 and 7.5:1. Each ramp takes the one that works, which
+is the pair `--primary-foreground` already is.
+
+`--t-ink-muted` and `--t-accent-on` are solved against that fill rather than
+inherited; on a surface filled with the accent the `:root` values measure 1.16:1
+and 1.00:1.
+
+A translucent version of this bubble was built and reverted. The glass
+primitives are unchanged and `tests/glass-composition.test.ts` still proves they
+compose. One measurement from that work is worth keeping: with a translucent
+fill the surface is the fill composited over the page, so the ink pairing the
+manifest asserts stops describing what is on screen — at 35% alpha the light
+ramp's bubble lands near 76% lightness, where white reads at 1.8:1.
+
 ## The floor has exactly one design decision in it
 
 The built-in look is meant to be the absence of a design — if every layer above

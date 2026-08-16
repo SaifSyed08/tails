@@ -20,6 +20,7 @@ import {
   hideDesktopPet,
   readDesktopPetState,
   refreshDesktopPet,
+  resetDesktopPetPosition,
 } from './desktop-pet';
 import { ImportPetDialog } from './ImportPetDialog';
 import { LibraryEmpty, LibrarySkeleton, NoMatches } from './LibraryStates';
@@ -359,6 +360,16 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
             >
               <Monitor className="size-3.5" aria-hidden="true" />
               {desktopHidden ? 'Off desktop' : 'On desktop'}
+            </button>
+          ) : null}
+          {hasDesktopPet() ? (
+            <button
+              type="button"
+              onClick={resetDesktopPetPosition}
+              title="Brings the desktop pet back to the corner of the screen and shows it."
+              className="rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+            >
+              Recall pet
             </button>
           ) : null}
           <button

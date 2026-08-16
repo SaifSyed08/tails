@@ -379,57 +379,30 @@
    * place for a generated theme.
    */
   /**
-   * The user's own message: accent-tinted glass.
+   * The user's own message: a solid accent fill.
    *
-   * The same construction proved in `tests/glass-composition.test.ts`, applied
-   * to one part of the floor — a translucent accent fill, a specular ring
-   * riding as the last fill layer clipped to `border-box`, an inset highlight
-   * on the top edge and a soft accent-coloured glow beneath.
+   * Two readings were on the table — a slightly dark amber carrying white text,
+   * or black text on a bright amber — and the measurement says they are not
+   * alternatives, they are the two ramps. `--primary` is a deep amber at 34%
+   * lightness in the light ramp, where white reads at 5.5:1 and near-black at
+   * 3.3:1; it is a bright amber at 58% in the dark ramp, where those numbers
+   * swap to 2.4:1 and 7.5:1. So each ramp takes its own, which is exactly the
+   * pair `--primary-foreground` already is, and exactly the pair the contrast
+   * manifest already asserts at 4.5:1.
    *
-   * **Why the ink is `--foreground` and not `--primary-foreground`.** Once the
-   * fill is translucent the surface is no longer `--primary`, it is `--primary`
-   * composited over the page, and the pairing the contrast manifest asserts
-   * stops describing what is on screen. Solved against the real composite, the
-   * answer inverts: the light ramp's bubble lands near 76% lightness where
-   * white reads at 1.8:1 and near-black at 10.2:1, and the dark ramp's lands
-   * near 24% where white reads at 11.8:1. `--foreground` is exactly that pair —
-   * near-black on light, near-white on dark — so it is correct in both, and in
-   * the dark ramp it *is* the white text that was asked for.
-   *
-   * **Why there is no `backdrop-filter`.** It would cost a full-screen readback
-   * and blur per bubble per frame, on every user message in the transcript, and
-   * it would buy nothing: what sits behind a bubble here is the flat chat
-   * surface, and blurring a flat colour returns the same flat colour. Backdrop
-   * blur earns its cost over a textured or ambient ground; over a solid one it
-   * is pure expense. A theme that gives the page an ambient layer can add it
-   * back on its own surfaces, where it will actually be visible.
-   *
-   * 35% is where the tint stays unmistakably accent-coloured while leaving the
-   * ink 9:1 or better in both ramps. Nothing overlaps a bubble in the
-   * transcript, so there is no other message's text to read through it.
+   * The refinement tokens are solved against this fill rather than inherited:
+   * on a surface filled with the accent, `--muted-foreground` and `--primary`
+   * measure 1.16:1 and 1.00:1. Both derive from `--primary-foreground` so they
+   * cannot drift from the pairing above — 0.9 alpha for the muted one, which is
+   * barely muted because on a saturated fill there is very little room between
+   * legible and the ink.
    */
   [data-tails-part='bubbleUser'] {
-    --t-fill-color: transparent;
-    --t-fill-image:
-      linear-gradient(hsl(var(--primary) / 0.35), hsl(var(--primary) / 0.35)),
-      linear-gradient(145deg, hsl(0 0% 100% / 0.5) 0%, hsl(0 0% 100% / 0.06) 38%, hsl(var(--primary) / 0.45) 100%);
-    --t-fill-blend: normal, normal;
-    /* The fill clips inside the border, the ring fills it — which is what makes
-       the second layer read as an edge rather than as a diagonal wash. */
-    --t-fill-clip: padding-box, border-box;
-    --t-fill-origin: padding-box, border-box;
-    --t-border-width: 1px;
-    --t-border-style: solid;
-    --t-border-color: transparent;
-    --t-shadow:
-      inset 0 1px 0 hsl(0 0% 100% / 0.4),
-      0 1px 2px hsl(var(--primary) / 0.22),
-      0 10px 26px -10px hsl(var(--primary) / 0.5);
-    --t-ink: hsl(var(--foreground));
-    --t-ink-muted: hsl(var(--foreground) / 0.7);
-    /* Accent text on an accent-tinted pane is the pane. The ink is the only
-       thing that separates from it — 3.2:1 for `--primary` against 10:1 here. */
-    --t-accent-on: hsl(var(--foreground));
+    --t-fill-color: hsl(var(--primary));
+    --t-ink: hsl(var(--primary-foreground));
+    --t-ink-muted: hsl(var(--primary-foreground) / 0.9);
+    --t-accent-on: hsl(var(--primary-foreground));
+    --t-border-width: 0;
   }
 
   /* The assistant's turn is unbubbled by default — page text rather than a

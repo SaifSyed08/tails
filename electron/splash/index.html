@@ -15,7 +15,10 @@
         --bg: hsl(240 10% 6%);
         --fg: hsl(40 15% 95%);
         --muted: hsl(240 5% 65%);
-        --accent: hsl(221 83% 62%);
+        /* The app's dark-ramp `--primary`. Amber since the accent moved off
+           blue; a splash in the old colour is a visible mismatch for the one
+           second anybody looks at it. */
+        --accent: hsl(26 100% 58%);
       }
 
       * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -47,7 +50,7 @@
         width: 26rem;
         height: 26rem;
         border-radius: 50%;
-        background: radial-gradient(circle, hsl(221 83% 62% / 0.32), transparent 70%);
+        background: radial-gradient(circle, hsl(26 100% 58% / 0.32), transparent 70%);
         filter: blur(48px);
         animation: breathe 3.2s ease-in-out infinite;
       }
@@ -56,7 +59,12 @@
         position: relative;
         display: flex;
         font-size: 2.75rem;
-        font-weight: 900;
+        /* 300, not 900. Segoe UI and SF Pro both ship a real Light face, so
+           this resolves to a drawn weight rather than a synthesised one —
+           synthetic thinning smears the stems and is miserable to diagnose
+           afterwards. The wide tracking below is what carries the wordmark;
+           the heavy weight was fighting it. */
+        font-weight: 300;
         letter-spacing: 0.2em;
       }
 
@@ -104,7 +112,7 @@
         <span style="animation-delay: 270ms">L<span class="dot">.</span></span>
         <span style="animation-delay: 360ms">S<span class="dot">.</span></span>
       </div>
-      <p class="caption">The Actually Intelligent Little Sidekick</p>
+      <p class="caption">Totally Awesome Intelligent Local Sidekick</p>
     </div>
   </body>
 </html>
