@@ -4,9 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 import { petsApi, usePetLibraryVersion, type InstalledPet } from './marketplace-api';
-import { usePetCarry } from './pet-carry';
+import { usePetCarry, type PetCarryRelease } from './pet-carry';
 import { isUntried, orderForCarousel } from './pet-filters';
-import type { PetDragPayload, PetDropTarget } from './pet-drag';
 import { PetThumbnail } from './PetThumbnail';
 
 /**
@@ -37,24 +36,87 @@ export type PetCarouselProps = {
   /** Opens this pet in the marketplace. */
   onEdit: (pet: InstalledPet) => void;
   /**
-   * Where a carried pet landed.
+   * Where a carried pet was let go — including over nothing at all.
    *
-   * Omitted, the pets can still be picked up and the affordances still appear —
+   * Omitted, the pets can still be picked up and the affordances still appear;
    * they simply have nowhere to go. The carousel deliberately does not know how
-   * a chat gets a pet; that is the sidebar's business.
+   * a chat gets a pet, or what letting go over nothing should mean; that is the
+   * sidebar's business.
    */
-  onCarryDrop?: (target: PetDropTarget, payload: PetDragPayload) => void;
+  onCarryRelease?: (release: PetCarryRelease) => void;
   className?: string;
 };
 
 type MenuState = { pet: InstalledPet; x: number; y: number } | null;
 
-export function PetCarousel({ refreshToken = 0, onEdit, onCarryDrop, className }: PetCarouselProps) {
+/**
+ * A wheel notch in line mode, in pixels.
+ *
+ * `deltaMode` is not always pixels. A mouse reporting three *lines* per notch
+ * is common, and treating that as three pixels moves the strip by nothing at
+ * all — which reads as the wheel being ignored rather than as it being slow.
+ */
+const WHEEL_LINE_PX = 16;
+
+/**
+ * `WheelEvent.deltaMode`, spelled out rather than read off the global.
+ *
+ * The values are fixed by the spec, and taking them from `WheelEvent` would
+ * make a function that is otherwise pure arithmetic depend on there being a
+ * DOM — which is the one thing standing between this rule and being checkable.
+ */
+const DELTA_MODE_LINE = 1;
+const DELTA_MODE_PAGE = 2;
+
+/** The wheel's movement along one axis, in pixels, whatever unit it arrived in. */
+function wheelPixels(delta: number, mode: number, pageSize: number): number {
+  if (mode === DELTA_MODE_LINE) return delta * WHEEL_LINE_PX;
+  if (mode === DELTA_MODE_PAGE) return delta * pageSize;
+  return delta;
+}
+
+/**
+ * Where the strip should scroll to for this wheel event, or null to let it go.
+ *
+ * Turning a vertical wheel sideways is easy; knowing when *not* to is the part
+ * worth writing down, because all three cases look identical in a diff and each
+ * one is separately infuriating:
+ *
+ * - Nothing to scroll. A strip whose pets all fit must let the wheel through,
+ *   or the sidebar stops scrolling over a strip that had no use for it.
+ * - Already at that end. Once there is no further to go the event belongs to
+ *   whatever is underneath again; keeping it is how a page feels stuck.
+ * - A genuine horizontal wheel. Trackpads and tilt wheels send `deltaX`, and a
+ *   sideways swipe should be obeyed, not reinterpreted.
+ *
+ * Pure, and exported, so those three can be checked rather than believed.
+ */
+export function nextStripScroll(
+  wheel: { deltaX: number; deltaY: number; deltaMode: number },
+  strip: { scrollLeft: number; scrollWidth: number; clientWidth: number },
+): number | null {
+  const furthest = strip.scrollWidth - strip.clientWidth;
+  if (furthest <= 0) return null;
+
+  const sideways = Math.abs(wheel.deltaX) > Math.abs(wheel.deltaY);
+  const travel = wheelPixels(
+    sideways ? wheel.deltaX : wheel.deltaY,
+    wheel.deltaMode,
+    strip.clientWidth,
+  );
+  if (travel === 0) return null;
+
+  const next = Math.min(furthest, Math.max(0, strip.scrollLeft + travel));
+  return next === strip.scrollLeft ? null : next;
+}
+
+export function PetCarousel({ refreshToken = 0, onEdit, onCarryRelease, className }: PetCarouselProps) {
   const [pets, setPets] = useState<InstalledPet[]>([]);
   const [menu, setMenu] = useState<MenuState>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { carryingId, getCarryProps } = usePetCarry(onCarryDrop);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const { carryingId, getCarryProps } = usePetCarry({ onRelease: onCarryRelease });
   // Any write to the library anywhere in the window, including the marketplace
   // two panes over installing something. Without it a pet the user has just
   // downloaded is missing from the strip until the app is reloaded.
@@ -69,6 +131,31 @@ export function PetCarousel({ refreshToken = 0, onEdit, onCarryDrop, className }
   useEffect(() => {
     void load();
   }, [load, refreshToken, libraryVersion]);
+
+  /**
+   * The wheel, turned sideways.
+   *
+   * `nextStripScroll` decides; this only carries out the decision. Registered
+   * by hand rather than as `onWheel` because React attaches wheel listeners
+   * passively at the root, where `preventDefault` does nothing at all — which
+   * would leave the strip scrolling twice, once from us and once from the
+   * browser.
+   */
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return undefined;
+
+    const onWheel = (event: WheelEvent) => {
+      const next = nextStripScroll(event, strip);
+      if (next === null) return;
+      event.preventDefault();
+      strip.scrollLeft = next;
+    };
+
+    strip.addEventListener('wheel', onWheel, { passive: false });
+    return () => strip.removeEventListener('wheel', onWheel);
+    // The strip is only in the document once there are pets to put in it.
+  }, [pets.length]);
 
   // Dismissed by anything that is not the menu itself, the way the sidebar's
   // other popovers behave.
@@ -111,6 +198,7 @@ export function PetCarousel({ refreshToken = 0, onEdit, onCarryDrop, className }
   return (
     <div className={cn('border-t border-border px-2 py-1.5', className)}>
       <div
+        ref={stripRef}
         className="flex gap-1 overflow-x-auto pb-0.5"
         // A horizontal strip that scrolls: the sidebar is narrow and a library
         // of twenty pets should not wrap into five rows of chrome.

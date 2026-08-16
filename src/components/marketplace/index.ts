@@ -59,14 +59,30 @@ export {
   isPetDrag,
   publishPetDragFrame,
   readPetDrag,
+  readPetDragFrame,
   resolvePetDropTarget,
   setPetDropTarget,
   startPetDrag,
+  subscribeToPetDragFrame,
   usePetDrag,
   usePetDragState,
   PET_DRAG_MIME,
 } from './pet-drag';
 export type { PetDragFrame, PetDragPayload, PetDragState, PetDropTarget } from './pet-drag';
+
+/**
+ * The pointer carry itself, for a surface that wants to be picked up.
+ *
+ * Exported because reusing the gesture is the right instinct: a pet that
+ * pinched, swung and dropped differently depending on which surface he was
+ * standing on would be a bug wearing a feature's clothes. Give it an
+ * `onRelease` and it will tell you where the hand opened — including when that
+ * was over nothing, which is what "he has been thrown out of the window" looks
+ * like from in here.
+ */
+export { usePetCarry, advanceSwing } from './pet-carry';
+export type { PetCarryOptions, PetCarryProps, PetCarryRelease, PetSwing } from './pet-carry';
+
 export { PetDragLayer } from './PetDragLayer';
 export type { PetDragLayerProps } from './PetDragLayer';
 

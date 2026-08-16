@@ -24,6 +24,8 @@ export type ChatSession = {
   archivedAt: string | null;
   /** The companion assigned to this conversation, if it has one of its own. */
   petId: string | null;
+  /** True once the user has named this chat; generated titles never override it. */
+  titlePinned: boolean;
 };
 
 /**

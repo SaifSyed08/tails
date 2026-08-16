@@ -11,6 +11,7 @@ type SessionRow = {
   pinned_at: string | null;
   archived_at: string | null;
   pet_id: string | null;
+  title_pinned: number;
 };
 
 /**
@@ -41,11 +42,12 @@ const toChatSession = (row: SessionRow): ChatSession => ({
   pinnedAt: row.pinned_at ? toIsoTimestamp(row.pinned_at) : null,
   archivedAt: row.archived_at ? toIsoTimestamp(row.archived_at) : null,
   petId: row.pet_id,
+  titlePinned: row.title_pinned === 1,
 });
 
 const COLUMNS = [
   'id', 'provider_session_id', 'title', 'cwd',
-  'created_at', 'updated_at', 'pinned_at', 'archived_at', 'pet_id',
+  'created_at', 'updated_at', 'pinned_at', 'archived_at', 'pet_id', 'title_pinned',
 ].join(', ');
 
 /**
@@ -189,9 +191,11 @@ export const sessionsRepository = {
    * it to the top of "Most recent" — the column means "last message", and only
    * a message may move it.
    */
-  renameSession(id: string, title: string): void {
+  renameSession(id: string, title: string, options: { pinned?: boolean } = {}): void {
+    // `pinned` is one-way. A chat the user has named keeps that name, so an
+    // adopted title can never clear the flag — only set it.
     getConnection()
-      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+      .prepare(`UPDATE sessions SET title = ?${options.pinned ? ', title_pinned = 1' : ''} WHERE id = ?`)
       .run(title, id);
   },
 

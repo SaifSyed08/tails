@@ -128,6 +128,13 @@ export type ChatSession = {
    * active pet is the pets module's decision, not this table's.
    */
   petId: string | null;
+  /**
+   * True once the user has named this chat themselves.
+   *
+   * Claude Code generates its own title for every transcript and we adopt it,
+   * so this is what stops that from overwriting a deliberate name.
+   */
+  titlePinned: boolean;
 };
 
 /** A row in the sidebar's conversation list. */

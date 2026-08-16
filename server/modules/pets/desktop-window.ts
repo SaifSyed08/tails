@@ -111,7 +111,57 @@ export function renderDesktopWindowHtml(): string {
     cursor: grab;
   }
 
-  #stage, #pet { -webkit-app-region: no-drag; }
+  #stage, #pet, #pill { -webkit-app-region: no-drag; }
+
+  /*
+   * The pill: a way into the pet's menu that you can see.
+   *
+   * Right-clicking was the only way to reach it, and a right-click is invisible
+   * — nothing on screen said the menu existed. This is the visible half of the
+   * same door: a dark sliver under his feet that grows into one button when you
+   * point at him. Right-click still works.
+   *
+   * It has to live inside the alpha hit-test's idea of "on the pet", or the
+   * window stays click-through underneath it and the button can never be
+   * pressed. See isOverPet.
+   */
+  #pill {
+    position: absolute;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border-radius: 999px;
+    background: rgba(16, 16, 18, 0.82);
+    color: rgba(255, 255, 255, 0.92);
+    transition: height 120ms ease-out, width 120ms ease-out, opacity 120ms ease-out;
+    overflow: hidden;
+  }
+
+  #pill-menu {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0;
+    /* Unreachable until the pill has actually opened, so a collapsed sliver
+       cannot swallow a click meant for the desktop behind it. */
+    pointer-events: none;
+    transition: opacity 120ms ease-out;
+  }
+
+  #pill.open #pill-menu { opacity: 1; pointer-events: auto; }
+
+  #pill-menu svg { display: block; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #pill, #pill-menu { transition: none; }
+  }
 
   @keyframes tails-sprite-x {
     from { background-position-x: var(--sprite-x-from); }
@@ -129,7 +179,7 @@ export function renderDesktopWindowHtml(): string {
 </style>
 </head>
 <body>
-<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div></div>
+<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="pill"><button id="pill-menu" type="button" aria-label="Pet options" title="Pet options"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg></button></div></div>
 <script type="module" nonce="${nonce}">
 const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
@@ -146,6 +196,13 @@ const bridge = window.petBridge ?? {
 const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
 const handle = document.getElementById('handle');
+const pill = document.getElementById('pill');
+const pillMenu = document.getElementById('pill-menu');
+
+/** The pill's two sizes, in CSS pixels: a sliver, and a button. */
+const PILL_CLOSED_H = 5;
+const PILL_OPEN_H = 22;
+const PILL_OPEN_W = 30;
 
 let current = null;      // the pet payload currently rendered
 let box = null;          // its cell geometry
@@ -387,12 +444,14 @@ async function render(next) {
 function placeHandle() {
   if (!mask || !box) {
     handle.style.display = 'none';
+    pill.style.display = 'none';
     return;
   }
 
   let minX = mask.width;
   let maxX = -1;
   let minY = mask.height;
+  let maxY = -1;
 
   for (let y = 0; y < mask.height; y += 1) {
     for (let x = 0; x < mask.width; x += 1) {
@@ -400,11 +459,13 @@ function placeHandle() {
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
     }
   }
 
   if (maxX < 0) {
     handle.style.display = 'none';
+    pill.style.display = 'none';
     return;
   }
 
@@ -420,6 +481,43 @@ function placeHandle() {
   handle.style.top = top + 'px';
   handle.style.width = width + 'px';
   handle.style.height = height + 'px';
+
+  placePill(rect, stageRect, minX, maxX, maxY);
+}
+
+/**
+ * Puts the pill under the pet's feet.
+ *
+ * Centred on the artwork rather than on the cell, because the cell has
+ * transparent margins and a pill centred on those would sit off to one side of
+ * him. Clamped inside the stage: the window is only the sprite plus a little
+ * padding, and anything past the edge is clipped away rather than overflowing
+ * onto the desktop, so the open pill overlaps his feet a little instead of
+ * being cut in half.
+ */
+function placePill(rect, stageRect, minX, maxX, maxY) {
+  const open = pill.classList.contains('open');
+  const height = open ? PILL_OPEN_H : PILL_CLOSED_H;
+  const artworkWidth = (maxX - minX + 1) * box.scale;
+  const width = open ? PILL_OPEN_W : Math.max(18, artworkWidth * 0.45);
+
+  const centre = rect.left - stageRect.left + (minX * box.scale) + artworkWidth / 2;
+  const feet = rect.top - stageRect.top + (maxY + 1) * box.scale;
+
+  pill.style.display = 'flex';
+  pill.style.width = width + 'px';
+  pill.style.height = height + 'px';
+  pill.style.left = Math.round(centre - width / 2) + 'px';
+  pill.style.top = Math.round(
+    Math.min(feet + 2, stageRect.height - height),
+  ) + 'px';
+  pill.style.opacity = open ? '1' : '0.55';
+}
+
+/** Where the pill is on screen, or null when it is not shown. */
+function pillRect() {
+  if (!pill.style.display || pill.style.display === 'none') return null;
+  return pill.getBoundingClientRect();
 }
 
 /**
@@ -431,6 +529,11 @@ function placeHandle() {
  */
 bridge.onCarry((isCarrying) => {
   dragging = isCarrying;
+
+  // Nothing to press while he is in the air, and a button sliding around the
+  // desktop under a moving window is just debris.
+  pill.classList.toggle('open', !isCarrying && pointerOver);
+  if (mask) placeHandle();
 
   if (isCarrying) {
     pet.classList.add('dragging');
@@ -444,6 +547,19 @@ bridge.onCarry((isCarrying) => {
 /** Whether a point inside the window sits on the pet's own pixels. */
 function isOverPet(clientX, clientY) {
   if (!box) return false;
+
+  // The open pill counts as part of him. It sits below his feet, over
+  // transparent pixels, so without this the window is click-through exactly
+  // where the button is and the button can never be pressed. Only when open:
+  // a closed sliver is decoration, and making it grabbable would have the pet
+  // notice you from a few pixels below his feet.
+  if (pill.classList.contains('open')) {
+    const box2 = pillRect();
+    if (box2 && clientX >= box2.left && clientX <= box2.right
+      && clientY >= box2.top && clientY <= box2.bottom) {
+      return true;
+    }
+  }
 
   // Cached: this runs on every forwarded mouse move, and the sprite only moves
   // when the window resizes or the pet changes. Reading layout per move is a
@@ -483,6 +599,9 @@ function setPointerOver(next) {
   // The pet notices you. "waving" is the row Codex sheets have for it, and a
   // sheet without one keeps its idle rather than inventing a gesture.
   if (!dragging) playState(next ? 'waving' : 'idle');
+
+  pill.classList.toggle('open', next && !dragging);
+  placeHandle();
 }
 
 document.addEventListener('mousemove', (event) => {
@@ -494,6 +613,14 @@ document.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   if (!current || !isOverPet(event.clientX, event.clientY)) return;
   bridge.openMenu(current.definition.id);
+});
+
+// The visible half of the same door. Same menu, same call — one place decides
+// what the pet's options are.
+pillMenu.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (current) bridge.openMenu(current.definition.id);
 });
 
 bridge.onFacing((next) => {

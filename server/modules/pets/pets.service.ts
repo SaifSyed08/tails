@@ -25,6 +25,7 @@ import {
 } from '@/modules/pets/pet-spec.js';
 import { CODEX_FPS, isCodexGrid } from '@/modules/pets/codex-layout.js';
 import { petsRepository, type PetSource } from '@/modules/pets/pets.repository.js';
+import { seededThinkingPhrases } from '@/modules/pets/thinking-seeds.js';
 import {
   createRemoteCatalogue,
   DEFAULT_PAGE_SIZE,
@@ -455,7 +456,10 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     gridBasis,
     preview: describePreviewFrame(grid, states),
     assignedTheme: override?.assignedTheme ?? null,
-    thinkingPhrases: override?.thinkingPhrases ?? [],
+    // Null means nobody has chosen, so the pet keeps the voice he is known for.
+    // An empty array is a choice, and it wins.
+    thinkingPhrases: override?.thinkingPhrases
+      ?? seededThinkingPhrases(definition.data.id),
     starred: Boolean(override?.starredAt),
     lastUsedAt: toIsoTimestamp(override?.lastUsedAt),
     installedAt: toIsoTimestamp(override?.installedAt),
@@ -1158,6 +1162,10 @@ export const petsService = {
     const pet = requirePet(id);
     petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
     petsRepository.markUsed(pet.definition.id);
+    // Assigning a pet to a conversation is the one pet-facing write that lands
+    // in another module's table, so this is the only announcement of it. The
+    // pet who walks out into that chat is listening.
+    publishPetsChanged(pet.definition.id);
     return requirePet(id);
   },
 

@@ -13,6 +13,7 @@ import {
   codexStripFrameCount,
   codexStripIdleFrames,
 } from '@/modules/pets/codex-layout.js';
+import { seededThinkingPhrases } from '@/modules/pets/thinking-seeds.js';
 import { isSafeEntryName, listZipEntries, readZipEntry } from '@/modules/pets/zip.js';
 
 /**
@@ -615,4 +616,31 @@ test('rejects a member whose bytes do not match its checksum', () => {
   const archive = makeZip([{ name: 'pet.json', data: Buffer.from('{}') }], { corruptCrc: true });
   const [entry] = listZipEntries(archive, ZIP_LIMITS);
   assert.throws(() => readZipEntry(archive, entry, 1024), /checksum/);
+});
+
+
+/**
+ * The seeded thinking phrases have to satisfy limits enforced somewhere else.
+ *
+ * The consumer trims and caps rather than rejecting, so an over-long line does
+ * not fail — it silently arrives truncated on screen, which is exactly the kind
+ * of wrong that ships. And a line that needs an ellipsis appended is a line
+ * that was written as a verb; the punctuation is the point.
+ */
+test('seeded thinking phrases stay inside what the spinner accepts', () => {
+  for (const id of ['sonic', 'sonic-art', 'pika', 'clawd', 'clippit']) {
+    const phrases = seededThinkingPhrases(id);
+    assert.ok(phrases.length > 0 && phrases.length <= 12, `${id} has ${phrases.length} phrases`);
+
+    for (const phrase of phrases) {
+      assert.ok(phrase.length <= 80, `too long for ${id}: ${phrase}`);
+      assert.equal(phrase, phrase.trim());
+      assert.ok(!/\s\s|[\r\n]/.test(phrase), `whitespace to collapse in ${id}: ${phrase}`);
+      assert.match(phrase, /[.!?]$/, `unpunctuated for ${id}: ${phrase}`);
+    }
+  }
+
+  // A pet nobody has written lines for gets none, rather than someone else's.
+  assert.deepEqual(seededThinkingPhrases('trump'), []);
+  assert.deepEqual(seededThinkingPhrases('not-installed'), []);
 });

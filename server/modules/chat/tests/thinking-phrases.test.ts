@@ -3,18 +3,23 @@ import test from 'node:test';
 
 // Client code, reached by path: it imports nothing, and this is the repo's only
 // test runner. See the note in answers.test.ts.
-import { buildThinkingRotation, readPetPhrases } from '../../../../src/components/chat/thinkingPhrases.js';
+import {
+  buildThinkingRotation,
+  isSpinnerVerb,
+  readPetPhrases,
+  SPINNER_VERBS,
+} from '../../../../src/components/chat/thinkingPhrases.js';
 
-const BASE = ['Thinking', 'Pondering', 'Noodling', 'Ruminating', 'Percolating', 'Cogitating'];
+const BASE = SPINNER_VERBS;
 const SONIC = ['collecting rings...', 'pondering around at the speed of sound...'];
 
 test('no pet leaves the rotation exactly as it was', () => {
-  assert.deepEqual(buildThinkingRotation(BASE, undefined), BASE.map((word) => `${word}…`));
-  assert.deepEqual(buildThinkingRotation(BASE, []), BASE.map((word) => `${word}…`));
+  assert.deepEqual(buildThinkingRotation(undefined), BASE.map((word) => `${word}…`));
+  assert.deepEqual(buildThinkingRotation([]), BASE.map((word) => `${word}…`));
 });
 
 test("a pet's lines are mixed in, not substituted for the rotation", () => {
-  const rotation = buildThinkingRotation(BASE, SONIC);
+  const rotation = buildThinkingRotation(SONIC);
   const petLines = rotation.filter((entry) => SONIC.includes(entry));
 
   for (const word of BASE) {
@@ -28,7 +33,7 @@ test("a pet's lines are mixed in, not substituted for the rotation", () => {
 });
 
 test('the lines are spaced out rather than clumped together', () => {
-  const rotation = buildThinkingRotation(BASE, SONIC);
+  const rotation = buildThinkingRotation(SONIC);
   for (let index = 1; index < rotation.length; index += 1) {
     const consecutive = SONIC.includes(rotation[index]) && SONIC.includes(rotation[index - 1]);
     assert.equal(consecutive, false, 'two pet lines in a row');
@@ -36,7 +41,7 @@ test('the lines are spaced out rather than clumped together', () => {
 });
 
 test('a pet with one line still says it more than once in a long run', () => {
-  const rotation = buildThinkingRotation(BASE, ['gotta go fast']);
+  const rotation = buildThinkingRotation(['gotta go fast']);
   assert.ok(rotation.filter((entry) => entry === 'gotta go fast').length > 1);
 });
 
@@ -52,16 +57,52 @@ test('user-authored text is treated as hostile input', () => {
   assert.equal(cleaned[0], 'collecting rings...', 'whitespace collapsed and trimmed');
   assert.equal(cleaned[1], 'line one line two', 'a phrase cannot become two rows');
   assert.equal(cleaned.length, 3, 'empties dropped');
-  assert.ok(cleaned[2].length <= 48, 'and nothing runs off the end of the row');
+  assert.ok(cleaned[2].length <= 72, 'and nothing runs off the end of the row');
   assert.ok(cleaned[2].endsWith('…'), 'a truncated line says it was truncated');
 });
 
 test('a pet cannot flood the rotation with phrases', () => {
   const many = Array.from({ length: 40 }, (_, index) => `line ${index}`);
-  assert.equal(readPetPhrases(many).length, 8);
+  assert.equal(readPetPhrases(many).length, 12);
 });
 
 test('non-strings from an unvalidated pet definition are ignored', () => {
   const messy = [null, 42, { text: 'nope' }, 'real one'] as unknown as string[];
   assert.deepEqual(readPetPhrases(messy), ['real one']);
+});
+
+test('the pet may only ever talk over a generic spinner verb', () => {
+  // The gate. Everything the rotation can show is either one of our own
+  // interchangeable verbs or a line the pet's author wrote; nothing carrying
+  // information from the run can appear in it at all.
+  const rotation = buildThinkingRotation(SONIC);
+  const petLines = new Set(SONIC);
+
+  for (const entry of rotation) {
+    assert.ok(
+      isSpinnerVerb(entry) || petLines.has(entry),
+      `${entry} is neither a spinner verb nor one of the pet's lines`,
+    );
+  }
+});
+
+test('real status text is not mistaken for a generic verb', () => {
+  // These are the shapes that must never be substitutable. `detail` carries
+  // them, and it is rendered on a path that never reaches this module.
+  for (const status of [
+    'Compacting context',
+    'Running Bash',
+    'Context automatically compacted.',
+    'Waiting for permission',
+    'Editing src/index.css',
+  ]) {
+    assert.equal(isSpinnerVerb(status), false, status);
+  }
+});
+
+test('a verb is recognised however the rotation draws it', () => {
+  assert.equal(isSpinnerVerb('Thinking'), true);
+  assert.equal(isSpinnerVerb('Thinking…'), true, 'with the ellipsis the rotation adds');
+  assert.equal(isSpinnerVerb('thinking...'), true, 'and case- and dot-insensitively');
+  assert.equal(isSpinnerVerb('Thinking hard about the parser'), false, 'but not as a prefix');
 });

@@ -10,6 +10,7 @@ import {
   toMessageAttachment,
 } from '@/modules/chat/normalize.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
+import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { publishSessionsChanged } from '@/shared/broadcast.js';
 import type { AskUserQuestion, NormalizedMessage, PermissionDecision } from '@/shared/types.js';
 import { createCompleteMessage, createMessage, readRecord } from '@/shared/utils.js';
@@ -469,6 +470,13 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       parkedPermissions.delete(requestId);
       parked.resolve({ allow: false, message: 'The run ended before this was answered.' });
     }
+
+    // Claude Code names its own transcripts, and the name is on disk by the
+    // end of the first exchange. Picked up here rather than generated: not
+    // awaited, because the turn is already over as far as the user is
+    // concerned, and swallowed, because failing to improve a title is not
+    // worth surfacing over a run that otherwise succeeded.
+    void sessionsService.adoptGeneratedTitle(sessionId).catch(() => {});
   }
 }
 

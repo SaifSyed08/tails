@@ -1,4 +1,4 @@
-import { getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -8,7 +8,7 @@ import { sessionsRepository } from '@/db/sessions.repository.js';
 import { normalizeSdkMessage } from '@/modules/chat/normalize.js';
 import { publishSessionsChanged } from '@/shared/broadcast.js';
 import type { ChatSession, NormalizedMessage, SessionListItem } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, readString } from '@/shared/utils.js';
 
 /**
  * Turns the first line of a prompt into a conversation title.
@@ -20,6 +20,31 @@ function deriveTitle(prompt: string): string {
   const firstLine = prompt.split('\n').find((line) => line.trim()) ?? 'New chat';
   const trimmed = firstLine.trim();
   return trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed;
+}
+
+/**
+ * Decides whether a generated title should replace the one we hold.
+ *
+ * Split out from the IO so the rules are testable without a transcript on
+ * disk, since every one of them is a rule about *not* writing.
+ */
+export function chooseAdoptedTitle(input: {
+  current: string;
+  pinned: boolean;
+  customTitle?: string;
+  summary?: string;
+}): string | null {
+  // A name the user chose is final.
+  if (input.pinned) return null;
+
+  // `summary` is the SDK's own resolution of custom title, then generated
+  // title, then first prompt. The last of those is the text we already derived
+  // ourselves, which the equality check below turns into a no-op.
+  const generated = readString(input.customTitle) ?? readString(input.summary);
+  if (!generated) return null;
+
+  const title = deriveTitle(generated);
+  return title === input.current ? null : title;
 }
 
 /**
@@ -53,6 +78,7 @@ export const sessionsService = {
       pinnedAt: null,
       archivedAt: null,
       petId: null,
+      titlePinned: false,
     };
   },
 
@@ -276,10 +302,51 @@ export const sessionsService = {
    */
   renameSession(sessionId: string, title: string): ChatSession {
     this.ensureSession(sessionId, { title });
-    sessionsRepository.renameSession(sessionId, deriveTitle(title));
+    // The user typed this one, so it is final: pinning stops the title Claude
+    // Code generates for the transcript from ever replacing it.
+    sessionsRepository.renameSession(sessionId, deriveTitle(title), { pinned: true });
     const renamed = this.getSession(sessionId);
     publishSessionsChanged(sessionId);
     return renamed;
+  },
+
+  /**
+   * Takes the title Claude Code generated for this conversation.
+   *
+   * Not generated here, and deliberately so: the CLI already writes a short
+   * summary of every transcript it owns — the same one the sidebar has always
+   * shown for external chats — and it lands on the session record within the
+   * first exchange. Asking a model to summarise the conversation a second time
+   * would spend tokens to produce a worse copy of something already computed,
+   * and leave two titles disagreeing about the same chat.
+   *
+   * Cheap enough to call after every turn: it is a sidecar read, no subprocess
+   * and no tokens, and it writes only when the answer actually changed. That
+   * also means a title the CLI refines later is picked up rather than frozen
+   * at whatever the first exchange produced.
+   *
+   * `dir` is not passed, for the reason documented on `getMessages`: it
+   * narrows the lookup to a project directory whose key our stored `cwd` may
+   * not reproduce, and a miss here would look like "no title".
+   */
+  async adoptGeneratedTitle(sessionId: string): Promise<void> {
+    const session = sessionsRepository.getSession(sessionId);
+    // Nothing to adopt for a chat with no transcript yet.
+    if (!session?.providerSessionId) return;
+
+    const info = await getSessionInfo(session.providerSessionId);
+    const title = chooseAdoptedTitle({
+      current: session.title,
+      pinned: session.titlePinned,
+      customTitle: info?.customTitle,
+      summary: info?.summary,
+    });
+    if (!title) return;
+
+    // Leaves `updated_at` alone: retitling is not activity, and bumping it
+    // would jump the chat to the top of the sidebar for a non-event.
+    sessionsRepository.renameSession(sessionId, title);
+    publishSessionsChanged(sessionId);
   },
 
   /** Pinned conversations sort above everything else in the sidebar. */
@@ -338,6 +405,14 @@ export const sessionsService = {
   assignPet(sessionId: string, petId: string | null): ChatSession {
     this.ensureSession(sessionId);
     sessionsRepository.setPetId(sessionId, petId);
+
+    // Announced, because two surfaces render this and neither is the caller:
+    // the sidebar row's pet icon, and the pet standing in the chat. Without it
+    // an unassign left the pet on screen until something else happened to
+    // refresh — the assignment had taken effect everywhere except where it was
+    // visible.
+    publishSessionsChanged(sessionId);
+
     return this.getSession(sessionId);
   },
 

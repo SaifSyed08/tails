@@ -1,21 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { buildThinkingRotation } from '@/components/chat/thinkingPhrases';
+import { buildThinkingRotation, SPINNER_VERBS } from '@/components/chat/thinkingPhrases';
 import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
-
-/**
- * The rotating status words shown while the agent works.
- *
- * In the spirit of Claude Code's own playful indicator rather than a copy of
- * its exact list — the point is that a long pause feels alive instead of hung.
- */
-const WORDS = [
-  'Thinking', 'Pondering', 'Noodling', 'Ruminating', 'Percolating',
-  'Cogitating', 'Musing', 'Deliberating', 'Puzzling', 'Simmering',
-  'Brewing', 'Marinating', 'Mulling', 'Conjuring', 'Untangling',
-  'Wrangling', 'Scheming', 'Tinkering', 'Divining', 'Whirring',
-];
 
 /** How long each word stays up. Long enough to read, short enough to notice. */
 const WORD_INTERVAL_MS = 2600;
@@ -77,9 +64,9 @@ export function ThinkingIndicator({ detail, petPhrases }: ThinkingIndicatorProps
    * here: an ordinary word needs one, a hand-written pet line is already
    * punctuated the way its author wanted.
    */
-  const rotation = useMemo(() => buildThinkingRotation(WORDS, petPhrases), [petPhrases]);
+  const rotation = useMemo(() => buildThinkingRotation(petPhrases), [petPhrases]);
   const [slots, setSlots] = useState<[string, string]>(
-    () => [`${WORDS[Math.floor(Math.random() * WORDS.length)]}…`, ''],
+    () => [`${SPINNER_VERBS[Math.floor(Math.random() * SPINNER_VERBS.length)]}…`, ''],
   );
   const [active, setActive] = useState<0 | 1>(0);
   const [seconds, setSeconds] = useState(0);
@@ -124,6 +111,11 @@ export function ThinkingIndicator({ detail, petPhrases }: ThinkingIndicatorProps
         <span className="relative inline-flex size-2 rounded-full bg-primary" />
       </span>
 
+      {/*
+        A real status from the run, shown verbatim and alone. The pet does not
+        get a turn here: this is the branch that can carry information, so
+        nothing may talk over it.
+      */}
       {detail ? (
         <span className={cn(shimmerClass)} style={reduced ? undefined : SHIMMER_STYLE}>
           {detail}

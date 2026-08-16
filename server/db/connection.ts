@@ -38,7 +38,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   archived_at DATETIME,
   -- The companion assigned to this conversation. No foreign key: pets live on
   -- disk, not in this database, and uninstalling one must not break a chat.
-  pet_id TEXT
+  pet_id TEXT,
+  -- Set when the user names a chat themselves. Claude Code writes its own
+  -- title into the transcript and we adopt it, but never over a chosen name.
+  title_pinned INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
@@ -109,6 +112,7 @@ export function getConnection(): Database.Database {
   ensureColumn(connection, 'sessions', 'pinned_at', 'DATETIME');
   ensureColumn(connection, 'sessions', 'archived_at', 'DATETIME');
   ensureColumn(connection, 'sessions', 'pet_id', 'TEXT');
+  ensureColumn(connection, 'sessions', 'title_pinned', 'INTEGER NOT NULL DEFAULT 0');
   return connection;
 }
 

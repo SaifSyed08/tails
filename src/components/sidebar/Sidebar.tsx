@@ -10,6 +10,7 @@ import {
   petsApi,
   usePetLibraryVersion,
   type InstalledPet,
+  type PetCarryRelease,
   type PetDragPayload,
   type PetDropTarget,
 } from '@/components/marketplace';
@@ -311,7 +312,7 @@ export function Sidebar({
   }, [ensureOwned, pets, requestReload, sessions]);
 
   /**
-   * A pet let go of, from either gesture and over either kind of target.
+   * A pet dropped on something, from either gesture.
    *
    * The chat resolves to whichever conversation it is showing: "drop anywhere
    * in the chat" is only offered when there is one, so a target of `chat`
@@ -321,6 +322,18 @@ export function Sidebar({
     const sessionId = target.kind === 'chat' ? activeSessionId : target.sessionId;
     if (sessionId) void assignPet(sessionId, payload);
   }, [activeSessionId, assignPet]);
+
+  /**
+   * A pet let go of, anywhere.
+   *
+   * A release over nothing is a real outcome the carry reports rather than
+   * swallows — the in-chat pet uses it to hand him back to the desktop — but
+   * from the tray it means the user thought better of it, and the sidebar's
+   * answer is to do nothing at all.
+   */
+  const handleCarryRelease = useCallback((release: PetCarryRelease) => {
+    if (release.target) handlePetDrop(release.target, release.payload);
+  }, [handlePetDrop]);
 
   const unassignPet = useCallback(async (session: SessionListItem) => {
     setAssignments((current) => {
@@ -718,7 +731,7 @@ export function Sidebar({
 
       {/* Above Settings, where the hand already is: swapping companions should
           not need a trip to the marketplace. */}
-      <PetCarousel onCarryDrop={handlePetDrop} onEdit={() => onOpenMarketplace()} />
+      <PetCarousel onCarryRelease={handleCarryRelease} onEdit={() => onOpenMarketplace()} />
 
       {/* Everything a drag draws — the pet under the cursor and both drop
           affordances — portalled out of here. It lives beside the carousel

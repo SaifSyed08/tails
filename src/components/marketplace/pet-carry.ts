@@ -45,22 +45,32 @@ const CARRY_THRESHOLD_PX = 4;
 /**
  * How far he is allowed to swing, in degrees.
  *
- * Past roughly this he stops reading as something hanging from your hand and
- * starts reading as something spinning, which is the "unhinged" the clamp
- * exists to prevent.
+ * The clamp is the only thing standing between "hanging from your hand" and
+ * "spinning", so it is deliberately short of the 45° where a hanging object
+ * stops reading as hanging. Raised from 22°, which was measurably safe and
+ * visibly timid — at a normal drag speed he barely leant.
  */
-const MAX_TILT_DEG = 22;
+const MAX_TILT_DEG = 40;
 
-/** Degrees per pixel-per-millisecond of horizontal speed. A brisk drag is ~1px/ms. */
-const TILT_PER_VELOCITY = 26;
+/**
+ * Degrees per pixel-per-millisecond of horizontal speed.
+ *
+ * The sensitivity dial. A gentle drag is around 0.3px/ms and a brisk one
+ * 1px/ms, so this is set to put an ordinary hand movement well into the swing
+ * rather than at the bottom of it: 0.3px/ms now leans 18°, where it used to
+ * manage 8°.
+ */
+const TILT_PER_VELOCITY = 60;
 
 /**
  * How much of the new measurement each move takes on.
  *
  * Raw per-event velocity is noisy enough to make the pet jitter, because the
- * gap between two pointer events can be one millisecond or twenty.
+ * gap between two pointer events can be one millisecond or twenty. Weighted
+ * toward the newest measurement — he should answer the hand, not average it —
+ * with just enough of the old one left to absorb a bad timestamp.
  */
-const VELOCITY_BLEND = 0.4;
+const VELOCITY_BLEND = 0.55;
 
 /**
  * Speed retained per frame when no move arrives.
@@ -71,8 +81,14 @@ const VELOCITY_BLEND = 0.4;
  */
 const VELOCITY_DECAY = 0.84;
 
-/** How far the angle closes on its target each frame. Lower is heavier. */
-const TILT_EASE = 0.2;
+/**
+ * How far the angle closes on its target each frame. Lower is heavier.
+ *
+ * Below 1 by construction, which is what guarantees he approaches upright
+ * rather than swinging past it — there is no spring here, and no overshoot to
+ * tune out.
+ */
+const TILT_EASE = 0.3;
 
 const clamp = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
 
@@ -121,6 +137,42 @@ type Carry = {
   detach: () => void;
 };
 
+/**
+ * A carry that ended with the hand opening, and where.
+ *
+ * Reported for every release, hit or miss, because "he was let go over
+ * nothing" is a real outcome and not an absence of one: it is what hands him
+ * back to the desktop. Inferring it from the last published frame works right
+ * up until it does not — a frame from the previous drag, a release the same
+ * millisecond as a resize — and the handoff is too load-bearing for a guess.
+ *
+ * A carry that was *interrupted* — Escape, the window losing focus, the
+ * surface unmounting — reports nothing at all. That is the difference between
+ * putting him down and changing your mind, and it is why Escape can never
+ * throw a pet onto the desktop.
+ */
+export type PetCarryRelease = {
+  /** Null when he was let go over nothing: no drop target, or outside the window. */
+  target: PetDropTarget | null;
+  payload: PetDragPayload;
+  pet: InstalledPet;
+  /** Where he was let go, in viewport coordinates. */
+  x: number;
+  y: number;
+  /**
+   * True when that point is outside the window.
+   *
+   * Computed here, once, so the two consumers that care cannot disagree about
+   * what "outside" means.
+   */
+  outsideWindow: boolean;
+};
+
+export type PetCarryOptions = {
+  /** Called when the hand opens. See `PetCarryRelease` for what is and is not a release. */
+  onRelease?: (release: PetCarryRelease) => void;
+};
+
 export type PetCarryProps = {
   onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onClickCapture: (event: React.MouseEvent) => void;
@@ -142,7 +194,7 @@ export type PetCarryProps = {
  * asks for the props of whichever pet it is rendering.
  */
 export function usePetCarry(
-  onDrop?: (target: PetDropTarget, payload: PetDragPayload) => void,
+  options: PetCarryOptions = {},
 ): { carryingId: string | null; getCarryProps: (pet: InstalledPet) => PetCarryProps } {
   const carryRef = useRef<Carry | null>(null);
   const [carryingId, setCarryingId] = useState<string | null>(null);
@@ -154,21 +206,23 @@ export function usePetCarry(
    * the user has just made is the worst possible moment for it.
    */
   const swallowClickRef = useRef(false);
-  // Read at drop time rather than captured when the gesture started, so a drop
-  // never calls a handler the caller has since replaced.
-  const onDropRef = useRef(onDrop);
+  // Read at release time rather than captured when the gesture started, so a
+  // drop never calls a handler the caller has since replaced.
+  const onReleaseRef = useRef(options.onRelease);
   useEffect(() => {
-    onDropRef.current = onDrop;
+    onReleaseRef.current = options.onRelease;
   });
 
   /**
    * Ends the gesture and puts everything back.
    *
-   * One exit for every way out — dropped, cancelled, Escape, the window losing
+   * One exit for every way out — released, cancelled, Escape, the window losing
    * focus — because the capture, the frame loop, the listeners and the page's
-   * text selection all have to be released together or not at all.
+   * text selection all have to be released together or not at all. `released`
+   * is the one thing that distinguishes them, and it is what decides whether
+   * the caller hears about it.
    */
-  const finish = useCallback((dropped: boolean) => {
+  const finish = useCallback((released: boolean) => {
     const carry = carryRef.current;
     if (!carry) return;
     carryRef.current = null;
@@ -189,10 +243,20 @@ export function usePetCarry(
     // Resolved here rather than remembered from the last frame: the pointer can
     // move between the final frame and the release, and the pet lands where it
     // was let go of, not where it was last painted.
-    const target = dropped ? resolvePetDropTarget(carry.x, carry.y) : null;
+    const target = released ? resolvePetDropTarget(carry.x, carry.y) : null;
     endPetDrag();
     setCarryingId(null);
-    if (target) onDropRef.current?.(target, carry.payload);
+
+    if (!released) return;
+    onReleaseRef.current?.({
+      target,
+      payload: carry.payload,
+      pet: carry.pet,
+      x: carry.x,
+      y: carry.y,
+      outsideWindow: carry.x < 0 || carry.y < 0
+        || carry.x > window.innerWidth || carry.y > window.innerHeight,
+    });
   }, []);
 
   // Nothing here is scoped to a React subtree: a captured pointer outlives the
