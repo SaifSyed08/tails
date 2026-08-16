@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mouse Trail Preview</title>
+<style>
+  :root {
+    --bg: #edf8ff;
+    --ink: #18242d;
+    --glass: rgba(255,255,255,.52);
+    --border: rgba(255,255,255,.72);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 72% 18%, rgba(255,255,255,.95), transparent 30%),
+      linear-gradient(135deg, #eefaff 0%, #e5f4ff 55%, #f5fbff 100%);
+    overflow: hidden;
+  }
+
+  .page {
+    height: 100vh;
+    padding: 28px;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: 20px;
+  }
+
+  .header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 24px;
+  }
+
+  .title {
+    font-size: clamp(24px, 3vw, 44px);
+    line-height: .95;
+    letter-spacing: -.045em;
+    font-weight: 760;
+  }
+
+  .sub {
+    max-width: 580px;
+    opacity: .58;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .grid {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+
+  .demo {
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 28px;
+    border: 1px solid var(--border);
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.60), rgba(228,244,255,.44)),
+      radial-gradient(circle at 75% 20%, rgba(255,255,255,.92), transparent 35%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.85),
+      0 18px 60px rgba(71, 130, 170, .12);
+    cursor: default;
+  }
+
+  .label {
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    z-index: 3;
+    padding: 9px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    background: rgba(255,255,255,.55);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,.7);
+    pointer-events: none;
+  }
+
+  .hint {
+    position: absolute;
+    left: 18px;
+    bottom: 16px;
+    z-index: 3;
+    font-size: 11px;
+    opacity: .42;
+    pointer-events: none;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+
+  @media (max-width: 900px) {
+    body { overflow: auto; }
+    .page { height: auto; min-height: 100vh; }
+    .grid { grid-template-columns: 1fr; }
+    .demo { height: 360px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div class="title">Mouse trail<br>preview</div>
+    <div class="sub">
+      Three trail styles matched to the reference: a thin purple→ice-blue ribbon,
+      a thick cyan→blue→magenta ribbon, and a rounded dashed rainbow trail.
+      Move inside each panel.
+    </div>
+  </div>
+
+  <div class="grid">
+    <section class="demo" data-style="thin">
+      <div class="label">01 · Thin ribbon (rainbow)</div>
+      <div class="hint">purple → ice blue · soft fade</div>
+      <canvas></canvas>
+    </section>
+
+    <section class="demo" data-style="thin-progressive">
+      <div class="label">02 · Progressive ribbon</div>
+      <div class="hint">color advances as you keep moving</div>
+      <canvas></canvas>
+    </section>
+
+    <section class="demo" data-style="thick">
+      <div class="label">03 · Ribbon (two-colored)</div>
+      <div class="hint">cyan → periwinkle → magenta</div>
+      <canvas></canvas>
+    </section>
+
+    <section class="demo" data-style="dash">
+      <div class="label">04 · Dashed (two-colored)</div>
+      <div class="hint">lime → yellow → orange → pink</div>
+      <canvas></canvas>
+    </section>
+  </div>
+</div>
+
+<script>
+class Trail {
+  constructor(root) {
+    this.root = root;
+    this.canvas = root.querySelector("canvas");
+    this.ctx = this.canvas.getContext("2d");
+    this.style = root.dataset.style;
+
+    this.points = [];
+    this.last = null;
+    this.distanceTravelled = 0;
+    this.lastHuePoint = null;
+
+    // Fixed rainbow dash "printed" bits.
+    this.printedDashes = [];
+    this.lastDashPoint = null;
+    this.dashPhase = 0;
+    this.activeDash = null;
+
+    this.resize();
+    new ResizeObserver(() => this.resize()).observe(root);
+
+    root.addEventListener("pointermove", e => {
+      const r = root.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const now = performance.now();
+
+      if (!this.last || Math.hypot(x - this.last.x, y - this.last.y) >= 0.8) {
+        if (this.lastHuePoint) {
+          this.distanceTravelled += Math.hypot(
+            x - this.lastHuePoint.x,
+            y - this.lastHuePoint.y
+          );
+        }
+        this.lastHuePoint = { x, y };
+
+        // Store UNWRAPPED progress so spline interpolation never crosses
+        // a fake discontinuity like 0.99 -> 0.01.
+        // One complete palette cycle per ~950px of actual mouse travel.
+        const hueProgress = this.distanceTravelled / 950;
+
+        this.points.push({ x, y, t: now, hueProgress });
+
+        if (this.style === "dash") {
+          this.printDashBits(x, y, now);
+        }
+
+        this.last = { x, y };
+      }
+    });
+
+
+    root.addEventListener("pointerleave", () => {
+      this.last = null;
+      this.lastDashPoint = null;
+      this.activeDash = null;
+    });
+
+    requestAnimationFrame(t => this.draw(t));
+  }
+
+  printDashBits(x, y, now) {
+    const cfg = this.config();
+
+    if (!this.lastDashPoint) {
+      this.lastDashPoint = { x, y };
+      return;
+    }
+
+    const ax = this.lastDashPoint.x;
+    const ay = this.lastDashPoint.y;
+    const dx = x - ax;
+    const dy = y - ay;
+    const distance = Math.hypot(dx, dy);
+
+    if (distance < 0.01) return;
+
+    const ux = dx / distance;
+    const uy = dy / distance;
+    const cycle = cfg.dashLen + cfg.gapLen;
+
+    let cursor = 0;
+
+    while (cursor < distance) {
+      const phase = this.dashPhase % cycle;
+      const printing = phase < cfg.dashLen;
+
+      const remainingInPhase = printing
+        ? cfg.dashLen - phase
+        : cycle - phase;
+
+      const step = Math.min(remainingInPhase, distance - cursor);
+
+      const sx = ax + ux * cursor;
+      const sy = ay + uy * cursor;
+      const ex = ax + ux * (cursor + step);
+      const ey = ay + uy * (cursor + step);
+
+      if (printing && step > 0) {
+        // Start ONE physical dash when entering a dash phase.
+        if (!this.activeDash) {
+          const palettePos =
+            (((this.distanceTravelled / 950) % 1) + 1) % 1;
+
+          this.activeDash = {
+            x1: sx,
+            y1: sy,
+            x2: ex,
+            y2: ey,
+            t: now,
+            rgb: this.mixColor(cfg.stops, palettePos)
+          };
+
+          this.printedDashes.push(this.activeDash);
+        } else {
+          // Extend the same dash instead of adding another tiny round-capped line.
+          this.activeDash.x2 = ex;
+          this.activeDash.y2 = ey;
+
+          // Keep its fade age tied to when the latest part was printed,
+          // so the dash fades as one continuous piece.
+          this.activeDash.t = now;
+        }
+      }
+
+      cursor += step;
+      this.dashPhase += step;
+
+      // If we just reached the end of the dash portion, close this dash.
+      const newPhase = this.dashPhase % cycle;
+      if (printing && newPhase >= cfg.dashLen) {
+        this.activeDash = null;
+      }
+
+      // During the gap there must be no active dash.
+      if (!printing) {
+        this.activeDash = null;
+      }
+    }
+
+    this.lastDashPoint = { x, y };
+  }
+
+  resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const r = this.root.getBoundingClientRect();
+
+    this.canvas.width = Math.max(1, Math.round(r.width * dpr));
+    this.canvas.height = Math.max(1, Math.round(r.height * dpr));
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    this.w = r.width;
+    this.h = r.height;
+  }
+
+  // Centripetal Catmull-Rom interpolation reduces overshoot and kinks.
+  catmullCentripetal(p0, p1, p2, p3, steps) {
+    const alpha = 0.5;
+    const tj = (ti, a, b) => ti + Math.pow(Math.max(0.0001, Math.hypot(b.x-a.x, b.y-a.y)), alpha);
+
+    const t0 = 0;
+    const t1 = tj(t0, p0, p1);
+    const t2 = tj(t1, p1, p2);
+    const t3 = tj(t2, p2, p3);
+
+    const out = [];
+
+    for (let s = 0; s < steps; s++) {
+      const t = t1 + (t2 - t1) * (s / steps);
+
+      const lerp = (a, b, ta, tb) => {
+        const d = (tb - ta) || 1e-6;
+        return {
+          x: ((tb - t) / d) * a.x + ((t - ta) / d) * b.x,
+          y: ((tb - t) / d) * a.y + ((t - ta) / d) * b.y
+        };
+      };
+
+      const A1 = lerp(p0, p1, t0, t1);
+      const A2 = lerp(p1, p2, t1, t2);
+      const A3 = lerp(p2, p3, t2, t3);
+
+      const B1 = {
+        x: ((t2-t)/(t2-t0))*A1.x + ((t-t0)/(t2-t0))*A2.x,
+        y: ((t2-t)/(t2-t0))*A1.y + ((t-t0)/(t2-t0))*A2.y
+      };
+      const B2 = {
+        x: ((t3-t)/(t3-t1))*A2.x + ((t-t1)/(t3-t1))*A3.x,
+        y: ((t3-t)/(t3-t1))*A2.y + ((t-t1)/(t3-t1))*A3.y
+      };
+
+      const C = {
+        x: ((t2-t)/(t2-t1))*B1.x + ((t-t1)/(t2-t1))*B2.x,
+        y: ((t2-t)/(t2-t1))*B1.y + ((t-t1)/(t2-t1))*B2.y
+      };
+
+      out.push(C);
+    }
+
+    return out;
+  }
+
+  buildSpline(points) {
+    if (points.length < 2) return points.map(p => ({...p}));
+
+    const out = [];
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[Math.max(0, i - 1)];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = points[Math.min(points.length - 1, i + 2)];
+
+      const dist = Math.hypot(p2.x-p1.x, p2.y-p1.y);
+      const steps = Math.max(4, Math.ceil(dist / 0.9));
+
+      const seg = this.catmullCentripetal(p0, p1, p2, p3, steps);
+
+      for (let s = 0; s < seg.length; s++) {
+        const u = s / seg.length;
+        out.push({
+          x: seg[s].x,
+          y: seg[s].y,
+          t: p1.t + (p2.t-p1.t)*u,
+          hueProgress: (p1.hueProgress ?? 0) +
+            ((p2.hueProgress ?? p1.hueProgress ?? 0) - (p1.hueProgress ?? 0)) * u
+        });
+      }
+    }
+
+    out.push({...points[points.length-1]});
+    return out;
+  }
+
+  hexToRgb(hex) {
+    const h = hex.slice(1);
+    return [
+      parseInt(h.slice(0,2),16),
+      parseInt(h.slice(2,4),16),
+      parseInt(h.slice(4,6),16)
+    ];
+  }
+
+  mixColor(stops, u) {
+    u = Math.max(0, Math.min(1, u));
+    let a = stops[0], b = stops[stops.length - 1];
+
+    for (let i = 0; i < stops.length - 1; i++) {
+      if (u >= stops[i][0] && u <= stops[i+1][0]) {
+        a = stops[i];
+        b = stops[i+1];
+        break;
+      }
+    }
+
+    const span = (b[0] - a[0]) || 1;
+    const v = (u - a[0]) / span;
+    const ca = this.hexToRgb(a[1]);
+    const cb = this.hexToRgb(b[1]);
+
+    return [
+      Math.round(ca[0] + (cb[0]-ca[0])*v),
+      Math.round(ca[1] + (cb[1]-ca[1])*v),
+      Math.round(ca[2] + (cb[2]-ca[2])*v)
+    ];
+  }
+
+  config() {
+    if (this.style === "thin") return {
+      life: 480,
+      maxR: 5.0,
+      minR: 0.05,
+      stops: [
+        [0.00, "#6d00ff"],
+        [0.07, "#9b00ff"],
+        [0.14, "#d000ff"],
+        [0.21, "#ff00c8"],
+        [0.28, "#ff287f"],
+        [0.35, "#ff4f55"],
+        [0.42, "#ff7a28"],
+        [0.49, "#ffb000"],
+        [0.56, "#f1e900"],
+        [0.63, "#9bea16"],
+        [0.70, "#38e66b"],
+        [0.77, "#00dda8"],
+        [0.84, "#00cbd5"],
+        [0.90, "#29a9ff"],
+        [0.95, "#4d72ff"],
+        [1.00, "#7654ff"]
+      ],
+      dashed: false
+    };
+
+    if (this.style === "thin-progressive") return {
+      life: 480,
+      maxR: 5.0,
+      minR: 0.05,
+      stops: [
+        [0.00, "#ff315f"],
+        [0.08, "#ff4d2e"],
+        [0.16, "#ff8a00"],
+        [0.24, "#ffc400"],
+        [0.32, "#d8e800"],
+        [0.40, "#72e229"],
+        [0.48, "#20d879"],
+        [0.56, "#00cfa8"],
+        [0.64, "#00bfd2"],
+        [0.72, "#168fff"],
+        [0.80, "#4d63ff"],
+        [0.88, "#8847ff"],
+        [0.94, "#c335f0"],
+        [1.00, "#f22aa8"]
+      ],
+      dashed: false,
+      progressive: true
+    };
+
+    if (this.style === "thick") return {
+      life: 450,
+      maxR: 8.7,
+      minR: 0.05,
+      stops: [
+        [0.00, "#f000ea"],
+        [0.12, "#df19ef"],
+        [0.24, "#c83fee"],
+        [0.38, "#aa62ed"],
+        [0.52, "#8b83ef"],
+        [0.66, "#72a9f1"],
+        [0.80, "#5fcff0"],
+        [0.90, "#54e1f0"],
+        [1.00, "#49f0ef"]
+      ],
+      dashed: false
+    };
+
+    return {
+      life: 520,
+      maxR: 2.7,
+      minR: 2.7,
+      stops: [
+        [0.00, "#9dff00"],
+        [0.13, "#b8ef00"],
+        [0.26, "#d8df00"],
+        [0.39, "#edc511"],
+        [0.52, "#f3a328"],
+        [0.65, "#ef7c3c"],
+        [0.78, "#e95058"],
+        [0.90, "#ea2870"],
+        [1.00, "#ea007d"]
+      ],
+      dashed: true,
+      dashLen: 7,
+      gapLen: 15,
+      fixedPrinted: true
+    };
+  }
+
+  draw(now) {
+    const ctx = this.ctx;
+    const cfg = this.config();
+
+    ctx.clearRect(0, 0, this.w, this.h);
+
+    if (cfg.fixedPrinted) {
+      this.printedDashes = this.printedDashes.filter(
+        d => now - d.t < cfg.life
+      );
+
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = cfg.maxR * 2;
+
+      for (const d of this.printedDashes) {
+        const age = Math.max(
+          0,
+          Math.min(1, (now - d.t) / cfg.life)
+        );
+
+        const remaining = 1 - age;
+        const alpha = Math.pow(
+          remaining * remaining * (3 - 2 * remaining),
+          1.45
+        );
+
+        if (alpha <= 0.003) continue;
+
+        ctx.beginPath();
+        ctx.moveTo(d.x1, d.y1);
+        ctx.lineTo(d.x2, d.y2);
+        ctx.strokeStyle =
+          `rgba(${d.rgb[0]}, ${d.rgb[1]}, ${d.rgb[2]}, ${alpha})`;
+        ctx.stroke();
+      }
+
+      ctx.restore();
+      requestAnimationFrame(t => this.draw(t));
+      return;
+    }
+
+    this.points = this.points.filter(p => now - p.t < cfg.life);
+
+    if (this.points.length < 2) {
+      requestAnimationFrame(t => this.draw(t));
+      return;
+    }
+
+    const spline = this.buildSpline(this.points);
+
+    let total = 0;
+    const lengths = [0];
+
+    for (let i = 1; i < spline.length; i++) {
+      total += Math.hypot(
+        spline[i].x - spline[i-1].x,
+        spline[i].y - spline[i-1].y
+      );
+      lengths.push(total);
+    }
+
+    ctx.save();
+
+    // Draw overlapping discs instead of line segments.
+    // This removes the polygonal/marker look and gives a smooth liquid ribbon.
+    for (let i = 0; i < spline.length; i++) {
+      const p = spline[i];
+      const pos = total ? lengths[i] / total : 1;
+
+      const age = Math.max(0, Math.min(1, (now - p.t) / cfg.life));
+
+      // Smoothstep-style temporal vanish.
+      const x = 1 - age;
+      const ageFade = Math.pow(x*x*(3 - 2*x), 2.25);
+
+      // Rainbow dash should read like a rounded dashed line, not a tapered ribbon.
+      const taper = cfg.constantWidth ? 1 : Math.pow(pos, 1.55);
+      const radius = cfg.constantWidth
+        ? cfg.maxR
+        : cfg.minR + (cfg.maxR - cfg.minR) * taper;
+
+      // Keep dash width consistent; only fade with time.
+      const tailFade = cfg.constantWidth
+        ? 1
+        : Math.pow(Math.min(1, pos / 0.30), 1.8);
+      const alpha = ageFade * tailFade;
+
+      if (alpha <= 0.003 || radius <= 0.03) continue;
+
+      if (cfg.dashed) {
+        const cycle = cfg.dashLen + cfg.gapLen;
+
+        // Anchor dash phase to the mouse's cumulative path distance.
+        // This prevents already-printed dashes from sliding forward
+        // whenever old trail points expire or new points are added.
+        const anchoredDistance =
+          p.pathDistance ?? lengths[i];
+
+        if ((anchoredDistance % cycle) >= cfg.dashLen) continue;
+      }
+
+      const colorPosition = cfg.progressive
+        ? (((p.hueProgress ?? 0) % 1) + 1) % 1
+        : pos;
+      const rgb = this.mixColor(cfg.stops, colorPosition);
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+      ctx.fill();
+    }
+
+    ctx.restore();
+
+    requestAnimationFrame(t => this.draw(t));
+  }
+}
+
+document.querySelectorAll(".demo").forEach(el => new Trail(el));
+</script>
+</body>
+</html>

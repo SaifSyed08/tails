@@ -129,6 +129,26 @@ export type AppearancePayload = {
  * cross-fades the whole document in one compositor pass instead of flickering
  * element by element.
  */
+/**
+ * Drops the stylesheet `index.html` injects before the bundle runs.
+ *
+ * That script paints the last look from `localStorage` so a cold start does not
+ * flash the built-in ramp — but it does it with a plain `<style>` element in
+ * `<head>`, and nothing used to take it away. Every other layer lives in
+ * `adoptedStyleSheets`, which the appearance state replaces wholesale, so the
+ * teardown that resets everything else could not see this one at all: resetting
+ * unbound the theme, emptied the adopted sheet, and left the pre-paint element
+ * still applying the old preset. The result was an app that came back partly
+ * reset and could not be talked out of it, because the thing holding the old
+ * look was invisible to every mechanism designed to clear it.
+ *
+ * Removed on the first real apply, by which point the sheet it exists to cover
+ * for has been written.
+ */
+function dropPrebootStyle(): void {
+  document.getElementById('tails-theme-preboot')?.remove();
+}
+
 export async function applyTheme(payload: AppearancePayload): Promise<void> {
   const { write } = ensureSheet();
 
@@ -136,6 +156,7 @@ export async function applyTheme(payload: AppearancePayload): Promise<void> {
 
   const commit = () => {
     write(payload.css);
+    dropPrebootStyle();
 
     // A pinned single-mode theme owns the class as well as the tokens;
     // otherwise every `dark:` utility would stay on the wrong branch.
@@ -170,9 +191,12 @@ export async function applyTheme(payload: AppearancePayload): Promise<void> {
 /** Drops any generated theme, revealing the built-in ramp underneath. */
 export function clearTheme(): void {
   ensureSheet('theme').write('');
+  ensureSheet('css').write('');
+  dropPrebootStyle();
+
   try {
     localStorage.removeItem(THEME_CSS_KEY);
   } catch {
-    // Nothing to recover from; the sheet is already cleared.
+    // Nothing to recover from; the sheets are already cleared.
   }
 }

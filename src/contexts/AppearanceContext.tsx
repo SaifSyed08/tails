@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
-import { applyFreeformCss, applyTheme, type AppearancePayload } from '@/theme/applyTheme';
+import { applyFreeformCss, applyTheme, clearTheme, type AppearancePayload } from '@/theme/applyTheme';
 
 /** What the app is doing about its own appearance right now. */
 export type AppearancePhase = 'idle' | 'preparing' | 'applying';
@@ -109,7 +109,20 @@ export function AppearanceProvider({ sessionId, children }: AppearanceProviderPr
     void fetch(`/api/appearance/resolve${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`)
       .then((response) => (response.ok ? response.json() : null))
       .then((resolved: AppearancePayload | null) => {
-        if (cancelled || !resolved?.css) return;
+        if (cancelled) return;
+
+        // Nothing bound is an answer, not an absence, and returning early here
+        // is what made "reset to default" fail to survive a restart. The
+        // pre-paint script in index.html has already applied the last cached
+        // look from localStorage; if the server then says there is no theme,
+        // that cache is stale and has to be cleared. Doing nothing left the app
+        // wearing a theme it no longer had, with the element holding it
+        // invisible to every layer that resets.
+        if (!resolved?.css) {
+          clearTheme();
+          return;
+        }
+
         void applyTheme(resolved);
       })
       .catch(() => undefined);
