@@ -9,7 +9,7 @@ import {
   createPetWindow,
   destroyPetWindow,
   isPetHidden,
-  placePetAt,
+  placePetFromWindow,
   refreshPetWindow,
   resetPetPosition,
   setPetHidden,
@@ -388,13 +388,20 @@ function startPetWindow() {
     serverUrl: SERVER_URL,
     readState: readUiState,
     writeState: patchUiState,
-    onOpenSettings: () => {
+    /**
+     * The pill's settings button, which is now the pet's only way in.
+     *
+     * The panel is a piece of the app, so the shell brings the app forward and
+     * says which pet it is about. Without the raise this looks broken: the pet
+     * floats above everything, so clicking him while the app is behind another
+     * window would open a panel nobody can see.
+     */
+    onOpenPetDetails: (petId) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
-      // The settings panel belongs to the renderer; the shell can only ask.
-      mainWindow.webContents.send('tails:open-settings');
+      mainWindow.webContents.send('tails:open-pet-details', petId);
     },
   });
 }
@@ -408,15 +415,18 @@ function startPetWindow() {
  * immediately instead of at the window's next poll.
  */
 function installPetBridge() {
-  ipcMain.on('tails:desktop-pet', (_event, payload) => {
+  ipcMain.on('tails:desktop-pet', (event, payload) => {
     const action = payload?.action;
     if (action === 'suppress') setPetSuppressed(payload?.value !== false);
     else if (action === 'hide') setPetHidden(payload?.value !== false);
     else if (action === 'refresh') refreshPetWindow();
     else if (action === 'reset') resetPetPosition();
-    // The handoff: the app has just let go of an in-window pet at this point on
-    // the screen, and the desktop pet is about to take over from there.
-    else if (action === 'place') placePetAt(Number(payload?.x), Number(payload?.y));
+    // The handoff: the app is carrying an in-window pet past its own edge. The
+    // point is in the app page's coordinates, and only the shell can turn those
+    // into a place on the screen — see `placePetFromWindow`.
+    else if (action === 'place') {
+      placePetFromWindow(BrowserWindow.fromWebContents(event.sender), Number(payload?.x), Number(payload?.y));
+    }
   });
 
   ipcMain.handle('tails:desktop-pet-state', () => ({ hidden: isPetHidden() }));

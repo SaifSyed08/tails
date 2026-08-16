@@ -27,7 +27,11 @@ contextBridge.exposeInMainWorld('petBridge', {
    */
   reportPointerOverPet: (over) => ipcRenderer.send('pet:interactive', { over }),
 
-  openMenu: (petId) => ipcRenderer.send('pet:menu', { petId }),
+  /** The pill's settings button: open this pet's panel in the app. */
+  openDetails: (petId) => ipcRenderer.send('pet:details', { petId }),
+
+  /** The pill's X: put the pet away. Persisted, like the app's own hide. */
+  hidePet: () => ipcRenderer.send('pet:hide'),
 
   /**
    * The shell tells the page it is being carried.

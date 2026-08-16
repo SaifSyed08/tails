@@ -17,6 +17,19 @@ export type SessionPet = {
   source: 'session' | 'global' | 'none';
 };
 
+/**
+ * Whoever is on the desktop right now.
+ *
+ * The same resolver with no conversation attached, which is exactly what the
+ * desktop window itself asks — so the panel opened from the pet's own pill is
+ * guaranteed to be about the pet you clicked.
+ */
+export async function readDisplayPet(): Promise<SessionPet> {
+  const response = await fetch('/api/pets/display', { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`The active pet could not be read (${response.status}).`);
+  return response.json() as Promise<SessionPet>;
+}
+
 export async function readSessionPet(sessionId: string): Promise<SessionPet> {
   const response = await fetch(
     `/api/pets/display?sessionId=${encodeURIComponent(sessionId)}`,

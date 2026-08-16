@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import {
+  hideDesktopPet,
   PetSprite,
   readPetDragFrame,
   refreshDesktopPet,
@@ -17,15 +18,17 @@ import { useReducedMotion } from '@/shared/ui/Motion';
 
 import {
   activatePet,
+  readDisplayPet,
   readSessionPet,
   readStage,
   savePetStage,
   type PetStage,
 } from './chat-pet-api';
-import { placeDesktopPetAt } from './desktop-handoff';
-import { PetMenu } from './PetMenu';
+import { onDesktopPetDetails, placeDesktopPetAt } from './desktop-handoff';
+import { PetDetailsPanel } from './PetDetailsPanel';
 import { PetPill } from './PetPill';
 import { advanceMotion, type Motion } from './pet-motion';
+import { fpsForState } from './sprite-rate';
 import { useChatActivity } from './useChatActivity';
 import { useInChatCarry } from './useInChatCarry';
 
@@ -90,15 +93,6 @@ const GREETING_MS = 900;
 
 /** How long a click's jump lasts before he settles again. */
 const REACTION_MS = 1200;
-
-/**
- * How much faster than the sheet's own rate he plays.
- *
- * Codex's 260ms a frame reads as slightly under-wound — the pets look like they
- * are moving through treacle. Mirrored in `desktop-window.ts`, so he does not
- * run at two different speeds depending on which surface he is standing on.
- */
-const FPS_BOOST = 1.35;
 
 /**
  * How much of the margin beside the transcript he strolls in.
@@ -207,7 +201,16 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   const [hovered, setHovered] = useState(false);
   const [handedOffArrival, setHandedOffArrival] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  /**
+   * The desktop pet, when his own pill asked for this panel.
+   *
+   * Hosted here because this component is the app's one always-mounted piece of
+   * pet, and the panel has to open whichever conversation happens to be on
+   * screen — including none. He is resolved rather than passed: the shell knows
+   * which pet was clicked, but only the server can turn that into a pet.
+   */
+  const [desktopPet, setDesktopPet] = useState<InstalledPet | null>(null);
   /** The size and walk settings as the user is changing them, before the reload. */
   const [pendingStage, setPendingStage] = useState<{ petId: string; stage: PetStage } | null>(null);
 
@@ -274,6 +277,15 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     queueMicrotask(() => setHandedOffArrival(null));
     return undefined;
   }, [dragging]);
+
+  // The desktop pet's settings button. The shell has already raised the app.
+  useEffect(() => {
+    onDesktopPetDetails(() => {
+      void readDisplayPet()
+        .then((resolved) => setDesktopPet(resolved.pet))
+        .catch(() => setDesktopPet(null));
+    });
+  }, []);
 
   // The overlay belongs to the chat view, which mounts and unmounts as the user
   // moves between chat and the marketplace.
@@ -537,7 +549,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * active) or turned into whoever was — which is what "a different pet appears
    * outside the chat interface" was.
    */
-  const takeOutside = useCallback((petId: string) => {
+  const takeOutside = useCallback((petId: string, show: boolean) => {
     if (activatedRef.current !== petId) {
       activatedRef.current = petId;
       void activatePet(petId).then(refreshDesktopPet).catch(() => {
@@ -545,11 +557,22 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         // the window already had. Nothing here is worth interrupting a drag.
       });
     }
-    suppressDesktopPet(false);
+    if (show) suppressDesktopPet(false);
   }, []);
 
   const { carrying, onPointerDown, onClickCapture } = useInChatCarry({
-    onMove: (left, top, screen) => {
+    onStart: () => {
+      // Activated at the first movement, not when he crosses the edge.
+      //
+      // The desktop window only ever draws the active pet, and it has to fetch
+      // the sheet, work out its cell and tell the shell what size to be. Doing
+      // that at the boundary meant he arrived on the desktop as the *previous*
+      // pet's geometry against the new sheet — a sprite cut off mid-row. Done
+      // at pick-up, the window is sized and ready long before the hand gets
+      // there, and it is still suppressed so nothing shows in the meantime.
+      if (pet) takeOutside(pet.definition.id, false);
+    },
+    onMove: (left, top, pointer) => {
       const rect = overlay?.getBoundingClientRect();
       if (!rect || !geometry || !pet) return;
 
@@ -568,7 +591,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       if (isOutside !== outsideRef.current) {
         outsideRef.current = isOutside;
         setOutside(isOutside);
-        if (isOutside) takeOutside(pet.definition.id);
+        if (isOutside) takeOutside(pet.definition.id, true);
         else suppressDesktopPet(true);
       }
 
@@ -576,7 +599,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         // He is the desktop window now, and it follows the pointer directly.
         // No grab offset and no read-back: every position comes from the hand,
         // so nothing can accumulate — which is what six rounds of drift were.
-        placeDesktopPetAt(screen.x, screen.y);
+        placeDesktopPetAt(pointer.x, pointer.y);
         return;
       }
 
@@ -603,7 +626,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       activatedRef.current = null;
       setMotion((current) => (current ? { ...current, carried: false, vy: 0 } : current));
     },
-    onRelease: ({ screenX, screenY }) => {
+    onRelease: ({ clientX, clientY }) => {
       const wasOutside = outsideRef.current;
       outsideRef.current = false;
       setOutside(false);
@@ -612,7 +635,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       if (wasOutside) {
         // Left on the desktop. The assignment is untouched: he still belongs to
         // this conversation, and coming back to it brings him back in.
-        placeDesktopPetAt(screenX, screenY);
+        placeDesktopPetAt(clientX, clientY);
         if (arrival) setHandedOffArrival(arrival);
         return;
       }
@@ -657,16 +680,44 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   }, [landed]);
 
   /** Saved as it is changed, and shown immediately rather than after the round trip. */
-  const changeStage = useCallback((next: PetStage) => {
-    if (!pet) return;
-    setPendingStage({ petId: pet.definition.id, stage: next });
-    void savePetStage(pet.definition.id, next).catch(() => {
-      // A setting that would not save is not worth an alert over a pet's size;
-      // the next read puts the slider back where the server says it is.
-    });
-  }, [pet]);
+  const changeStage = useCallback((petId: string, next: PetStage) => {
+    setPendingStage({ petId, stage: next });
+    void savePetStage(petId, next)
+      // The desktop window polls every couple of seconds; this makes the slider
+      // feel like it is attached to the pet rather than to a timer.
+      .then(refreshDesktopPet)
+      .catch(() => {
+        // A setting that would not save is not worth an alert over a pet's
+        // size; the next read puts the slider back where the server says it is.
+      });
+  }, []);
 
-  if (!overlay || !pet || !geometry || !here || handedOff || outside) return null;
+  /**
+   * The desktop pet's panel, which is not about this conversation at all.
+   *
+   * Built before the guard below, because it has to open whether or not there
+   * is a chat pet to draw — the pet who asked for it is on the desktop, and the
+   * app may be showing an empty chat or the marketplace.
+   */
+  const desktopPanel = desktopPet ? (
+    <PetDetailsPanel
+      key={desktopPet.definition.id}
+      pet={desktopPet}
+      stage={pendingStage && pendingStage.petId === desktopPet.definition.id
+        ? pendingStage.stage
+        : readStage(desktopPet)}
+      onChange={(next) => changeStage(desktopPet.definition.id, next)}
+      onClose={() => setDesktopPet(null)}
+      onHide={() => {
+        setDesktopPet(null);
+        // The persisted hide, the same one his X uses. He is not unassigned and
+        // not deactivated: he is put away, and the marketplace brings him back.
+        hideDesktopPet(true);
+      }}
+    />
+  ) : null;
+
+  if (!overlay || !pet || !geometry || !here || handedOff || outside) return desktopPanel;
 
   const height = Math.round(CARRIED_HEIGHT + (fullHeight - CARRIED_HEIGHT) * here.grow);
   const width = Math.round(height * widthPerHeight);
@@ -714,12 +765,9 @@ export function ChatPet({ sessionId }: ChatPetProps) {
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
           onClick={() => gesture('jumping', REACTION_MS)}
-          onContextMenu={(event) => {
-            // Right-click opens the same menu the pill's button does. This is
-            // the gesture people already know; the pill is the visible half.
-            event.preventDefault();
-            setMenuAt({ x: event.clientX, y: event.clientY });
-          }}
+          // No right-click on the pet, here or on the desktop: the pill is the
+          // way in, and one way in is the point of having made it visible.
+          onContextMenu={(event) => event.preventDefault()}
           style={{
             position: 'absolute',
             left: `${here.x}px`,
@@ -755,25 +803,41 @@ export function ChatPet({ sessionId }: ChatPetProps) {
              * way he came from. Same rule as the desktop page.
              */
             facing={pet.definition.states[state] ? 'right' : here.facing}
-            fps={(pet.definition.frame.fps ?? 8) * FPS_BOOST}
+            /* Per state: moments are brisk, resting states breathe. */
+            fps={fpsForState(pet.definition.frame.fps, state)}
           />
           <PetPill
             open={hovered && !carrying}
             width={width}
-            onOpenMenu={(x, y) => setMenuAt({ x, y })}
+            onOpenDetails={() => setDetailsOpen(true)}
+            onHide={() => {
+              // Away for now, not unassigned. He belongs to this conversation
+              // whether or not he is standing in it, so coming back brings him
+              // back — the same rule as carrying him out to the desktop.
+              if (arrival) setHandedOffArrival(arrival);
+            }}
           />
         </div>,
         overlay,
       )}
 
-      {menuAt ? (
-        <PetMenu
+      {desktopPanel}
+
+      {detailsOpen ? (
+        <PetDetailsPanel
           pet={pet}
           stage={stage}
-          x={menuAt.x}
-          y={menuAt.y}
-          onChange={changeStage}
-          onClose={() => setMenuAt(null)}
+          onChange={(next) => changeStage(pet.definition.id, next)}
+          onClose={() => setDetailsOpen(false)}
+          onSendToDesktop={() => {
+            setDetailsOpen(false);
+            takeOutside(pet.definition.id, true);
+            if (arrival) setHandedOffArrival(arrival);
+          }}
+          onHide={() => {
+            setDetailsOpen(false);
+            if (arrival) setHandedOffArrival(arrival);
+          }}
         />
       ) : null}
     </>

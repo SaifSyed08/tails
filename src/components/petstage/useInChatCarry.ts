@@ -31,21 +31,29 @@ export type InChatRelease = {
   /** Where the pet's top-left corner is, in viewport coordinates. */
   x: number;
   y: number;
-  /** Where the pointer is, in the screen's coordinates. For handing him to the desktop. */
-  screenX: number;
-  screenY: number;
+  /**
+   * Where the pointer is, in the page's own coordinates.
+   *
+   * Client pixels, deliberately — not `screenX`. Turning a page coordinate into
+   * a place on the screen needs the window's position, its invisible frame and
+   * the page's zoom factor, and the renderer can answer none of those reliably.
+   * The shell does that conversion; this reports what it actually knows.
+   */
+  clientX: number;
+  clientY: number;
 };
 
 export type InChatCarryOptions = {
   /**
-   * The pet's top-left corner has moved, in viewport coordinates, and where the
-   * pointer is on the screen.
+   * The pet's top-left corner has moved, and where the pointer is.
    *
-   * Both, because the two answers are needed at once: the viewport point says
-   * where he is in the chat, and the screen point is the only thing that means
-   * anything to a window floating over the whole desktop.
+   * Both, because the two answers are needed at once: the corner says where to
+   * draw him in the chat, and the pointer is what the shell converts when he
+   * has to be carried outside it.
    */
-  onMove: (x: number, y: number, screen: { x: number; y: number }) => void;
+  onMove: (x: number, y: number, pointer: { x: number; y: number }) => void;
+  /** The press became a carry. Fired once, when the threshold is crossed. */
+  onStart?: () => void;
   /** The hand opened. Not called for an interruption — see the note above. */
   onRelease: (release: InChatRelease) => void;
   /**
@@ -69,8 +77,6 @@ type Gesture = {
   grabY: number;
   x: number;
   y: number;
-  screenX: number;
-  screenY: number;
   carrying: boolean;
   detach: () => void;
 };
@@ -123,8 +129,8 @@ export function useInChatCarry(options: InChatCarryOptions): {
     optionsRef.current.onRelease({
       x: gesture.x - gesture.grabX,
       y: gesture.y - gesture.grabY,
-      screenX: gesture.screenX,
-      screenY: gesture.screenY,
+      clientX: gesture.x,
+      clientY: gesture.y,
     });
   }, []);
 
@@ -158,8 +164,6 @@ export function useInChatCarry(options: InChatCarryOptions): {
 
       gesture.x = move.clientX;
       gesture.y = move.clientY;
-      gesture.screenX = move.screenX;
-      gesture.screenY = move.screenY;
 
       if (!gesture.carrying) {
         const travelled = Math.hypot(move.clientX - gesture.startX, move.clientY - gesture.startY);
@@ -168,6 +172,7 @@ export function useInChatCarry(options: InChatCarryOptions): {
 
         gesture.carrying = true;
         setCarrying(true);
+        optionsRef.current.onStart?.();
         // Dragging across the window must not paint a text selection behind
         // him. Removed in `finish`, on every path out.
         document.body.style.setProperty('user-select', 'none');
@@ -177,7 +182,7 @@ export function useInChatCarry(options: InChatCarryOptions): {
       optionsRef.current.onMove(
         move.clientX - gesture.grabX,
         move.clientY - gesture.grabY,
-        { x: move.screenX, y: move.screenY },
+        { x: move.clientX, y: move.clientY },
       );
     };
 
@@ -200,8 +205,6 @@ export function useInChatCarry(options: InChatCarryOptions): {
       grabY: event.clientY - rect.top,
       x: event.clientX,
       y: event.clientY,
-      screenX: event.screenX,
-      screenY: event.screenY,
       carrying: false,
       detach: () => {
         window.removeEventListener('pointermove', track);

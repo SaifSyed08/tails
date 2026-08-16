@@ -1,5 +1,7 @@
-import { BrowserWindow, Menu, ipcMain, screen } from 'electron';
+import { BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'node:path';
+
+import { clientPointToDip } from './pet-geometry.js';
 
 
 /**
@@ -64,8 +66,7 @@ const WATCHDOG_INTERVAL_MS = 250;
 let petWindow = null;
 let readState = () => ({});
 let writeState = () => {};
-let onOpenSettings = () => {};
-let serverUrl = '';
+let onOpenPetDetails = () => {};
 
 /** Set by the page: whether a pet is active at all. */
 let hasPet = false;
@@ -105,6 +106,15 @@ let trackedPosition = null;
  * during a gesture — the click-through watchdog and the resize handler.
  */
 let carrying = false;
+/**
+ * Who is doing the carrying: the OS, or us.
+ *
+ * They need different treatment in one place. A resize during an OS drag is the
+ * old feedback loop and is refused; a resize during an app-driven flight is the
+ * window catching up with a pet who has just been activated, and refusing it is
+ * what draws the new sheet at the old pet's size — a sprite cut off mid-row.
+ */
+let carrySource = null;
 let carryFacing = null;
 let carryFrom = null;
 let settleTimer = null;
@@ -348,7 +358,8 @@ function stopWatchdog() {
  * three things that produced six rounds of bugs. What is left is telling the
  * pet which way it is going, so it can face that way and run.
  */
-function onCarried(x, y) {
+function onCarried(x, y, source = 'os') {
+  carrySource = source;
   if (!carrying) {
     carrying = true;
     carryFrom = { x, y };
@@ -373,6 +384,7 @@ function onCarried(x, y) {
   settleTimer = setTimeout(() => {
     settleTimer = null;
     carrying = false;
+    carrySource = null;
     carryFacing = null;
     if (!isAlive()) return;
 
@@ -404,6 +416,7 @@ function resyncAfterShow() {
     settleTimer = null;
   }
   carrying = false;
+  carrySource = null;
   carryFacing = null;
 
   interactive = false;
@@ -432,47 +445,30 @@ function applyVisibility() {
   }
 }
 
-/** The right-click menu — the way out that does not require finding the app. */
-function openContextMenu(petId) {
-  if (!isAlive()) return;
+/**
+ * The pet's own hide, from the pill's X.
+ *
+ * The persisted one — the same switch the app's own control uses — so a pet put
+ * away stays away across a restart. It does not clear the active pet: hiding a
+ * companion is not the same as deciding you no longer have one, and the way
+ * back is the marketplace, which is where the pet came from.
+ */
+function hideFromPill() {
+  hidden = true;
+  persistPosition();
+  applyVisibility();
+}
 
-  /*
-   * Two different hides, so both labels say which one.
-   *
-   * The first closes this window and leaves the pet active everywhere else —
-   * the marketplace still shows it on stage, and it comes back on the next
-   * launch unless it is turned off again. The second unsets the active pet
-   * entirely, so there is no pet anywhere until one is chosen. "Stand down" was
-   * jargon for the second and read like the first.
-   */
-  const menu = Menu.buildFromTemplate([
-    {
-      label: 'Hide pet from desktop',
-      click: () => {
-        hidden = true;
-        persistPosition();
-        applyVisibility();
-      },
-    },
-    {
-      label: 'Hide pet everywhere (clears the active pet)',
-      enabled: Boolean(petId),
-      click: () => {
-        // Straight to the server: the pet window has no app state of its own,
-        // and going through the renderer would mean it could not do this while
-        // the main window is closed.
-        void fetch(`${serverUrl}/api/pets/${encodeURIComponent(petId)}/activate`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ active: false }),
-        }).catch(() => {});
-      },
-    },
-    { type: 'separator' },
-    { label: 'Settings…', click: () => onOpenSettings() },
-  ]);
-
-  menu.popup({ window: petWindow });
+/**
+ * The pill's settings button: show me this pet.
+ *
+ * The panel lives in the app, so the shell's part is to bring the app forward
+ * and say which pet. A pet window floating over a minimised app is exactly the
+ * case where "open settings" has to also mean "and put the app where I can see
+ * it" — otherwise the click appears to do nothing at all.
+ */
+function openDetails(petId) {
+  onOpenPetDetails(String(petId || ''));
 }
 
 /**
@@ -521,7 +517,7 @@ function installIpc() {
     const size = sizeNow();
     const settled = Math.abs(size.width - width) <= POSITION_TOLERANCE
       && Math.abs(size.height - height) <= POSITION_TOLERANCE;
-    if (carrying || settled) return;
+    if ((carrying && carrySource !== 'app') || settled) return;
 
     const at = positionNow();
     petWindow.setContentSize(width, height);
@@ -543,9 +539,11 @@ function installIpc() {
 
   ipcMain.on('pet:interactive', (_event, payload) => setInteractive(Boolean(payload?.over)));
 
-  ipcMain.on('pet:menu', (_event, payload) => openContextMenu(
-    typeof payload?.petId === 'string' ? payload.petId : null,
+  ipcMain.on('pet:details', (_event, payload) => openDetails(
+    typeof payload?.petId === 'string' ? payload.petId : '',
   ));
+
+  ipcMain.on('pet:hide', () => hideFromPill());
 }
 
 /**
@@ -559,8 +557,7 @@ function installIpc() {
 export function createPetWindow(options) {
   readState = options.readState;
   writeState = options.writeState;
-  onOpenSettings = options.onOpenSettings ?? (() => {});
-  serverUrl = options.serverUrl;
+  onOpenPetDetails = options.onOpenPetDetails ?? (() => {});
 
   // On by default while the drift is unexplained. It is a bounded, buffered
   // append to userData; the cost is far smaller than another round of guessing
@@ -728,6 +725,30 @@ export function resetPetPosition() {
  * top-left corner, and it is clamped like any other move — a drop over a second
  * monitor's edge must not strand him off screen.
  */
+/**
+ * Puts the pet down at a point in the app's own page.
+ *
+ * The app is the only caller, and it can only speak in its own coordinates —
+ * CSS pixels inside its window. Converting them here rather than there is what
+ * keeps the zoom factor and the window's frame in one place: the renderer has
+ * no reliable way to ask either question about itself, and every attempt to do
+ * it from that side has been a position that drifts as the hand travels.
+ */
+export function placePetFromWindow(fromWindow, clientX, clientY) {
+  if (!fromWindow || fromWindow.isDestroyed()) return;
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+
+  const bounds = fromWindow.getContentBounds();
+  const point = clientPointToDip(
+    { x: bounds.x, y: bounds.y },
+    fromWindow.webContents.getZoomFactor(),
+    clientX,
+    clientY,
+  );
+
+  placePetAt(point.x, point.y);
+}
+
 export function placePetAt(x, y) {
   if (!isAlive()) return;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -740,7 +761,7 @@ export function placePetAt(x, y) {
   // desktop. That gets him the running animation, the facing, the pause on the
   // watchdog and the resize handler, and the save when the moves stop, all from
   // the same place a handle drag gets them.
-  onCarried(clamped.x, clamped.y);
+  onCarried(clamped.x, clamped.y, 'app');
 }
 
 /** The user's own hide/show, which survives a restart. */

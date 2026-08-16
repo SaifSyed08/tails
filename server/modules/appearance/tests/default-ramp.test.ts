@@ -179,16 +179,33 @@ test('the accent is legible as text, not only as a fill', () => {
  * so resolving one is a lookup and a multiply rather than a CSS engine.
  */
 function resolveToken(value: string, ramp: Record<string, Hsl>): { color: Hsl; alpha: number } | null {
-  const match = /^hsl\(\s*var\(\s*--([a-z-]+)\s*\)\s*(?:\/\s*([\d.]+)\s*)?\)$/.exec(value.trim());
-  if (!match) return null;
+  const trimmed = value.trim();
 
-  const color = ramp[match[1]];
-  if (!color) return null;
-  return { color, alpha: match[2] === undefined ? 1 : Number(match[2]) };
+  const reference = /^hsl\(\s*var\(\s*--([a-z-]+)\s*\)\s*(?:\/\s*([\d.]+)\s*)?\)$/.exec(trimmed);
+  if (reference) {
+    const color = ramp[reference[1]];
+    if (!color) return null;
+    return { color, alpha: reference[2] === undefined ? 1 : Number(reference[2]) };
+  }
+
+  // A literal `hsl(H S% L%)`. Most of the floor is written as role references,
+  // but not all of it — and a resolver that only understood references returned
+  // null for the rest, which made the caller skip the part rather than check
+  // it. That is the quietest possible failure for a contrast test: it does not
+  // report a problem, it stops looking.
+  const literal = /^hsl\(\s*([\d.]+)\s+([\d.]+)%\s+([\d.]+)%\s*(?:\/\s*([\d.]+)\s*)?\)$/.exec(trimmed);
+  if (literal) {
+    return {
+      color: { h: Number(literal[1]), s: Number(literal[2]), l: Number(literal[3]) },
+      alpha: literal[4] === undefined ? 1 : Number(literal[4]),
+    };
+  }
+
+  return null;
 }
 
 /** Every `--t-*` declaration in the floor blocks that name this part. */
-function partTokens(part: string): Record<string, string> {
+function partTokens(part: string, ramp: 'light' | 'dark'): Record<string, string> {
   const tokens: Record<string, string> = {};
   // Only the floor blocks: they quote the attribute value, while the
   // consumption rules in the components layer write `[data-tails-part]` bare.
@@ -201,6 +218,14 @@ function partTokens(part: string): Record<string, string> {
     // A selector list may name several parts; the declarations apply to each.
     const between = indexCss.slice(at, open);
     if (between.includes('}')) continue;
+
+    // Which ramp this block belongs to. Without this, a `.dark [data-tails-part=…]`
+    // override merged into the light ramp's token set and the light ramp was
+    // silently checked against the dark ramp's colours — the two blocks are
+    // read in source order, so the last one simply won.
+    const selectorStart = indexCss.lastIndexOf('}', at) + 1;
+    const isDarkScoped = indexCss.slice(selectorStart, at).includes('.dark');
+    if (isDarkScoped && ramp === 'light') continue;
 
     for (const match of indexCss.slice(open, close).matchAll(/(--t-[a-z-]+):\s*([^;]+);/g)) {
       tokens[match[1]] = match[2].trim();
@@ -306,7 +331,7 @@ test('no floor token is a passthrough of the value it exists to refine', () => {
 
   for (const [label, ramp] of [['light', light], ['dark', dark]] as const) {
     for (const part of SURFACE_PARTS) {
-      const tokens = { ...rootSurfaceTokens, ...partTokens(part) };
+      const tokens = { ...rootSurfaceTokens, ...partTokens(part, label) };
 
 
       const surface = effectiveFill(tokens, ramp);
@@ -357,7 +382,7 @@ test('the built-in look separates its regions by fill, not only by outline', () 
     const chat = ramp.background;
 
     for (const [part] of boundaries) {
-      const fill = resolveToken(partTokens(part)['--t-fill-color'] ?? '', ramp);
+      const fill = resolveToken(partTokens(part, label)['--t-fill-color'] ?? '', ramp);
       assert.ok(fill, `${label}: ${part} has no resolvable floor fill`);
 
       const ratio = contrastRatio(fill.color, chat);

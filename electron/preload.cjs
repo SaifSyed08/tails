@@ -47,4 +47,15 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
   onOpenSettings: (handler) => {
     ipcRenderer.on('tails:open-settings', () => handler());
   },
+
+  /**
+   * Fires when the desktop pet's own settings button is pressed.
+   *
+   * Carries the pet it was pressed on, because the app may be showing a
+   * different conversation with a different pet in it, and the panel is about
+   * the one you clicked.
+   */
+  onOpenPetDetails: (handler) => {
+    ipcRenderer.on('tails:open-pet-details', (_event, petId) => handler(String(petId || '')));
+  },
 });

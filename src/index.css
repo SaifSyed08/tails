@@ -397,12 +397,35 @@
    * barely muted because on a saturated fill there is very little room between
    * legible and the ink.
    */
+  /**
+   * EXPERIMENT: grey with white ink, in place of the solid accent above.
+   *
+   * Reverting is the four lines in the block comment above this one — nothing
+   * else references these values, and `--primary-foreground` stays live because
+   * every button in the app still uses it.
+   *
+   * White ink needs a grey dark enough to carry it, which puts the fill at 44%
+   * in the light ramp (5.4:1) and lets it sit at 28% in the dark one (9.8:1),
+   * where it also has to clear the page it floats on. Both ramps take white
+   * here, which is unusual — the amber they replace needed white in light and
+   * near-black in dark — and it happens because a neutral grey can be placed at
+   * whatever lightness the ink wants, while an accent's lightness is already
+   * spoken for by the rest of the theme.
+   *
+   * `--t-accent-on` is white rather than the accent: amber on this grey is
+   * 1.1:1 in the light ramp, which is the same passthrough trap the accent fill
+   * had, arriving from the opposite direction.
+   */
   [data-tails-part='bubbleUser'] {
-    --t-fill-color: hsl(var(--primary));
-    --t-ink: hsl(var(--primary-foreground));
-    --t-ink-muted: hsl(var(--primary-foreground) / 0.9);
-    --t-accent-on: hsl(var(--primary-foreground));
+    --t-fill-color: hsl(240 6% 44%);
+    --t-ink: hsl(0 0% 100%);
+    --t-ink-muted: hsl(0 0% 100% / 0.88);
+    --t-accent-on: hsl(0 0% 100%);
     --t-border-width: 0;
+  }
+
+  .dark [data-tails-part='bubbleUser'] {
+    --t-fill-color: hsl(240 6% 28%);
   }
 
   /* The assistant's turn is unbubbled by default — page text rather than a

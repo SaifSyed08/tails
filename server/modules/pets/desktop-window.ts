@@ -37,19 +37,16 @@ const PADDING = 12;
 /** How far outside an opaque pixel still counts as "on the pet", in cell pixels. */
 const HIT_TOLERANCE = 6;
 
-/** Depth of the drag handle, in cell pixels, measured down from the artwork's top. */
-const HANDLE_BAND = 46;
-
 /**
- * How much faster than the sheet's own rate the pet plays.
+ * How fast each animation plays, relative to the rate its sheet was drawn at.
  *
- * Codex's 260ms a frame is the rate its own site plays at, and it reads as
- * slightly under-wound here — the pets look like they are moving through
- * treacle. A third quicker keeps every animation recognisably the one the
- * artist drew while giving it some life. Mirrored in `ChatPet`, so a pet does
- * not run at two different speeds depending on which surface he is standing on.
+ * Mirrored from `sprite-rate.ts`, which this page cannot import — see the
+ * reasoning there. In short: moments (running, jumping, waving) are brisk
+ * because you are watching them; resting states are what is on screen all day
+ * beside someone who is trying to read, and a fast idle reads as agitated.
  */
-const FPS_BOOST = 1.35;
+const ACTIVE_RATE = 1.35;
+const RESTING_RATES: Record<string, number> = { idle: 0.85, waiting: 1 };
 
 export function renderDesktopWindowHtml(): string {
   // A fresh nonce per render, so the page can keep its inline style and script
@@ -88,9 +85,23 @@ export function renderDesktopWindowHtml(): string {
     box-sizing: border-box;
   }
 
+  /*
+   * The pet is the handle.
+   *
+   * The whole sprite is the OS drag region. It used to be a band across the top
+   * of him, with the rest marked no-drag so that right-clicking the body could
+   * reach the page — and that split never reliably worked: a narrow strip
+   * placed from a measured alpha bounding box, sitting over a no-drag element,
+   * recomputed on hover and after every resize. Dropping right-click from the
+   * pet removed the only reason for the split, so there is no strip to place,
+   * nothing to be topmost over, and the target is the animal himself.
+   *
+   * The pill is the way to his options now, and it is marked no-drag below.
+   */
   #pet {
     background-repeat: no-repeat;
     image-rendering: pixelated;
+    -webkit-app-region: drag;
     /* Grabbing is the only gesture, and the cursor is the only affordance a
        window with no chrome can offer. */
     cursor: grab;
@@ -104,25 +115,7 @@ export function renderDesktopWindowHtml(): string {
 
   #pet.mirrored { transform: scaleX(-1); }
 
-  /*
-   * The scruff of the neck: the one place the OS may start a window move.
-   *
-   * Everything else is no-drag, because a drag region swallows mouse events and
-   * right-clicking the pet has to keep reaching the page — the context menu is
-   * the only recovery path that does not need the marketplace.
-   *
-   * Its position comes from the sprite's measured opaque pixels, not from the
-   * top of its box. The cell has transparent padding, and a handle over empty
-   * pixels would never be usable: the alpha hit-test would not flip the window
-   * out of click-through there, so the OS would never see the press.
-   */
-  #handle {
-    position: absolute;
-    -webkit-app-region: drag;
-    cursor: grab;
-  }
-
-  #stage, #pet, #pill { -webkit-app-region: no-drag; }
+  #stage, #pill { -webkit-app-region: no-drag; }
 
   /*
    * The pill: a way into the pet's menu that you can see.
@@ -149,9 +142,9 @@ export function renderDesktopWindowHtml(): string {
     overflow: hidden;
   }
 
-  #pill-menu {
-    width: 100%;
+  #pill button {
     height: 100%;
+    flex: 1 1 0;
     display: grid;
     place-items: center;
     padding: 0;
@@ -166,12 +159,12 @@ export function renderDesktopWindowHtml(): string {
     transition: opacity 120ms ease-out;
   }
 
-  #pill.open #pill-menu { opacity: 1; pointer-events: auto; }
-
-  #pill-menu svg { display: block; }
+  #pill.open button { opacity: 1; pointer-events: auto; }
+  #pill button:hover { background: rgba(255, 255, 255, 0.16); }
+  #pill button svg { display: block; }
 
   @media (prefers-reduced-motion: reduce) {
-    #pill, #pill-menu { transition: none; }
+    #pill, #pill button { transition: none; }
   }
 
   @keyframes tails-sprite-x {
@@ -190,31 +183,31 @@ export function renderDesktopWindowHtml(): string {
 </style>
 </head>
 <body>
-<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="pill"><button id="pill-menu" type="button" aria-label="Pet options" title="Pet options"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg></button></div></div>
+<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
 <script type="module" nonce="${nonce}">
 const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
 const PADDING = ${PADDING};
 const HIT_TOLERANCE = ${HIT_TOLERANCE};
-const HANDLE_BAND = ${HANDLE_BAND};
-const FPS_BOOST = ${FPS_BOOST};
+const ACTIVE_RATE = ${ACTIVE_RATE};
+const RESTING_RATES = ${JSON.stringify(RESTING_RATES)};
 
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
-  openMenu() {},
+  openDetails() {}, hidePet() {},
   onFacing() {}, onRefresh() {}, onCarry() {}, onResync() {},
 };
 
 const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
-const handle = document.getElementById('handle');
 const pill = document.getElementById('pill');
-const pillMenu = document.getElementById('pill-menu');
+const pillSettings = document.getElementById('pill-settings');
+const pillHide = document.getElementById('pill-hide');
 
-/** The pill's two sizes, in CSS pixels: a sliver, and a button. */
+/** The pill's two sizes, in CSS pixels: a sliver, and two buttons. */
 const PILL_CLOSED_H = 5;
 const PILL_OPEN_H = 22;
-const PILL_OPEN_W = 30;
+const PILL_OPEN_W = 56;
 
 let current = null;      // the pet payload currently rendered
 let box = null;          // its cell geometry
@@ -224,6 +217,7 @@ let pointerOver = false;
 let playing = null;      // the state name currently animating
 let petRect = null;      // cached sprite box; invalidated on resize and re-render
 let facing = 'right';
+let scale = 1;           // the user's own size for this pet
 
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -286,7 +280,7 @@ function buildHitMask(image, grid, range) {
   return { bytes, width: cellWidth, height: cellHeight };
 }
 
-function applyAnimation(grid, range) {
+function applyAnimation(grid, range, stateName) {
   const start = range.start;
   const end = range.end;
   const frameCount = end - start + 1;
@@ -294,7 +288,7 @@ function applyAnimation(grid, range) {
   const startRow = Math.floor(start / grid.columns);
   const rowSpan = Math.floor(end / grid.columns) - startRow + 1;
   const framesPerSweep = rowSpan === 1 ? frameCount : grid.columns;
-  const fps = (range.fps ?? grid.fps ?? 8) * FPS_BOOST;
+  const fps = (range.fps ?? grid.fps ?? 8) * (RESTING_RATES[stateName] ?? ACTIVE_RATE);
 
   const originX = rowSpan === 1 ? -startColumn * box.cellWidth : 0;
   const still = reduced || frameCount < 2 || framesPerSweep < 2;
@@ -373,7 +367,7 @@ function playState(name) {
   if (playing === resolved.name && !mirror) return;
 
   playing = resolved.name;
-  applyAnimation(current.definition.frame, resolved.range);
+  applyAnimation(current.definition.frame, resolved.range, resolved.name);
 }
 
 function loadImage(url) {
@@ -408,11 +402,19 @@ async function render(next) {
   // not touch it. That is what made the pet hitch every few seconds.
   const statesChanged = current && !sameRange(current.definition.states.idle, idle);
 
+  // His size is the user's, set from the pill's panel. Clamped here as well as
+  // on the server: it decides how big a window we ask for, and this page is the
+  // one thing standing between a stored number and the whole screen.
+  const wanted = Number(next.stage && next.stage.scale);
+  const nextScale = Number.isFinite(wanted) ? Math.min(2, Math.max(0.6, wanted)) : 1;
+  const scaleChanged = Math.abs(nextScale - scale) > 0.001;
+  scale = nextScale;
+
   current = next;
-  box = resolveCellBox(grid, PET_HEIGHT);
+  box = resolveCellBox(grid, PET_HEIGHT * scale);
   pet.style.display = 'block';
 
-  if (changed) {
+  if (changed || scaleChanged) {
     pet.style.backgroundImage = 'url(' + next.spriteUrl + ')';
     bridge.reportSize(
       Math.ceil(box.cellWidth) + PADDING * 2,
@@ -421,13 +423,15 @@ async function render(next) {
     bridge.reportVisibility(true);
   }
 
-  if ((changed || statesChanged) && !dragging && !pointerOver) {
+  if ((changed || statesChanged || scaleChanged) && !dragging && !pointerOver) {
     playing = null;
     playState('idle');
   }
 
+  if (scaleChanged) petRect = null;
+
   if (!changed && mask) {
-    placeHandle();
+    placeFurniture();
     return;
   }
 
@@ -439,30 +443,28 @@ async function render(next) {
   try {
     const image = await loadImage(next.spriteUrl);
     mask = buildHitMask(image, grid, idle);
-    placeHandle();
+    placeFurniture();
   } catch {
     mask = null;
   }
 }
 
 /**
- * Puts the drag handle over the top band of the pet's actual artwork.
+ * Finds the artwork inside the cell, and hangs the pill off it.
  *
- * Derived from the same alpha mask the hit-test uses, so the handle and the
- * clickable area agree by construction. A band rather than the whole sprite
- * because the rest has to stay no-drag for right-click; the top of a sprite is
- * also where you would pick an animal up.
+ * The bounding box of the opaque pixels, from the same mask the hit-test uses,
+ * so what you can see, what you can grab and what the pill is centred on cannot
+ * disagree. The cell has transparent margins — a pill centred on the *cell*
+ * sits off to one side of the animal.
  */
-function placeHandle() {
+function placeFurniture() {
   if (!mask || !box) {
-    handle.style.display = 'none';
     pill.style.display = 'none';
     return;
   }
 
   let minX = mask.width;
   let maxX = -1;
-  let minY = mask.height;
   let maxY = -1;
 
   for (let y = 0; y < mask.height; y += 1) {
@@ -470,31 +472,16 @@ function placeHandle() {
       if (!mask.bytes[y * mask.width + x]) continue;
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
   }
 
   if (maxX < 0) {
-    handle.style.display = 'none';
     pill.style.display = 'none';
     return;
   }
 
-  const rect = pet.getBoundingClientRect();
-  const stageRect = stage.getBoundingClientRect();
-  const left = rect.left - stageRect.left + minX * box.scale;
-  const top = rect.top - stageRect.top + minY * box.scale;
-  const width = Math.max(16, (maxX - minX + 1) * box.scale);
-  const height = Math.max(14, Math.round(HANDLE_BAND * box.scale));
-
-  handle.style.display = 'block';
-  handle.style.left = left + 'px';
-  handle.style.top = top + 'px';
-  handle.style.width = width + 'px';
-  handle.style.height = height + 'px';
-
-  placePill(rect, stageRect, minX, maxX, maxY);
+  placePill(pet.getBoundingClientRect(), stage.getBoundingClientRect(), minX, maxX, maxY);
 }
 
 /**
@@ -567,7 +554,7 @@ bridge.onCarry((isCarrying) => {
   // Nothing to press while he is in the air, and a button sliding around the
   // desktop under a moving window is just debris.
   pill.classList.toggle('open', !isCarrying && pointerOver);
-  if (mask) placeHandle();
+  if (mask) placeFurniture();
 
   if (isCarrying) {
     pet.classList.add('dragging');
@@ -635,7 +622,7 @@ function setPointerOver(next) {
   if (!dragging) playState(next ? 'waving' : 'idle');
 
   pill.classList.toggle('open', next && !dragging);
-  placeHandle();
+  placeFurniture();
 }
 
 document.addEventListener('mousemove', (event) => {
@@ -666,7 +653,7 @@ document.addEventListener('mousemove', (event) => {
  */
 window.addEventListener('resize', () => {
   petRect = null;
-  if (mask) placeHandle();
+  if (mask) placeFurniture();
 });
 
 document.addEventListener('mouseleave', () => {
@@ -674,18 +661,35 @@ document.addEventListener('mouseleave', () => {
   setPointerOver(false);
 });
 
-document.addEventListener('contextmenu', (event) => {
-  event.preventDefault();
-  if (!current || !isOverPet(event.clientX, event.clientY)) return;
-  bridge.openMenu(current.definition.id);
-});
+/*
+ * No right-click on the pet, deliberately.
+ *
+ * It was the only reason the sprite could not simply *be* the drag region, and
+ * that split — a narrow drag strip over a no-drag body — is what has never
+ * worked reliably. A page-level handler on a drag region is also a way to
+ * swallow the gesture the OS was about to take. The pill is the way in now, and
+ * it is a visible one, which the right-click never was.
+ */
+document.addEventListener('contextmenu', (event) => event.preventDefault());
 
-// The visible half of the same door. Same menu, same call — one place decides
-// what the pet's options are.
-pillMenu.addEventListener('click', (event) => {
+/*
+ * The pill's two buttons.
+ *
+ * Details opens the pet's panel in the app, which is where anything worth
+ * saying about a pet already lives; the X puts him away. Two, because those are
+ * the two things you want from a companion standing on your desktop, and a menu
+ * of one item to reach either of them was the "lame list of options".
+ */
+pillSettings.addEventListener('click', (event) => {
   event.preventDefault();
   event.stopPropagation();
-  if (current) bridge.openMenu(current.definition.id);
+  if (current) bridge.openDetails(current.definition.id);
+});
+
+pillHide.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  bridge.hidePet();
 });
 
 bridge.onFacing((next) => {
@@ -711,7 +715,7 @@ bridge.onResync(() => {
   pet.classList.remove('dragging');
   pill.classList.remove('open');
   bridge.reportPointerOverPet(false);
-  if (mask) placeHandle();
+  if (mask) placeFurniture();
   playState('idle');
 });
 
