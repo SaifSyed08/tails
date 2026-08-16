@@ -297,6 +297,38 @@ const PANIC_RESET_SCRIPT = `(() => {
   return true;
 })()`;
 
+/**
+ * Refuses every device permission the app has not asked for.
+ *
+ * Electron's default is to **grant**, which is the wrong default for any app
+ * and a poor one for this app in particular: the renderer runs a page whose
+ * appearance an agent can rewrite, and Chromium lumps camera, microphone and
+ * screen capture together under a single `media` permission. Left alone, code
+ * in the renderer could open the microphone with no prompt and no indicator.
+ *
+ * Nothing here is enabled yet — dictation is not built. This is the default
+ * being corrected rather than a feature being prepared, which is why it denies
+ * everything: when the microphone is wanted, the grant should be added
+ * deliberately and narrowly, and be visible while it is held.
+ *
+ * `setPermissionCheckHandler` matters as much as the request handler. Some APIs
+ * consult it synchronously and never raise a request at all, so handling only
+ * requests leaves a second door open.
+ */
+function installPermissionHandlers(session) {
+  session.setPermissionRequestHandler((_contents, permission, callback) => {
+    callback(false);
+    if (permission === 'media') {
+      console.warn('[tails] denied a media permission request; nothing should be asking yet');
+    }
+  });
+
+  session.setPermissionCheckHandler(() => false);
+
+  // A device the page cannot enumerate is one it cannot quietly start using.
+  session.setDevicePermissionHandler(() => false);
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -334,6 +366,8 @@ function createMainWindow() {
       sandbox: true,
     },
   });
+
+  installPermissionHandlers(mainWindow.webContents.session);
 
   // Fires in the main process before the page sees the event, so neither a
   // theme nor a focused text field can swallow it.
