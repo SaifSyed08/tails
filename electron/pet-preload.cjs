@@ -56,6 +56,17 @@ contextBridge.exposeInMainWorld('petBridge', {
   onResync: (handler) => ipcRenderer.on('pet:resync', () => handler()),
 
   /**
+   * The shell asking where the pointer is, because the page cannot always know.
+   *
+   * A drag region does not deliver mouse events, so a pointer that lands
+   * straight on the pet's drag band arrives without the page ever seeing it —
+   * and the window stays click-through, which means the band is never reached
+   * either. The shell can see the cursor; this is it asking the page to run the
+   * same alpha test it would have run on a move.
+   */
+  onProbe: (handler) => ipcRenderer.on('pet:probe', (_event, point) => handler(point)),
+
+  /**
    * Which drag mechanism is live, while three are being compared.
    *
    * Temporary, and worth removing once one is chosen — the page has no business

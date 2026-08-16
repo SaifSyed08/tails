@@ -3,7 +3,7 @@ import test from 'node:test';
 
 // Shell code, reached by path: it imports nothing, and this is the repo's only
 // test runner. Same arrangement as `pet-motion.test.ts`.
-import { clientPointToDip } from '../../../../electron/pet-geometry.js';
+import { clientPointToDip, sizeForScaleFactor } from '../../../../electron/pet-geometry.js';
 
 /**
  * The one conversion between the app's coordinates and the screen's.
@@ -53,6 +53,46 @@ test('a broken zoom reading falls back to 1 rather than to the corner', () => {
     assert.deepEqual(
       clientPointToDip(CONTENT_ORIGIN, bad as number, 400, 300),
       { x: 527, y: 445 },
+    );
+  }
+});
+
+/**
+ * And the other direction: a window size that survives changing screens.
+ *
+ * Same class of bug as the conversion above — a unit that is not the unit you
+ * think it is — and the same reason to pin it down here: on a one-monitor
+ * machine every version of this function looks identical.
+ */
+
+test('the same pet keeps his size on the display he was set up on', () => {
+  // The identity case, which is every single-monitor machine. If this ever
+  // stops holding, everyone's pet changes size for no reason at all.
+  assert.deepEqual(sizeForScaleFactor({ width: 143, height: 152 }, 1.03, 1.03), {
+    width: 143, height: 152,
+  });
+  assert.deepEqual(sizeForScaleFactor({ width: 143, height: 152 }, 1, 1), {
+    width: 143, height: 152,
+  });
+});
+
+test('he takes more DIPs on a less dense screen, and fewer on a denser one', () => {
+  // Carried from this machine's 1.03 display to a plain 100% one, the same
+  // physical size is 3% more DIPs.
+  assert.deepEqual(sizeForScaleFactor({ width: 143, height: 152 }, 1.03, 1), {
+    width: 147, height: 157,
+  });
+  // And onto a 2x display, half as many.
+  assert.deepEqual(sizeForScaleFactor({ width: 200, height: 100 }, 1, 2), {
+    width: 100, height: 50,
+  });
+});
+
+test('a nonsense scale factor leaves the size alone', () => {
+  for (const bad of [0, Number.NaN, undefined, -2]) {
+    assert.deepEqual(
+      sizeForScaleFactor({ width: 143, height: 152 }, bad as number, bad as number),
+      { width: 143, height: 152 },
     );
   }
 });

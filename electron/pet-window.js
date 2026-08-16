@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'node:path';
 
-import { clientPointToDip } from './pet-geometry.js';
+import { clientPointToDip, sizeForScaleFactor } from './pet-geometry.js';
 
 
 /**
@@ -115,6 +115,15 @@ let carrying = false;
  * what draws the new sheet at the old pet's size — a sprite cut off mid-row.
  */
 let carrySource = null;
+
+/**
+ * The size the page last asked for, in its own CSS pixels.
+ *
+ * Kept because the window's size is not only the page's business: the same
+ * sprite needs a different number of DIPs on a differently scaled display, so
+ * the request has to be re-applied whenever he moves between them.
+ */
+let reportedSize = null;
 let carryFacing = null;
 let carryFrom = null;
 let settleTimer = null;
@@ -283,22 +292,35 @@ function setInteractive(next) {
   // `forward: true` keeps move events coming while the window is transparent to
   // clicks, which is the only way the page can notice the pointer arriving.
   petWindow.setIgnoreMouseEvents(!next, { forward: true });
-
-  if (next) startWatchdog();
-  else stopWatchdog();
 }
 
 /**
- * Forces click-through back on when the pointer is no longer over the window.
+ * Where the pointer is, asked rather than waited for.
  *
- * The page's own `mouseleave` covers the ordinary case; this covers the ones it
- * cannot — the pointer crossing into another application in a single frame, the
- * page hanging, a display change moving the window out from under the cursor.
+ * Runs the whole time the pet is on screen, in both directions:
+ *
+ * - **Interactive, cursor gone.** Put click-through back. The page's own
+ *   `mouseleave` covers the ordinary case; this covers the ones it cannot — the
+ *   pointer crossing into another application in a single frame, the page
+ *   hanging, a display change moving the window out from under the cursor.
+ *
+ * - **Click-through, cursor inside.** Ask the page whether that point is on the
+ *   pet. This is the half that stops the window deadlocking. The page normally
+ *   learns the pointer has arrived from a forwarded `mousemove`, and there are
+ *   places it will never get one: the drag band swallows events, so a fast
+ *   movement that lands *directly* on the band skips every reporting pixel on
+ *   the way in; and a pointer that teleports (a window-snap shortcut, a remote
+ *   session) never crosses anything at all. In both cases the window stays
+ *   click-through, so it is never hit-tested, so the band is never reached —
+ *   and nothing in the page can break the tie, because the page is the thing
+ *   receiving no events. The shell can see the cursor, so the shell asks.
+ *
+ * The alpha test still decides; this only gets the question asked.
  */
 function startWatchdog() {
   if (watchdogTimer) return;
   watchdogTimer = setInterval(() => {
-    if (!isAlive() || !interactive || carrying) return;
+    if (!isAlive() || carrying) return;
 
     /*
      * The OS's own rectangle, not our record of it.
@@ -309,17 +331,31 @@ function startWatchdog() {
      * tested was offset from the one on screen, and the watchdog could decide
      * the pointer had left while it was sitting on the pet — which turns
      * click-through back on underneath a pointer that never went anywhere.
-     *
-     * Bounds are also the forgiving choice, which is the right bias for a
-     * recovery mechanism: being late to restore click-through costs a few
-     * pixels of dead desktop, and being early costs the pet.
      */
     const cursor = screen.getCursorScreenPoint();
     const at = petWindow.getBounds();
     const inside = cursor.x >= at.x && cursor.x <= at.x + at.width
       && cursor.y >= at.y && cursor.y <= at.y + at.height;
-    if (inside) return;
 
+    if (inside) {
+      // The page has the pointer and answers faster than this poll can; asking
+      // again would only fight it.
+      if (interactive) return;
+
+      // Into the page's own coordinates. Zoom is pinned at 1 for this window —
+      // see the guards around `setZoomLevel` — but it is read rather than
+      // assumed, because a page that has been zoomed is exactly the state where
+      // a coordinate silently stops meaning what it says.
+      const content = petWindow.getContentBounds();
+      const zoom = petWindow.webContents.getZoomFactor() || 1;
+      petWindow.webContents.send('pet:probe', {
+        x: (cursor.x - content.x) / zoom,
+        y: (cursor.y - content.y) / zoom,
+      });
+      return;
+    }
+
+    if (!interactive) return;
     setInteractive(false);
 
     /*
@@ -329,8 +365,7 @@ function startWatchdog() {
      * re-report an arrival it believes is still in effect. So a window we made
      * click-through behind the page's back can never be made clickable again —
      * the pointer is already "on the pet" as far as the page is concerned, and
-     * every later move is dropped. That is a pet who cannot be picked up for
-     * the rest of the session, and it is why this line exists.
+     * every later move is dropped.
      */
     petWindow.webContents.send('pet:resync');
   }, WATCHDOG_INTERVAL_MS);
@@ -389,6 +424,12 @@ function onCarried(x, y, source = 'os') {
     if (!isAlive()) return;
 
     petWindow.webContents.send('pet:carry', false);
+
+    // Put down, possibly on a different screen. Rescaled here rather than
+    // during the drag: mid-flight `setContentSize` is the path that cut the
+    // sprite in half and, before that, fed the drift — and a pet who resizes
+    // the moment he lands reads as him settling rather than as a glitch.
+    applyReportedSize();
     persistPosition();
   }, SETTLE_MS);
 }
@@ -420,10 +461,74 @@ function resyncAfterShow() {
   carryFacing = null;
 
   interactive = false;
-  stopWatchdog();
   petWindow.setIgnoreMouseEvents(true, { forward: true });
   petWindow.setMovable(true);
   petWindow.webContents.send('pet:resync');
+}
+
+/**
+ * Sizes the window for the pet, on the display he is actually on.
+ *
+ * Split out of the resize message because it has three callers now: the page
+ * asking, the pet being put down somewhere else, and the desktop itself being
+ * rearranged. All three are the same question — how many DIPs is this sprite
+ * here — and the answer moved the day multi-monitor came up.
+ */
+function applyReportedSize() {
+  if (!isAlive() || !reportedSize) return;
+
+  const at = positionNow();
+  const was = sizeNow();
+  const display = screen.getDisplayNearestPoint({
+    x: Math.round(at.x + was.width / 2),
+    y: Math.round(at.y + was.height / 2),
+  });
+  const { width, height } = sizeForScaleFactor(
+    reportedSize,
+    screen.getPrimaryDisplay().scaleFactor,
+    display.scaleFactor,
+  );
+
+  // The pet is one sprite in a small box. A request several times that size is
+  // not a resize, it is a symptom — the zoom bug produced exactly that for four
+  // sessions — so it is refused rather than applied.
+  if (width > MAX_WINDOW.width || height > MAX_WINDOW.height) return;
+
+  // Zoom is asserted here as well as on load and on the wheel gesture, because
+  // this is the moment it does damage: a page reporting CSS pixels while zoomed
+  // describes a window that is 1.5x too big.
+  petWindow.webContents.setZoomLevel(0);
+
+  // Compared with a tolerance, not for equality. `setContentSize(143, 152)`
+  // comes back as 144x153 on a fractionally scaled display, so an exact test
+  // never matches and the window is re-sized every time the page speaks.
+  const settled = Math.abs(was.width - width) <= POSITION_TOLERANCE
+    && Math.abs(was.height - height) <= POSITION_TOLERANCE;
+  // An OS drag must not be resized underneath: that is the path that produced
+  // the cut sprite and, before it, the drift. A flight we are driving ourselves
+  // is fine — we place him again on the next frame anyway.
+  if (settled || (carrying && carrySource !== 'app')) return;
+
+  petWindow.setContentSize(width, height);
+
+  // Verified, like the position is. A content size that does not come back as
+  // the one we asked for means something is scaling this window underneath us —
+  // the fault that was mistaken for drift twice. One retry, because the usual
+  // cause is a zoom that has just been reset.
+  const applied = sizeNow();
+  if (Math.abs(applied.width - width) > POSITION_TOLERANCE
+    || Math.abs(applied.height - height) > POSITION_TOLERANCE) {
+    petWindow.webContents.setZoomLevel(0);
+    petWindow.setContentSize(width, height);
+  }
+
+  // Kept on the same spot rather than the same corner, so growing or shrinking
+  // him does not also move him, and re-clamped because a window that just grew
+  // may now hang off the screen.
+  const centreX = at.x + was.width / 2;
+  const centreY = at.y + was.height / 2;
+  const clamped = clampToDisplay(centreX - width / 2, centreY - height / 2, width, height);
+  moveTo(clamped.x, clamped.y);
 }
 
 function applyVisibility() {
@@ -436,6 +541,9 @@ function applyVisibility() {
       petWindow.showInactive();
       resyncAfterShow();
     }
+    // Asks where the pointer is for as long as he is on screen, not only once
+    // he has been noticed — being noticed is the thing it exists to arrange.
+    startWatchdog();
     return;
   }
 
@@ -443,6 +551,7 @@ function applyVisibility() {
     setInteractive(false);
     petWindow.hide();
   }
+  stopWatchdog();
 }
 
 /**
@@ -496,45 +605,8 @@ function installIpc() {
     const width = Math.max(48, Math.round(Number(payload?.width) || DEFAULT_SIZE.width));
     const height = Math.max(48, Math.round(Number(payload?.height) || DEFAULT_SIZE.height));
 
-    // Nothing to do, and doing it anyway would matter: this reads the position
-    // back and writes it again, so an unchanged size still nudged the window
-    // every time the page polled — and mid-drag it fought the drag loop.
-    // The pet is one sprite in a small box. A request several times that size
-    // is not a resize, it is a symptom — the zoom bug produced exactly that for
-    // four sessions — so it is refused and recorded rather than applied.
-    if (width > MAX_WINDOW.width || height > MAX_WINDOW.height) {
-      return;
-    }
-
-    // Zoom is asserted here as well as on load and on the wheel gesture,
-    // because this is the moment it does damage: a page reporting CSS pixels
-    // while zoomed describes a window that is 1.5x too big.
-    petWindow.webContents.setZoomLevel(0);
-
-    // Compared with a tolerance, not for equality. `setContentSize(143, 152)`
-    // comes back as 144x153 on a fractionally scaled display, so an exact test
-    // never matches and the window is re-sized every time the page speaks.
-    const size = sizeNow();
-    const settled = Math.abs(size.width - width) <= POSITION_TOLERANCE
-      && Math.abs(size.height - height) <= POSITION_TOLERANCE;
-    if ((carrying && carrySource !== 'app') || settled) return;
-
-    const at = positionNow();
-    petWindow.setContentSize(width, height);
-
-    // Verified, like the position is. A content size that does not come back
-    // as the one we asked for means something is scaling this window underneath
-    // us — the fault that was mistaken for drift twice. One retry, because the
-    // usual cause is a zoom that has just been reset.
-    const applied = sizeNow();
-    if (Math.abs(applied.width - width) > POSITION_TOLERANCE
-      || Math.abs(applied.height - height) > POSITION_TOLERANCE) {
-      petWindow.webContents.setZoomLevel(0);
-      petWindow.setContentSize(width, height);
-    }
-    // Re-clamped, because a window that just grew may now hang off the screen.
-    const clamped = clampToDisplay(at.x, at.y, width, height);
-    moveTo(clamped.x, clamped.y);
+    reportedSize = { width, height };
+    applyReportedSize();
   });
 
   ipcMain.on('pet:interactive', (_event, payload) => setInteractive(Boolean(payload?.over)));
@@ -544,6 +616,19 @@ function installIpc() {
   ));
 
   ipcMain.on('pet:hide', () => hideFromPill());
+
+  /*
+   * The desktop was rearranged.
+   *
+   * A monitor's scale factor changing, or a screen appearing or disappearing,
+   * both change how many DIPs the pet needs to look the same size — and the
+   * second can also leave him on a display that no longer exists, which the
+   * re-clamp inside the resize handles. Registered here because this function
+   * runs once per process; the window comes and goes.
+   */
+  for (const event of ['display-metrics-changed', 'display-added', 'display-removed']) {
+    screen.on(event, () => applyReportedSize());
+  }
 }
 
 /**

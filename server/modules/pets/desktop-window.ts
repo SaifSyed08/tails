@@ -38,6 +38,29 @@ const PADDING = 12;
 const HIT_TOLERANCE = 6;
 
 /**
+ * The scruff of the neck: how deep the draggable band is, in cell pixels.
+ *
+ * Measured down from the top of the artwork, past the inset below. Generous —
+ * head and shoulders — because it is the only place the window can be grabbed
+ * and a band you have to aim at is worse than one that is slightly too big.
+ */
+const HANDLE_BAND = 64;
+
+/**
+ * How much of the artwork's rim stays out of the band, in cell pixels.
+ *
+ * This is not styling. A drag region does not deliver mouse events to the page,
+ * and the page reporting "the pointer is on the pet" is the only thing that
+ * makes this window stop ignoring the mouse — so a pointer that arrives
+ * *directly* on the band would be over a window that is still click-through,
+ * which is never hit-tested, so the band is never reached either. The rim is
+ * the part of him that always answers: approach from any direction and the
+ * pointer crosses ordinary, no-drag pet before it reaches the region that
+ * swallows events. See the note above `#pet` in the stylesheet.
+ */
+const HANDLE_RIM = 10;
+
+/**
  * How fast each animation plays, relative to the rate its sheet was drawn at.
  *
  * Mirrored from `sprite-rate.ts`, which this page cannot import — see the
@@ -86,26 +109,37 @@ export function renderDesktopWindowHtml(): string {
   }
 
   /*
-   * The pet is the handle.
+   * The pet's body is deliberately NOT a drag region. Read this before
+   * "simplifying" it into one.
    *
-   * The whole sprite is the OS drag region. It used to be a band across the top
-   * of him, with the rest marked no-drag so that right-clicking the body could
-   * reach the page — and that split never reliably worked: a narrow strip
-   * placed from a measured alpha bounding box, sitting over a no-drag element,
-   * recomputed on hover and after every resize. Dropping right-click from the
-   * pet removed the only reason for the split, so there is no strip to place,
-   * nothing to be topmost over, and the target is the animal himself.
+   * This window ignores the mouse — setIgnoreMouseEvents(true, forward) — and
+   * only becomes interactive when the *page* reports that the pointer has
+   * arrived on his opaque pixels. The page learns that from a mousemove.
    *
-   * The pill is the way to his options now, and it is marked no-drag below.
+   * An element with -webkit-app-region: drag does not deliver mouse events to
+   * the page. So making the whole sprite draggable deadlocks: no moves over him,
+   * therefore no arrival reported, therefore the window keeps ignoring the
+   * mouse, therefore it is never hit-tested, therefore the drag region is never
+   * reached. It cannot recover, and it looks exactly like a pet who cannot be
+   * picked up at all — which is what it was.
+   *
+   * So the body reports, and a band at his scruff drags. The band works
+   * *because* the rest of him does not.
    */
   #pet {
     background-repeat: no-repeat;
     image-rendering: pixelated;
-    -webkit-app-region: drag;
     /* Grabbing is the only gesture, and the cursor is the only affordance a
        window with no chrome can offer. */
     cursor: grab;
     transition: filter 120ms ease-out;
+  }
+
+  /** The one place the OS may start a window move. See the note above. */
+  #handle {
+    position: absolute;
+    -webkit-app-region: drag;
+    cursor: grab;
   }
 
   /* No shadow while carried. The window is transparent and sits over whatever
@@ -115,7 +149,7 @@ export function renderDesktopWindowHtml(): string {
 
   #pet.mirrored { transform: scaleX(-1); }
 
-  #stage, #pill { -webkit-app-region: no-drag; }
+  #stage, #pet, #pill { -webkit-app-region: no-drag; }
 
   /*
    * The pill: a way into the pet's menu that you can see.
@@ -183,23 +217,26 @@ export function renderDesktopWindowHtml(): string {
 </style>
 </head>
 <body>
-<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
+<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
 <script type="module" nonce="${nonce}">
 const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
 const PADDING = ${PADDING};
 const HIT_TOLERANCE = ${HIT_TOLERANCE};
+const HANDLE_BAND = ${HANDLE_BAND};
+const HANDLE_RIM = ${HANDLE_RIM};
 const ACTIVE_RATE = ${ACTIVE_RATE};
 const RESTING_RATES = ${JSON.stringify(RESTING_RATES)};
 
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
   openDetails() {}, hidePet() {},
-  onFacing() {}, onRefresh() {}, onCarry() {}, onResync() {},
+  onFacing() {}, onRefresh() {}, onCarry() {}, onResync() {}, onProbe() {},
 };
 
 const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
+const handle = document.getElementById('handle');
 const pill = document.getElementById('pill');
 const pillSettings = document.getElementById('pill-settings');
 const pillHide = document.getElementById('pill-hide');
@@ -450,21 +487,23 @@ async function render(next) {
 }
 
 /**
- * Finds the artwork inside the cell, and hangs the pill off it.
+ * Finds the artwork inside the cell, and hangs the furniture off it.
  *
  * The bounding box of the opaque pixels, from the same mask the hit-test uses,
  * so what you can see, what you can grab and what the pill is centred on cannot
- * disagree. The cell has transparent margins — a pill centred on the *cell*
- * sits off to one side of the animal.
+ * disagree. The cell has transparent margins — a band or a pill placed from the
+ * *cell* sits beside the animal rather than on him.
  */
 function placeFurniture() {
   if (!mask || !box) {
+    handle.style.display = 'none';
     pill.style.display = 'none';
     return;
   }
 
   let minX = mask.width;
   let maxX = -1;
+  let minY = mask.height;
   let maxY = -1;
 
   for (let y = 0; y < mask.height; y += 1) {
@@ -472,16 +511,51 @@ function placeFurniture() {
       if (!mask.bytes[y * mask.width + x]) continue;
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
   }
 
   if (maxX < 0) {
+    handle.style.display = 'none';
     pill.style.display = 'none';
     return;
   }
 
-  placePill(pet.getBoundingClientRect(), stage.getBoundingClientRect(), minX, maxX, maxY);
+  const rect = pet.getBoundingClientRect();
+  const stageRect = stage.getBoundingClientRect();
+  placeHandle(rect, stageRect, minX, maxX, minY);
+  placePill(rect, stageRect, minX, maxX, maxY);
+}
+
+/**
+ * Puts the drag band over the pet's scruff, inside a rim of ordinary pet.
+ *
+ * Inset on three sides rather than flush with the artwork, because the band
+ * swallows the mouse events the window's own click-through depends on: the
+ * pointer has to cross a part of him that still reports before it reaches the
+ * part that drags. Arriving from above, from the left or from the right, the
+ * rim is what answers. See HANDLE_RIM.
+ */
+function placeHandle(rect, stageRect, minX, maxX, minY) {
+  const left = rect.left - stageRect.left + (minX + HANDLE_RIM) * box.scale;
+  const top = rect.top - stageRect.top + (minY + HANDLE_RIM) * box.scale;
+  const width = (maxX - minX + 1 - HANDLE_RIM * 2) * box.scale;
+  const height = HANDLE_BAND * box.scale;
+
+  // A pet drawn too small for a rim and a band both is a pet with no handle
+  // rather than a pet who is all handle: the deadlock above is worse than a
+  // grab that has to be aimed.
+  if (width < 12 || height < 10) {
+    handle.style.display = 'none';
+    return;
+  }
+
+  handle.style.display = 'block';
+  handle.style.left = left + 'px';
+  handle.style.top = top + 'px';
+  handle.style.width = width + 'px';
+  handle.style.height = height + 'px';
 }
 
 /**
@@ -698,6 +772,19 @@ bridge.onFacing((next) => {
   if (dragging) playState(next === 'left' ? 'running-left' : 'running-right');
 });
 bridge.onRefresh(() => void poll());
+
+/*
+ * The shell asking, instead of the pointer telling.
+ *
+ * Same test, same reporting path, different trigger — see the note on the drag
+ * band in the stylesheet for why a mousemove cannot be relied on to arrive.
+ * This is a poll, so it is the slower of the two: the mousemove path answers
+ * immediately and this one catches what it misses.
+ */
+bridge.onProbe((point) => {
+  if (dragging || !point) return;
+  setPointerOver(isOverPet(point.x, point.y));
+});
 
 /**
  * Forget everything about the pointer.
