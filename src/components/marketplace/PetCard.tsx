@@ -71,7 +71,11 @@ export function PetCard({
       onMouseLeave={() => setHovered(false)}
       title={`Drag ${definition.displayName} onto a chat to assign it`}
       className={cn(
-        'group flex h-full cursor-grab flex-col overflow-hidden active:cursor-grabbing',
+        // No grab cursor on the card body. The card is primarily something you
+        // click to open, and advertising "drag me" across its whole surface
+        // reads as the wrong affordance for the common action. The sprite below
+        // carries the grab cursor, which is also the thing being dragged.
+        'group flex h-full flex-col overflow-hidden',
         // Lift and outline on hover. Outline rather than a ring or a shadow:
         // the surface contract owns `box-shadow` on any element carrying
         // `data-tails-part`, so those utilities never land here.
@@ -85,7 +89,7 @@ export function PetCard({
       <button
         type="button"
         onClick={() => onOpen(pet)}
-        className="relative block w-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+        className="relative block w-full cursor-grab active:cursor-grabbing focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         aria-label={`Open ${definition.displayName}`}
       >
         <PetStage pet={pet} height={104} state={showcase} glow={hovered} className="h-36 w-full" />

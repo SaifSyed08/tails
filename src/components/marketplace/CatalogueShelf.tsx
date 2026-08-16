@@ -132,14 +132,16 @@ function CatalogueCard({
       onMouseLeave={() => setHovered(false)}
       title={`Drag ${entry.displayName} onto a chat to install and assign it`}
       className={cn(
-        'flex h-full cursor-grab flex-col overflow-hidden active:cursor-grabbing',
+        // The grab cursor belongs on the sprite, not the whole card — see the
+        // same change in PetCard.
+        'flex h-full flex-col overflow-hidden',
         'transition-transform duration-quick ease-standard',
         'hover:-translate-y-1 hover:outline hover:outline-2 hover:-outline-offset-2 hover:outline-primary/40',
       )}
     >
       <div
         ref={stageRef}
-        className="relative flex h-28 items-center justify-center bg-gradient-to-b from-muted/70 to-transparent"
+        className="relative flex h-28 cursor-grab items-center justify-center bg-gradient-to-b from-muted/70 to-transparent active:cursor-grabbing"
       >
         {/* The same component the installed cards use — the two shelves light
             up identically, and there is one place to change it. */}

@@ -298,12 +298,22 @@ function startDrag() {
   // one drag and the next, the pet ends up somewhere other than under the hand
   // carrying it. `os` is logged beside `tracked` because a disagreement between
   // them is the specific failure three previous fixes were aimed at.
+  // Bounds and display, because the offsets recorded so far are impossible for
+  // the window this is supposed to be: a 766px grab offset cannot happen on a
+  // 152px-tall sprite box, so either the window is not the size we think or the
+  // cursor and the window are not being measured in the same space.
+  const bounds = isAlive() ? petWindow.getBounds() : null;
+  const display = screen.getDisplayNearestPoint(cursor);
+
   logDrag('start', {
     mode: dragMode,
     cursor,
     tracked: recorded,
     os: [osX, osY],
     offset: dragOffset,
+    bounds,
+    scale: display.scaleFactor,
+    workArea: display.workArea,
   });
   frameCount = 0;
 
