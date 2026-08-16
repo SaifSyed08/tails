@@ -268,10 +268,26 @@ function createSplash() {
  * the sheet rather than trying to out-specify it, because specificity and
  * `!important` are games the theme can play too.
  */
+/**
+ * The last way out of a look that has made the app unusable.
+ *
+ * Enumerated by id rather than by prefix on purpose — a stylesheet the panic
+ * key does not know about is one it cannot remove, and the failure is silent.
+ * `tails-css` was missing here for exactly that reason: it is the fallback for
+ * browsers without constructable stylesheets, unreachable on the Electron this
+ * ships with, so nothing ever exercised it. Latent, not harmless — the whole
+ * point of this script is that it works on the day everything else did not.
+ *
+ * The ids here are the fallback elements from `applyTheme.ts` (`tails-<layer>`,
+ * for the layers in `LAYER_ORDER`) plus the pre-paint element from
+ * `index.html`. The live-controls layer needs no entry: it is adopted-only and
+ * goes with the line above. Adding a layer there means adding it here.
+ */
 const PANIC_RESET_SCRIPT = `(() => {
   document.adoptedStyleSheets = [];
-  document.getElementById('tails-theme-preboot')?.remove();
-  document.getElementById('tails-theme')?.remove();
+  for (const id of ['tails-theme-preboot', 'tails-theme', 'tails-css']) {
+    document.getElementById(id)?.remove();
+  }
   try { localStorage.removeItem('tails.themeCss'); } catch {}
   fetch('/api/appearance/unbind', {
     method: 'POST',
