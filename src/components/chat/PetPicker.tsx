@@ -4,65 +4,22 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-/**
- * The parts of a pet this picker reads.
- *
- * Deliberately a narrow, all-optional view of the pets module's own shape: it
- * owns that type and is still changing it, and a picker is not worth breaking
- * a build over. Anything missing degrades to the paw placeholder.
- */
-type PickablePet = {
-  definition: {
-    id: string;
-    name: string;
-    frame?: { width: number; height: number; columns: number; rows: number };
-    states?: { idle?: { from: number } };
-    /** Lines this pet says while the agent works; the indicator mixes them in. */
-    thinkingPhrases?: string[];
-  };
-  spriteUrl: string;
-};
+import { petsApi, PetThumbnail, type InstalledPet } from '../marketplace';
 
-/** How large the preview box is, in CSS pixels. */
+/**
+ * How large the preview box is, in CSS pixels.
+ *
+ * This used to crop the idle frame itself, from a hand-written type that
+ * described a pet the server does not send: `definition.name` (it is
+ * `displayName`) and `states.idle.from` (it is `start`). Both silently read
+ * `undefined`, so every pet fell through to a paw placeholder. It was also the
+ * third copy of "crop one cell out of a spritesheet" in the app, and the
+ * one-frame-per-loop bug had already been fixed in only some of them.
+ *
+ * `PetThumbnail` exists precisely to end that: the server publishes a `preview`
+ * frame and one component draws it.
+ */
 const PREVIEW_SIZE = 44;
-
-/**
- * One frame of a pet's spritesheet, scaled to fit the preview box.
- *
- * A spritesheet dropped into an `<img>` shows every frame at once, which reads
- * as a contact sheet rather than a character — so the idle frame is cropped
- * out with background positioning. Pixel art is scaled with `pixelated`,
- * because smoothing it is the one thing that makes it look broken.
- */
-function PetFrame({ pet }: { pet: PickablePet }) {
-  const frame = pet.definition.frame;
-  if (!frame?.width || !frame.height || !frame.columns) {
-    return <PawPrint className="size-5 text-muted-foreground" aria-hidden="true" />;
-  }
-
-  const index = pet.definition.states?.idle?.from ?? 0;
-  const scale = PREVIEW_SIZE / Math.max(frame.width, frame.height);
-
-  return (
-    <span
-      className="relative block overflow-hidden"
-      style={{ width: PREVIEW_SIZE, height: PREVIEW_SIZE }}
-      aria-hidden="true"
-    >
-      <span
-        className="absolute left-0 top-0 block origin-top-left"
-        style={{
-          width: frame.width,
-          height: frame.height,
-          transform: `scale(${scale})`,
-          backgroundImage: `url(${pet.spriteUrl})`,
-          backgroundPosition: `${-(index % frame.columns) * frame.width}px ${-Math.floor(index / frame.columns) * frame.height}px`,
-          imageRendering: 'pixelated',
-        }}
-      />
-    </span>
-  );
-}
 
 type PetPickerProps = {
   sessionId: string;
@@ -84,16 +41,16 @@ type PetPickerProps = {
  * particular piece of work feels, not a single app-wide setting.
  */
 export function PetPicker({ sessionId, petId, onAssigned, onClose }: PetPickerProps) {
-  const [pets, setPets] = useState<PickablePet[] | null>(null);
+  const [pets, setPets] = useState<InstalledPet[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
-    api.listPets()
+    petsApi.listPets()
       .then((library) => {
-        if (!cancelled) setPets(library.pets as PickablePet[]);
+        if (!cancelled) setPets(library.pets);
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
@@ -181,8 +138,8 @@ export function PetPicker({ sessionId, petId, onAssigned, onClose }: PetPickerPr
                 aria-pressed={selected}
                 onClick={() => void assign({
                   id: pet.definition.id,
-                  name: pet.definition.name,
-                  phrases: pet.definition.thinkingPhrases ?? [],
+                  name: pet.definition.displayName,
+                  phrases: pet.thinkingPhrases ?? [],
                 })}
                 className={cn(
                   'flex w-full items-center gap-3 rounded-lg border p-2 text-left transition-colors duration-quick disabled:opacity-60',
@@ -190,9 +147,9 @@ export function PetPicker({ sessionId, petId, onAssigned, onClose }: PetPickerPr
                 )}
               >
                 <span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted/60">
-                  <PetFrame pet={pet} />
+                  <PetThumbnail pet={pet} size={PREVIEW_SIZE} />
                 </span>
-                <span className="min-w-0 flex-1 truncate text-sm">{pet.definition.name}</span>
+                <span className="min-w-0 flex-1 truncate text-sm">{pet.definition.displayName}</span>
                 {selected ? <span className="text-xs text-primary">Assigned</span> : null}
               </button>
             );

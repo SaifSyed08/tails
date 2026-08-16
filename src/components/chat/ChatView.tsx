@@ -220,10 +220,16 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
             if (match) {
               resolved = {
                 id: match.definition.id,
-                name: match.definition.name,
-                // Optional on the pets module's side, so a pet that has never
-                // been given lines simply contributes none.
-                phrases: match.definition.thinkingPhrases ?? [],
+                // Both of these live where the pets module actually puts them,
+                // which is not where they read as belonging. The definition is
+                // the pet's own manifest and carries `displayName`; the phrases
+                // are ours, stored beside the definition rather than inside it,
+                // because a Codex manifest is read-only and cannot hold them.
+                // Reading `definition.name` and `definition.thinkingPhrases`
+                // silently yielded undefined, so every seeded line reached
+                // nothing at all.
+                name: match.definition.displayName,
+                phrases: match.thinkingPhrases ?? [],
               };
             }
           }

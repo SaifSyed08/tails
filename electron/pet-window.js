@@ -355,13 +355,48 @@ function onCarried(x, y) {
   }, SETTLE_MS);
 }
 
+/**
+ * Puts the window's input state back together after it has been hidden.
+ *
+ * A hidden window receives no forwarded mouse moves, so both sides of the
+ * click-through handshake can be left holding a belief that is no longer true:
+ * the page still thinking the pointer is on the pet (so it never re-reports the
+ * arrival that would make the window interactive), or still thinking it is
+ * mid-carry (so it stops tracking the pointer at all). Either one is a pet that
+ * cannot be picked up, for the rest of the session — which is what the chat
+ * handoff produced, because that path hides and re-shows the window.
+ *
+ * So the state is asserted rather than assumed on the way back in.
+ * `setIgnoreMouseEvents` is re-applied for the same reason: it is the one piece
+ * of this that lives in the OS, and re-applying it costs a call.
+ */
+function resyncAfterShow() {
+  if (!isAlive()) return;
+
+  if (settleTimer) {
+    clearTimeout(settleTimer);
+    settleTimer = null;
+  }
+  carrying = false;
+  carryFacing = null;
+
+  interactive = false;
+  stopWatchdog();
+  petWindow.setIgnoreMouseEvents(true, { forward: true });
+  petWindow.setMovable(true);
+  petWindow.webContents.send('pet:resync');
+}
+
 function applyVisibility() {
   if (!isAlive()) return;
 
   if (shouldShow()) {
     // `showInactive` rather than `show`: a companion that steals focus while
     // the user is typing is a companion they will uninstall.
-    if (!petWindow.isVisible()) petWindow.showInactive();
+    if (!petWindow.isVisible()) {
+      petWindow.showInactive();
+      resyncAfterShow();
+    }
     return;
   }
 
@@ -655,6 +690,25 @@ export function resetPetPosition() {
 
   hidden = false;
   applyVisibility();
+  persistPosition();
+}
+
+/**
+ * Puts the pet down at a point on the screen.
+ *
+ * For the handoff: carrying the in-chat pet out of the window should leave him
+ * where the hand opened, not back wherever the window happened to be. The point
+ * is the pointer, so the sprite is centred on it rather than hung from its
+ * top-left corner, and it is clamped like any other move — a drop over a second
+ * monitor's edge must not strand him off screen.
+ */
+export function placePetAt(x, y) {
+  if (!isAlive()) return;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+  const size = sizeNow();
+  const clamped = clampToDisplay(x - size.width / 2, y - size.height / 2, size.width, size.height);
+  moveTo(clamped.x, clamped.y);
   persistPosition();
 }
 

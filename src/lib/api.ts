@@ -126,16 +126,25 @@ export const api = {
    */
   listPets: () => request<{
     pets: {
+      /**
+       * The pet's own manifest, which is `displayName` rather than `name` —
+       * this type said `name`, so every read of it was `undefined` and the
+       * thinking indicator silently fell back to no pet at all.
+       */
       definition: {
         id: string;
-        name: string;
-        /**
-         * Lines this pet says while the agent is working, mixed into the
-         * thinking indicator's rotation. Optional: the pets module owns
-         * authoring them, and a pet without any changes nothing.
-         */
-        thinkingPhrases?: string[];
+        displayName: string;
       };
+      /**
+       * Lines this pet says while the agent is working, mixed into the thinking
+       * indicator's rotation.
+       *
+       * A sibling of `definition`, not a field inside it, and the distinction is
+       * not cosmetic: a Codex pet's manifest lives in a read-only directory, so
+       * anything we author about a pet has to be stored beside what its author
+       * wrote rather than merged into it.
+       */
+      thinkingPhrases?: string[];
       spriteUrl: string;
       active: boolean;
     }[];

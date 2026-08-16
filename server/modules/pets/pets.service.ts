@@ -24,7 +24,7 @@ import {
   type PetStates,
 } from '@/modules/pets/pet-spec.js';
 import { CODEX_FPS, isCodexGrid } from '@/modules/pets/codex-layout.js';
-import { petsRepository, type PetSource } from '@/modules/pets/pets.repository.js';
+import { petsRepository, type PetSource, type PetStage } from '@/modules/pets/pets.repository.js';
 import { seededThinkingPhrases } from '@/modules/pets/thinking-seeds.js';
 import {
   createRemoteCatalogue,
@@ -115,6 +115,11 @@ export type InstalledPet = {
   thinkingPhrases: string[];
   /** Starred pets lead the carousel. */
   starred: boolean;
+  /**
+   * How the user has set this pet up on a stage: his size, and whether he
+   * wanders. Always present, so no surface has to know the defaults.
+   */
+  stage: PetStage;
   /** When it was last put on screen, or null for one nobody has tried yet. */
   lastUsedAt: string | null;
   /**
@@ -460,6 +465,7 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     // An empty array is a choice, and it wins.
     thinkingPhrases: override?.thinkingPhrases
       ?? seededThinkingPhrases(definition.data.id),
+    stage: resolveStage(override?.stage ?? null),
     starred: Boolean(override?.starredAt),
     lastUsedAt: toIsoTimestamp(override?.lastUsedAt),
     installedAt: toIsoTimestamp(override?.installedAt),
@@ -467,6 +473,38 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     hidden: Boolean(override?.hiddenAt),
     active: false,
     warnings,
+  };
+}
+
+/**
+ * How far the size dial goes.
+ *
+ * Small enough to be a footnote in the corner, large enough to be a companion
+ * standing next to what you are reading, and no further: he is drawn from a
+ * fixed-resolution sprite sheet, and past this he is a handful of fat pixels.
+ */
+export const MIN_PET_SCALE = 0.6;
+export const MAX_PET_SCALE = 2;
+
+const DEFAULT_STAGE: PetStage = { scale: 1, walks: true };
+
+/**
+ * Fills in and sanitises the stage settings.
+ *
+ * A stored blob is user data that has been through JSON, so nothing about it is
+ * guaranteed. Each dial falls back on its own — a nonsense scale must not also
+ * lose the walk setting — and the clamp is here rather than only at the write
+ * so an out-of-range value already on disk cannot draw a pet the size of the
+ * window.
+ */
+export function resolveStage(stored: Partial<PetStage> | null): PetStage {
+  const scale = typeof stored?.scale === 'number' && Number.isFinite(stored.scale)
+    ? Math.min(MAX_PET_SCALE, Math.max(MIN_PET_SCALE, stored.scale))
+    : DEFAULT_STAGE.scale;
+
+  return {
+    scale,
+    walks: typeof stored?.walks === 'boolean' ? stored.walks : DEFAULT_STAGE.walks,
   };
 }
 
@@ -1140,6 +1178,33 @@ export const petsService = {
       contentType: spriteContentType(pet.definition.spritesheetPath),
       byteLength: stats.size,
     };
+  },
+
+  /**
+   * Saves how a pet is shown on a stage.
+   *
+   * Validated here rather than trusted from the client, because these numbers
+   * end up as CSS pixels and a bad one is a pet who fills the screen or
+   * vanishes. No broadcast: the surface that set it is already showing the
+   * change, and the desktop pet re-reads on its own poll.
+   */
+  setPetStage(id: string, body: unknown): InstalledPet {
+    const pet = requirePet(id);
+    const input = readRecord(body);
+    if (!input) {
+      throw new AppError('Send the stage settings to save.', {
+        code: 'PET_STAGE_EMPTY',
+        statusCode: 400,
+      });
+    }
+
+    petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
+    petsRepository.saveStage(pet.definition.id, resolveStage({
+      scale: typeof input.scale === 'number' ? input.scale : pet.stage.scale,
+      walks: typeof input.walks === 'boolean' ? input.walks : pet.stage.walks,
+    }));
+
+    return requirePet(id);
   },
 
   /** Stars a pet, or unstars it. */

@@ -62,6 +62,7 @@ const ADDED_COLUMNS: { name: string; definition: string }[] = [
   { name: 'thinking_phrases_json', definition: 'TEXT' },
   { name: 'starred_at', definition: 'DATETIME' },
   { name: 'last_used_at', definition: 'DATETIME' },
+  { name: 'stage_json', definition: 'TEXT' },
 ];
 
 /** Applies the pets schema to a connection. Idempotent. */
@@ -150,6 +151,22 @@ export type InstalledPetRecord = {
    * before anyone tries it.
    */
   lastUsedAt: string | null;
+  /**
+   * How this pet is shown when he is standing in a room, or null for defaults.
+   *
+   * One blob rather than a column each because these are one thing — the way
+   * the user has set this pet up on their screen — and they arrive together
+   * from one menu. A new dial is then a field, not a migration.
+   */
+  stage: PetStage | null;
+};
+
+/** The per-pet display settings the stage menu writes. */
+export type PetStage = {
+  /** Multiplier on his standing height. 1 is the designed size. */
+  scale: number;
+  /** Whether he wanders about on his own. */
+  walks: boolean;
 };
 
 type InstalledPetRow = {
@@ -165,6 +182,7 @@ type InstalledPetRow = {
   thinking_phrases_json: string | null;
   starred_at: string | null;
   last_used_at: string | null;
+  stage_json: string | null;
 };
 
 /**
@@ -195,10 +213,11 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   thinkingPhrases: parseJson<string[]>(row.thinking_phrases_json),
   starredAt: row.starred_at,
   lastUsedAt: row.last_used_at,
+  stage: parseJson<PetStage>(row.stage_json),
 });
 
 const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, '
-  + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at';
+  + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at, stage_json';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -277,6 +296,21 @@ export const petsRepository = {
       input.thinkingPhrases ? JSON.stringify(input.thinkingPhrases) : null,
       id,
     );
+  },
+
+  /**
+   * Stores how the pet is shown on a stage.
+   *
+   * Written whole. The caller has just read the current settings to draw the
+   * menu, so a partial update would only re-introduce the read it already did,
+   * and two dials cannot disagree about which write won.
+   */
+  saveStage(id: string, stage: PetStage): void {
+    db().prepare(`
+      UPDATE installed_pets
+      SET stage_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(JSON.stringify(stage), id);
   },
 
   /** Stars a pet, or unstars it. Starred pets come first in the carousel. */

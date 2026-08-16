@@ -111,6 +111,12 @@ export function createPetsRouter(): express.Router {
     req.body?.starred !== false,
   )));
 
+  /** How the pet is shown where he stands: his size, and whether he wanders. */
+  router.post('/:petId/stage', respond((req) => petsService.setPetStage(
+    String(req.params.petId),
+    req.body,
+  )));
+
   /** "This pet was chosen" — assignment lives in another module, the tally lives here. */
   router.post('/:petId/used', respond((req) => petsService.markPetUsed(String(req.params.petId))));
 

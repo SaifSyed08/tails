@@ -2,11 +2,13 @@ import { Pencil, Star, Wand2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
+import { prefersReducedMotion } from '@/theme/motion';
 
 import { petsApi, usePetLibraryVersion, type InstalledPet } from './marketplace-api';
 import { usePetCarry, type PetCarryRelease } from './pet-carry';
 import { isUntried, orderForCarousel } from './pet-filters';
 import { PetThumbnail } from './PetThumbnail';
+import { glideStep, nextStripScroll, readItemPitch } from './strip-scroll';
 
 /**
  * The pet strip.
@@ -49,67 +51,6 @@ export type PetCarouselProps = {
 
 type MenuState = { pet: InstalledPet; x: number; y: number } | null;
 
-/**
- * A wheel notch in line mode, in pixels.
- *
- * `deltaMode` is not always pixels. A mouse reporting three *lines* per notch
- * is common, and treating that as three pixels moves the strip by nothing at
- * all — which reads as the wheel being ignored rather than as it being slow.
- */
-const WHEEL_LINE_PX = 16;
-
-/**
- * `WheelEvent.deltaMode`, spelled out rather than read off the global.
- *
- * The values are fixed by the spec, and taking them from `WheelEvent` would
- * make a function that is otherwise pure arithmetic depend on there being a
- * DOM — which is the one thing standing between this rule and being checkable.
- */
-const DELTA_MODE_LINE = 1;
-const DELTA_MODE_PAGE = 2;
-
-/** The wheel's movement along one axis, in pixels, whatever unit it arrived in. */
-function wheelPixels(delta: number, mode: number, pageSize: number): number {
-  if (mode === DELTA_MODE_LINE) return delta * WHEEL_LINE_PX;
-  if (mode === DELTA_MODE_PAGE) return delta * pageSize;
-  return delta;
-}
-
-/**
- * Where the strip should scroll to for this wheel event, or null to let it go.
- *
- * Turning a vertical wheel sideways is easy; knowing when *not* to is the part
- * worth writing down, because all three cases look identical in a diff and each
- * one is separately infuriating:
- *
- * - Nothing to scroll. A strip whose pets all fit must let the wheel through,
- *   or the sidebar stops scrolling over a strip that had no use for it.
- * - Already at that end. Once there is no further to go the event belongs to
- *   whatever is underneath again; keeping it is how a page feels stuck.
- * - A genuine horizontal wheel. Trackpads and tilt wheels send `deltaX`, and a
- *   sideways swipe should be obeyed, not reinterpreted.
- *
- * Pure, and exported, so those three can be checked rather than believed.
- */
-export function nextStripScroll(
-  wheel: { deltaX: number; deltaY: number; deltaMode: number },
-  strip: { scrollLeft: number; scrollWidth: number; clientWidth: number },
-): number | null {
-  const furthest = strip.scrollWidth - strip.clientWidth;
-  if (furthest <= 0) return null;
-
-  const sideways = Math.abs(wheel.deltaX) > Math.abs(wheel.deltaY);
-  const travel = wheelPixels(
-    sideways ? wheel.deltaX : wheel.deltaY,
-    wheel.deltaMode,
-    strip.clientWidth,
-  );
-  if (travel === 0) return null;
-
-  const next = Math.min(furthest, Math.max(0, strip.scrollLeft + travel));
-  return next === strip.scrollLeft ? null : next;
-}
-
 export function PetCarousel({ refreshToken = 0, onEdit, onCarryRelease, className }: PetCarouselProps) {
   const [pets, setPets] = useState<InstalledPet[]>([]);
   const [menu, setMenu] = useState<MenuState>(null);
@@ -133,27 +74,67 @@ export function PetCarousel({ refreshToken = 0, onEdit, onCarryRelease, classNam
   }, [load, refreshToken, libraryVersion]);
 
   /**
-   * The wheel, turned sideways.
+   * The wheel, turned sideways and eased.
    *
-   * `nextStripScroll` decides; this only carries out the decision. Registered
-   * by hand rather than as `onWheel` because React attaches wheel listeners
-   * passively at the root, where `preventDefault` does nothing at all — which
-   * would leave the strip scrolling twice, once from us and once from the
-   * browser.
+   * `nextStripScroll` decides where to go; this gets there. The destination is
+   * held here rather than handed to `scrollBy({ behavior: 'smooth' })`, which
+   * looks like the obvious answer and is the wrong one: each new smooth scroll
+   * measures its delta from wherever the last animation had reached, so two
+   * notches in quick succession travel less than two notches. Keeping the
+   * target ourselves means they add up, and it is also what lets the
+   * end-of-strip check be asked of the destination.
+   *
+   * Registered by hand rather than as `onWheel` because React attaches wheel
+   * listeners passively at the root, where `preventDefault` does nothing at
+   * all — which would leave the strip scrolling twice, once from us and once
+   * from the browser.
    */
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip) return undefined;
 
+    let target: number | null = null;
+    let frame: number | undefined;
+
+    const glide = () => {
+      frame = undefined;
+      if (target === null) return;
+
+      const { at, arrived } = glideStep(strip.scrollLeft, target);
+      strip.scrollLeft = at;
+
+      if (arrived) target = null;
+      else frame = requestAnimationFrame(glide);
+    };
+
     const onWheel = (event: WheelEvent) => {
-      const next = nextStripScroll(event, strip);
+      const next = nextStripScroll(event, {
+        from: target ?? strip.scrollLeft,
+        scrollWidth: strip.scrollWidth,
+        clientWidth: strip.clientWidth,
+        itemPitch: readItemPitch(strip),
+      });
       if (next === null) return;
+
       event.preventDefault();
-      strip.scrollLeft = next;
+      target = next;
+
+      // Reduced motion means no animation, not no scrolling: it arrives, it
+      // just does not travel.
+      if (prefersReducedMotion()) {
+        strip.scrollLeft = next;
+        target = null;
+        return;
+      }
+
+      if (frame === undefined) frame = requestAnimationFrame(glide);
     };
 
     strip.addEventListener('wheel', onWheel, { passive: false });
-    return () => strip.removeEventListener('wheel', onWheel);
+    return () => {
+      strip.removeEventListener('wheel', onWheel);
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
     // The strip is only in the document once there are pets to put in it.
   }, [pets.length]);
 

@@ -190,7 +190,7 @@ const HANDLE_BAND = ${HANDLE_BAND};
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
   openMenu() {},
-  onFacing() {}, onRefresh() {}, onCarry() {},
+  onFacing() {}, onRefresh() {}, onCarry() {}, onResync() {},
 };
 
 const stage = document.getElementById('stage');
@@ -629,6 +629,26 @@ bridge.onFacing((next) => {
   if (dragging) playState(next === 'left' ? 'running-left' : 'running-right');
 });
 bridge.onRefresh(() => void poll());
+
+/**
+ * Forget everything about the pointer.
+ *
+ * Sent when the window is shown after being hidden. Both of these beliefs are
+ * unfalsifiable from in here once they are wrong: a stale "the pointer is on
+ * the pet" means the arrival is never re-reported, so the shell never makes the
+ * window clickable, and a stale "he is being carried" means this page stops
+ * tracking the pointer at all. Either one is a pet nobody can pick up.
+ */
+bridge.onResync(() => {
+  dragging = false;
+  pointerOver = false;
+  petRect = null;
+  pet.classList.remove('dragging');
+  pill.classList.remove('open');
+  bridge.reportPointerOverPet(false);
+  if (mask) placeHandle();
+  playState('idle');
+});
 
 
 /**

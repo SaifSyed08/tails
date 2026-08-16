@@ -5,18 +5,22 @@ import {
   PetSprite,
   readPetDragFrame,
   resolveCellBox,
-  usePetCarry,
-  usePetDragState,
+  SPRITE_KEYFRAMES,
   suppressDesktopPet,
+  usePetDragState,
   type InstalledPet,
   type PetStateName,
 } from '@/components/marketplace';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
-import { readSessionPet } from './chat-pet-api';
+import { readSessionPet, readStage, savePetStage, type PetStage } from './chat-pet-api';
+import { placeDesktopPetAt } from './desktop-handoff';
+import { PetMenu } from './PetMenu';
 import { PetPill } from './PetPill';
+import { advanceMotion, type Motion } from './pet-motion';
 import { useChatActivity } from './useChatActivity';
+import { useInChatCarry } from './useInChatCarry';
 
 /**
  * The pet who lives in a conversation.
@@ -35,19 +39,37 @@ import { useChatActivity } from './useChatActivity';
  * `[data-tails-chat-column]` is the reading area he keeps out of. The column
  * scrolls and resizes, so it is re-read rather than cached.
  *
+ * ## He has weight
+ *
+ * Everything that puts him somewhere puts him there *in the air*, and he falls
+ * to the floor from it — dropped in from the tray, or picked up and let go
+ * inside the window. Teleporting him onto the floor under the cursor was the
+ * thing that read as wrong: a pet who arrives without falling is a sprite being
+ * repositioned, not an animal being put down. A drop from the tray also grows
+ * him from the size the drag layer drew him at to the size he stands at here,
+ * so the small icon you were carrying and the pet who lands are one thing.
+ *
  * ## Two entrances
  *
- * Opening a chat he is assigned to, he walks in from behind the sidebar —
- * that is arriving somewhere he already lives. Dropped into the chat, he lands
- * where he was dropped: the gesture already said where he should be, and
- * marching him back to the door would throw that away.
+ * Opening a chat he is assigned to, he walks in from behind the sidebar — that
+ * is arriving somewhere he already lives. Dropped in, he lands where he was
+ * dropped: the gesture already said where he should be.
  */
 
-/** His height in the window, in CSS pixels. */
+/** His designed standing height, in CSS pixels, before the user's own size. */
 const PET_HEIGHT = 72;
 
-/** Walking speed, in pixels per second. A stroll rather than a scurry. */
-const WALK_SPEED = 120;
+/**
+ * The height the tray's drag layer draws a carried pet at.
+ *
+ * Mirrored from `CARRIED_SIZE` in `PetDragLayer`, which is where a pet dropped
+ * in from the carousel is arriving *from*. Only the start of the growth, so a
+ * few pixels of disagreement cost nothing.
+ */
+const CARRIED_HEIGHT = 40;
+
+/** The squash on landing. Brief: this is a landing, not a bounce. */
+const SQUASH_MS = 150;
 
 /** How far in from the overlay's left edge he enters and rests. */
 const GUTTER_INSET = 6;
@@ -85,19 +107,6 @@ type Geometry = {
   column: { left: number; right: number } | null;
 };
 
-type Arrival = 'walk' | 'drop';
-
-/** Where he is and what he is doing, all keyed to one arrival. */
-type Motion = {
-  arrival: string;
-  x: number;
-  /** Non-null while walking somewhere. */
-  target: number | null;
-  facing: 'left' | 'right';
-  /** Overrides the resting animation: the greeting beats and click reactions. */
-  gesture: PetStateName | null;
-};
-
 const randomBetween = (low: number, high: number) => low + Math.random() * (high - low);
 
 /**
@@ -106,19 +115,19 @@ const randomBetween = (low: number, high: number) => low + Math.random() * (high
  * Null until they exist and have room: the overlay mounts with the chat view,
  * and the stage has no useful height until the transcript has laid out.
  */
-function measure(overlay: HTMLElement, spriteWidth: number): Geometry | null {
+function measure(overlay: HTMLElement, width: number, height: number): Geometry | null {
   const stage = document.querySelector('[data-tails-chat-stage]');
   if (!stage) return null;
 
   const overlayRect = overlay.getBoundingClientRect();
   const stageRect = stage.getBoundingClientRect();
-  if (stageRect.height < PET_HEIGHT || overlayRect.width < spriteWidth * 2) return null;
+  if (stageRect.height < height || overlayRect.width < width * 2) return null;
 
   const columnRect = document.querySelector('[data-tails-chat-column]')?.getBoundingClientRect();
 
   return {
-    floorTop: stageRect.bottom - overlayRect.top - PET_HEIGHT,
-    maxX: overlayRect.width - spriteWidth,
+    floorTop: stageRect.bottom - overlayRect.top - height,
+    maxX: overlayRect.width - width,
     column: columnRect
       ? { left: columnRect.left - overlayRect.left, right: columnRect.right - overlayRect.left }
       : null,
@@ -166,6 +175,9 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   const [hovered, setHovered] = useState(false);
   const [handedOffArrival, setHandedOffArrival] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  /** The size and walk settings as the user is changing them, before the reload. */
+  const [pendingStage, setPendingStage] = useState<{ petId: string; stage: PetStage } | null>(null);
 
   // Derived rather than reset: a pet left over from the previous conversation
   // is simply not this conversation's pet.
@@ -174,9 +186,22 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   const handedOff = handedOffArrival !== null && handedOffArrival === arrival;
   const here = motion && motion.arrival === arrival ? motion : null;
 
-  const spriteWidth = useMemo(() => (
-    pet ? resolveCellBox(pet.definition.frame, PET_HEIGHT).cellWidth : PET_HEIGHT
+  const stage = pendingStage && pet && pendingStage.petId === pet.definition.id
+    ? pendingStage.stage
+    : readStage(pet);
+
+  /**
+   * His box, at the size the user has chosen.
+   *
+   * The ratio rather than the width, because the box has to be re-derived at
+   * every height he passes through while growing, and the cell's shape is the
+   * only part of that which is fixed.
+   */
+  const fullHeight = Math.round(PET_HEIGHT * stage.scale);
+  const widthPerHeight = useMemo(() => (
+    pet ? resolveCellBox(pet.definition.frame, 100).cellWidth / 100 : 1
   ), [pet]);
+  const fullWidth = Math.round(fullHeight * widthPerHeight);
 
   const frameRef = useRef<number | undefined>(undefined);
   const wanderRef = useRef<number | undefined>(undefined);
@@ -188,16 +213,33 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * This is what tells the two entrances apart. Session identity cannot: a chat
    * you already had open is exactly the case where both a drop and a first
    * assignment look the same from here. A drag that just ended is the actual
-   * evidence that someone put him there, and it carries the x as well.
+   * evidence that someone put him there, and it carries the point as well.
    */
-  const dropRef = useRef<{ at: number; x: number } | null>(null);
+  const dropRef = useRef<{ at: number; x: number; y: number } | null>(null);
 
   // Watches for a carry ending anywhere in the app. Recorded rather than acted
   // on: whether it concerns this chat is only known when the assignment arrives.
   const dragging = usePetDragState().payload !== null;
+  const wasDraggingRef = useRef(false);
   useEffect(() => {
-    if (dragging) return undefined;
-    dropRef.current = { at: performance.now(), x: readPetDragFrame().x };
+    if (dragging) {
+      wasDraggingRef.current = true;
+      return undefined;
+    }
+    // Nothing was in flight, so this is the component mounting rather than a
+    // hand opening — and treating that as a drop would have every pet who was
+    // already assigned fall out of the top-left corner instead of walking in.
+    if (!wasDraggingRef.current) return undefined;
+    wasDraggingRef.current = false;
+
+    const frame = readPetDragFrame();
+    dropRef.current = { at: performance.now(), x: frame.x, y: frame.y };
+
+    // A hand opening anywhere retires the last handoff. Without this, a pet
+    // carried out to the desktop and then dropped back into the same chat would
+    // be refused: the arrival is the same string, and it was marked handed off.
+    // Deferred out of the effect body because that is a render-time write.
+    queueMicrotask(() => setHandedOffArrival(null));
     return undefined;
   }, [dragging]);
 
@@ -264,7 +306,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     if (!overlay || !pet) return undefined;
 
     const update = () => setGeometry((current) => {
-      const next = measure(overlay, spriteWidth);
+      const next = measure(overlay, fullWidth, fullHeight);
       // Compared by value: a ResizeObserver fires for every layout pass, and a
       // fresh object each time would re-run everything downstream.
       if (current && next
@@ -279,9 +321,9 @@ export function ChatPet({ sessionId }: ChatPetProps) {
 
     const observer = new ResizeObserver(update);
     observer.observe(overlay);
-    const stage = document.querySelector('[data-tails-chat-stage]');
+    const stageNode = document.querySelector('[data-tails-chat-stage]');
     const column = document.querySelector('[data-tails-chat-column]');
-    if (stage) observer.observe(stage);
+    if (stageNode) observer.observe(stageNode);
     if (column) observer.observe(column);
     window.addEventListener('resize', update);
 
@@ -289,9 +331,9 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       observer.disconnect();
       window.removeEventListener('resize', update);
     };
-  }, [overlay, pet, spriteWidth]);
+  }, [overlay, pet, fullWidth, fullHeight]);
 
-  /** Walks him to a target, or puts him there directly under reduced motion. */
+  /** Walks him to a target. */
   const walkTo = useCallback((target: number) => {
     setMotion((current) => (current ? { ...current, target } : current));
   }, []);
@@ -311,70 +353,65 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     if (!geometry || !arrival || !pet || handedOff || enteredRef.current === arrival) return undefined;
     enteredRef.current = arrival;
 
+    const base = {
+      arrival,
+      vy: 0,
+      target: null,
+      facing: 'right' as const,
+      gesture: null,
+      carried: false,
+      squash: false,
+    };
+
     // Which entrance: he was just carried and let go, or he was already here
     // and you opened the door.
     const drop = dropRef.current;
-    const entrance: Arrival = drop && performance.now() - drop.at < DROP_GRACE_MS ? 'drop' : 'walk';
+    if (drop && performance.now() - drop.at < DROP_GRACE_MS) {
+      const rect = overlay?.getBoundingClientRect();
+      const overlayLeft = rect?.left ?? 0;
+      const overlayTop = rect?.top ?? 0;
+      // Where the hand opened. Clamped horizontally, because a pet dropped on
+      // the far edge still has to stand somewhere, and never below the floor —
+      // there is nothing to fall from down there.
+      const x = Math.max(GUTTER_INSET, Math.min(geometry.maxX, drop.x - overlayLeft - fullWidth / 2));
+      const y = Math.min(0, drop.y - overlayTop - geometry.floorTop - fullHeight / 2);
 
-    if (entrance === 'drop' && drop) {
-      const overlayLeft = overlay?.getBoundingClientRect().left ?? 0;
-      // Where the hand opened, on the floor. Clamped, because a pet dropped on
-      // the far edge of the window still has to stand somewhere.
-      const x = Math.max(GUTTER_INSET, Math.min(
-        geometry.maxX,
-        drop.x - overlayLeft - spriteWidth / 2,
-      ));
-      setMotion({ arrival, x, target: null, facing: 'right', gesture: 'jumping' });
-      gestureRef.current = window.setTimeout(() => {
-        gestureRef.current = undefined;
-        setMotion((current) => (current ? { ...current, gesture: null } : current));
-      }, REACTION_MS);
+      setMotion({ ...base, x, y: reduced ? 0 : y, grow: reduced ? 1 : 0 });
       return undefined;
     }
 
-    const start = reduced ? GUTTER_INSET : -spriteWidth;
     setMotion({
-      arrival,
-      x: start,
+      ...base,
+      x: reduced ? GUTTER_INSET : -fullWidth,
+      y: 0,
+      grow: 1,
       target: reduced ? null : GUTTER_INSET,
-      facing: 'right',
-      gesture: null,
     });
 
     return undefined;
-  }, [geometry, arrival, pet, handedOff, reduced, sessionId, spriteWidth, overlay]);
+  }, [geometry, arrival, pet, handedOff, reduced, fullWidth, fullHeight, overlay]);
 
   useEffect(() => {
     if (enteredRef.current !== null && enteredRef.current !== arrival) enteredRef.current = null;
   }, [arrival]);
 
   /**
-   * The walk itself.
+   * Everything that moves him, one frame at a time.
    *
-   * One frame loop for the lifetime of the component rather than one per
-   * journey: a loop that is started and cancelled by effects gets cancelled by
-   * things that are not the end of a journey, which is how an earlier version
-   * left him standing behind the sidebar.
+   * One loop for the lifetime of the component rather than one per journey: a
+   * loop started and cancelled by effects gets cancelled by things that are not
+   * the end of a journey, which is how an earlier version left him standing
+   * behind the sidebar. It returns the state object unchanged when nothing is
+   * happening, so a settled pet costs one comparison a frame and no renders.
    */
   useEffect(() => {
     let previous = performance.now();
 
     const step = (now: number) => {
-      const elapsed = Math.min(0.05, (now - previous) / 1000);
+      const elapsed = (now - previous) / 1000;
       previous = now;
 
-      setMotion((current) => {
-        if (!current || current.target === null) return current;
-
-        const direction = current.target > current.x ? 1 : -1;
-        const next = current.x + direction * WALK_SPEED * elapsed;
-        const arrived = direction > 0 ? next >= current.target : next <= current.target;
-
-        if (arrived) {
-          return { ...current, x: current.target, target: null };
-        }
-        return { ...current, x: next, facing: direction > 0 ? 'right' : 'left' };
-      });
+      setMotion((current) => (current ? advanceMotion(current, elapsed) : current));
 
       frameRef.current = requestAnimationFrame(step);
     };
@@ -404,52 +441,85 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     };
   }, [here, arrival, reduced, gesture]);
 
-  // Wandering, once he is settled and nothing is happening.
+  // Wandering, once he is settled and nothing is happening. Off when the user
+  // has turned it off — some people want a companion, not a distraction.
   useEffect(() => {
-    if (!here || !geometry || reduced || activity !== 'idle' || hovered) return undefined;
+    if (!here || !geometry || reduced || !stage.walks) return undefined;
+    if (activity !== 'idle' || hovered || here.carried) return undefined;
+    // Already on his way somewhere, or in the air. Both end with him standing
+    // still, and this effect re-runs then.
+    if (here.target !== null || here.y < 0) return undefined;
 
     wanderRef.current = window.setTimeout(() => {
-      const target = pickWanderTarget(geometry, spriteWidth, here.x);
+      const target = pickWanderTarget(geometry, fullWidth, here.x);
       if (target !== null) walkTo(target);
     }, randomBetween(WANDER_MIN_MS, WANDER_MAX_MS));
 
     return () => {
       if (wanderRef.current !== undefined) window.clearTimeout(wanderRef.current);
     };
-  }, [here, geometry, reduced, activity, hovered, spriteWidth, walkTo]);
+  }, [here, geometry, reduced, activity, hovered, fullWidth, walkTo, stage.walks]);
 
   /**
    * Carrying him.
    *
-   * The same gesture as everywhere else in the app — one carry, one threshold,
-   * one definition of "let go outside the window", one set of escape hatches.
-   * While it runs he is drawn by the drag layer rather than by this component,
-   * so the sprite here steps aside for the duration.
-   *
-   * Where he lands is this surface's business: let go over nothing inside the
-   * window, he goes back on the floor where the hand opened. Let go outside it,
-   * he is on the desktop and this stops drawing him. Let go on a real drop
-   * target, that target decides, and the assignment comes back over the wire.
+   * His own gesture rather than the tray's — see `useInChatCarry` for why. He
+   * stays the size he is, keeps his feet under the point you grabbed him by,
+   * and the two ways it can end are the two things you can do with an animal
+   * you have picked up: put him down, or put him outside.
    */
-  const { carryingId, getCarryProps } = usePetCarry({
-    onRelease: ({ target, x, outsideWindow }) => {
-      if (outsideWindow) {
+  const { carrying, onPointerDown, onClickCapture } = useInChatCarry({
+    onMove: (left, top) => {
+      const rect = overlay?.getBoundingClientRect();
+      if (!rect || !geometry) return;
+      const x = left - rect.left;
+      // Never below the floor: there is no room down there, and a pet behind
+      // the composer is a pet nobody can get back.
+      const y = Math.min(0, top - rect.top - geometry.floorTop);
+
+      setMotion((current) => (current ? {
+        ...current,
+        carried: true,
+        target: null,
+        squash: false,
+        x,
+        y,
+        facing: x < current.x - 1 ? 'left' : x > current.x + 1 ? 'right' : current.facing,
+      } : current));
+    },
+    onRelease: ({ x, y, screenX, screenY }) => {
+      const rect = overlay?.getBoundingClientRect();
+      const inside = rect
+        && x + fullWidth / 2 >= rect.left && x + fullWidth / 2 <= rect.right
+        && y + fullHeight / 2 >= rect.top && y + fullHeight / 2 <= rect.bottom;
+
+      if (!inside) {
+        // Out of the chat — over the sidebar, over the header, off the window
+        // entirely. He goes back to being a desktop pet, and he goes back to it
+        // where the hand opened rather than wherever that window was left.
+        placeDesktopPetAt(screenX, screenY);
         if (arrival) setHandedOffArrival(arrival);
+        // He has left, so the entrance is owed again: dropped back into this
+        // same chat later, the arrival string is unchanged and this is the only
+        // thing that would stop him coming in.
+        enteredRef.current = null;
         suppressDesktopPet(false);
         return;
       }
-      if (target) return;
 
-      const rect = overlay?.getBoundingClientRect();
-      const geometryNow = geometry;
-      if (!rect || !geometryNow) return;
-      // Only the horizontal is kept: he stands on a floor, and putting him
-      // down in mid-air would mean deciding what he does up there.
-      const landing = Math.max(0, Math.min(geometryNow.maxX, x - rect.left - spriteWidth / 2));
-      setMotion((current) => (current ? { ...current, x: landing, target: null } : current));
+      // Let go inside: the hand opens and he falls from there. Clamped
+      // horizontally, because the hand may have been over the edge of the
+      // overlay even though the pet's middle was not.
+      setMotion((current) => (current ? {
+        ...current,
+        carried: false,
+        vy: 0,
+        x: Math.max(0, Math.min(geometry?.maxX ?? current.x, current.x)),
+        y: reduced ? 0 : current.y,
+        squash: reduced,
+      } : current));
     },
   });
-  const carrying = pet !== null && carryingId === pet.definition.id;
 
   // While he is in the window the desktop one stands aside, and takes over
   // again the moment he is not — closed chat, unassigned, or carried out.
@@ -463,60 +533,126 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     if (gestureRef.current !== undefined) window.clearTimeout(gestureRef.current);
   }, []);
 
+  // Landing lasts a moment. Held in the motion rather than measured at render
+  // time, because a component may re-render for any reason at all and "how long
+  // ago did he land" is not something a render is allowed to ask.
+  const landed = here?.squash ?? false;
+  useEffect(() => {
+    if (!landed) return undefined;
+    const timer = window.setTimeout(
+      () => setMotion((current) => (current ? { ...current, squash: false } : current)),
+      SQUASH_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [landed]);
+
+  /** Saved as it is changed, and shown immediately rather than after the round trip. */
+  const changeStage = useCallback((next: PetStage) => {
+    if (!pet) return;
+    setPendingStage({ petId: pet.definition.id, stage: next });
+    void savePetStage(pet.definition.id, next).catch(() => {
+      // A setting that would not save is not worth an alert over a pet's size;
+      // the next read puts the slider back where the server says it is.
+    });
+  }, [pet]);
+
   if (!overlay || !pet || !geometry || !here || handedOff) return null;
+
+  const height = Math.round(CARRIED_HEIGHT + (fullHeight - CARRIED_HEIGHT) * here.grow);
+  const width = Math.round(height * widthPerHeight);
+
 
   /**
    * What he is playing, most specific first.
    *
-   * Being carried and walking are things happening to him now; a gesture is a
-   * reaction he owes someone; the activity is the room's state; idle is the
-   * absence of all of it.
+   * Being carried, falling and walking are things happening to him now; a
+   * gesture is a reaction he owes someone; the activity is the room's state;
+   * idle is the absence of all of it.
    */
-  const state: PetStateName = here.target !== null
+  const state: PetStateName = carrying || here.target !== null
+    // Carried and walking are both "his legs are going". In the air they are
+    // not: he is falling, and the sheet's jump is the only frame set that is
+    // about not being on the ground.
     ? (here.facing === 'left' ? 'running-left' : 'running-right')
-    : here.gesture
-      ?? (hovered ? 'waving'
-        : activity === 'thinking' ? 'waiting'
-          : activity === 'working' ? 'running'
-            : activity === 'done' ? 'jumping'
-              : 'idle');
+    : here.y < 0
+      ? 'jumping'
+      : here.gesture
+        ?? (hovered ? 'waving'
+          : activity === 'thinking' ? 'waiting'
+            : activity === 'working' ? 'running'
+              : activity === 'done' ? 'jumping'
+                : 'idle');
 
-  return createPortal(
-    <div
-      {...getCarryProps(pet)}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      onClick={() => gesture('jumping', REACTION_MS)}
-      onContextMenu={(event) => {
-        // Right-click still works. The pill is an additional way in, not a
-        // replacement for the one people already know.
-        event.preventDefault();
-        gesture('waving', REACTION_MS);
-      }}
-      style={{
-        ...getCarryProps(pet).style,
-        position: 'absolute',
-        left: `${here.x}px`,
-        top: `${geometry.floorTop}px`,
-        width: `${spriteWidth}px`,
-        height: `${PET_HEIGHT}px`,
-        // The overlay is inert so the transcript stays clickable through it; he
-        // is the one thing in it that is not.
-        pointerEvents: 'auto',
-        // Drawn by the drag layer while he is in the air, so this space is left
-        // empty rather than showing a second copy of him.
-        opacity: carrying ? 0 : 1,
-        touchAction: 'none',
-      }}
-      title={`${pet.definition.displayName} — carry him out of the window to put him back on your desktop`}
-    >
-      <PetSprite pet={pet} size={PET_HEIGHT} state={state} facing={here.facing} />
-      <PetPill
-        open={hovered && !carrying}
-        width={spriteWidth}
-        onOpenMenu={() => gesture('waving', REACTION_MS)}
-      />
-    </div>,
-    overlay,
+  return (
+    <>
+      {/*
+        The sprite animations are CSS keyframes, and they have to be in the
+        document for any of them to run. They were rendered only by the
+        marketplace page, so a pet drawn anywhere else held his first frame
+        forever — which is exactly what "every animation state is one frame"
+        was, and why hovering him appeared to do nothing at all. Into the head,
+        because a rule is not part of this pet and must not depend on where he
+        happens to be standing. A duplicate of the marketplace's copy is
+        harmless: identical @keyframes of the same name.
+      */}
+      {createPortal(<style>{SPRITE_KEYFRAMES}</style>, document.head)}
+
+      {createPortal(
+        <div
+          onPointerDown={onPointerDown}
+          onClickCapture={onClickCapture}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
+          onClick={() => gesture('jumping', REACTION_MS)}
+          onContextMenu={(event) => {
+            // Right-click opens the same menu the pill's button does. This is
+            // the gesture people already know; the pill is the visible half.
+            event.preventDefault();
+            setMenuAt({ x: event.clientX, y: event.clientY });
+          }}
+          style={{
+            position: 'absolute',
+            left: `${here.x}px`,
+            // The feet stay on the floor as he grows, so the growth reads as
+            // him getting bigger rather than as the floor moving.
+            top: `${geometry.floorTop + here.y + (fullHeight - height)}px`,
+            width: `${width}px`,
+            height: `${height}px`,
+            // Squashed on landing, from the feet. Cheap weight: one transform
+            // for a tenth of a second is the difference between landing and
+            // arriving.
+            transform: here.squash ? 'scaleY(0.88) scaleX(1.06)' : 'none',
+            transformOrigin: 'bottom center',
+            transition: reduced ? 'none' : 'transform 120ms ease-out',
+            // The overlay is inert so the transcript stays clickable through
+            // it; he is the one thing in it that is not.
+            pointerEvents: 'auto',
+            cursor: carrying ? 'grabbing' : 'grab',
+            touchAction: 'none',
+            userSelect: 'none',
+          }}
+          title={`${pet.definition.displayName} — right-click for options, or carry him out of the window`}
+        >
+          <PetSprite pet={pet} size={height} state={state} facing={here.facing} />
+          <PetPill
+            open={hovered && !carrying}
+            width={width}
+            onOpenMenu={(x, y) => setMenuAt({ x, y })}
+          />
+        </div>,
+        overlay,
+      )}
+
+      {menuAt ? (
+        <PetMenu
+          pet={pet}
+          stage={stage}
+          x={menuAt.x}
+          y={menuAt.y}
+          onChange={changeStage}
+          onClose={() => setMenuAt(null)}
+        />
+      ) : null}
+    </>
   );
 }

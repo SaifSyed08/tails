@@ -50,6 +50,9 @@ export function PetPill({ open, width, onOpenMenu, className }: PetPillProps) {
     >
       <button
         type="button"
+        // The press must not reach the pet behind it: a press on the pet is the
+        // start of picking him up, and pressing a button is not picking him up.
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
           const rect = event.currentTarget.getBoundingClientRect();

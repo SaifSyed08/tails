@@ -43,6 +43,15 @@ contextBridge.exposeInMainWorld('petBridge', {
   onRefresh: (handler) => ipcRenderer.on('pet:refresh', () => handler()),
 
   /**
+   * The window has just been shown again after being hidden.
+   *
+   * While hidden the page receives no mouse moves, so anything it believes
+   * about the pointer is out of date — and a stale belief here is a pet that
+   * cannot be picked up. The shell says when to forget it.
+   */
+  onResync: (handler) => ipcRenderer.on('pet:resync', () => handler()),
+
+  /**
    * Which drag mechanism is live, while three are being compared.
    *
    * Temporary, and worth removing once one is chosen — the page has no business

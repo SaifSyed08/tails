@@ -9,6 +9,7 @@ import {
   createPetWindow,
   destroyPetWindow,
   isPetHidden,
+  placePetAt,
   refreshPetWindow,
   resetPetPosition,
   setPetHidden,
@@ -413,6 +414,9 @@ function installPetBridge() {
     else if (action === 'hide') setPetHidden(payload?.value !== false);
     else if (action === 'refresh') refreshPetWindow();
     else if (action === 'reset') resetPetPosition();
+    // The handoff: the app has just let go of an in-window pet at this point on
+    // the screen, and the desktop pet is about to take over from there.
+    else if (action === 'place') placePetAt(Number(payload?.x), Number(payload?.y));
   });
 
   ipcMain.handle('tails:desktop-pet-state', () => ({ hidden: isPetHidden() }));

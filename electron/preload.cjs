@@ -32,6 +32,14 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
      * clicked — every other control needs the pointer to hit the sprite first.
      */
     resetPosition: () => ipcRenderer.send('tails:desktop-pet', { action: 'reset' }),
+
+    /**
+     * Puts the desktop pet at a point on the screen, in screen coordinates.
+     *
+     * For handing an in-window pet back: he should appear where he was let go
+     * of, not wherever the window was left last time.
+     */
+    place: (x, y) => ipcRenderer.send('tails:desktop-pet', { action: 'place', x, y }),
     readState: () => ipcRenderer.invoke('tails:desktop-pet-state'),
   },
 
