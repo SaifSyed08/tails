@@ -1,5 +1,7 @@
-import { BrowserWindow, Menu, ipcMain, screen } from 'electron';
+import { BrowserWindow, Menu, app, ipcMain, screen } from 'electron';
 import path from 'node:path';
+
+import { closeDragLog, logDrag, openDragLog } from './pet-log.js';
 
 /**
  * The desktop pet.
@@ -94,6 +96,8 @@ let dragOffset = null;
 let lastFacing = null;
 let lastHeartbeat = 0;
 let lastDragX = null;
+/** Frames since the current drag began, so the trace can sample rather than flood. */
+let frameCount = 0;
 let saveTimer = null;
 
 function isAlive() {
@@ -259,6 +263,18 @@ function startDrag() {
   lastDragX = cursor.x;
   setInteractive(true);
 
+  // The offset recorded here is the number that matters: if it walks between
+  // one drag and the next, the pet ends up somewhere other than under the hand
+  // carrying it. `os` is logged beside `tracked` because a disagreement between
+  // them is the specific failure three previous fixes were aimed at.
+  logDrag('start', {
+    cursor,
+    tracked: origin,
+    os: isAlive() ? petWindow.getPosition() : null,
+    offset: dragOffset,
+  });
+  frameCount = 0;
+
   /**
    * A self-scheduling frame, not `setInterval`.
    *
@@ -294,6 +310,22 @@ function startDrag() {
     // compositor calls.
     moveTo(next.x, next.y);
 
+    // Every tenth frame, so a long drag stays readable. `live` is what the
+    // offset has become *now* — it must equal the offset recorded at `start`
+    // for the whole gesture, and any walk in it is the drift, measured on the
+    // user's own hand rather than a synthetic one.
+    frameCount += 1;
+    if (frameCount % 10 === 0) {
+      const at = positionNow();
+      logDrag('frame', {
+        n: frameCount,
+        cursor,
+        tracked: at,
+        os: petWindow.getPosition(),
+        live: { x: cursor.x - at.x, y: cursor.y - at.y },
+      });
+    }
+
     // Face the way it is being thrown. The threshold keeps a hand that is
     // holding still from flickering the sprite back and forth.
     if (Math.abs(cursor.x - lastDragX) > 2) {
@@ -308,7 +340,10 @@ function startDrag() {
     // The page says when the gesture is over — by sending `pet:drag-end`, or by
     // falling silent. Where the pointer happens to be is not evidence either
     // way, and treating it as evidence is what froze fast drags.
-    if (Date.now() - lastHeartbeat > SILENT_PAGE_MS) return stopDrag();
+    if (Date.now() - lastHeartbeat > SILENT_PAGE_MS) {
+      logDrag('abandon', { reason: 'page-silent', silentMs: Date.now() - lastHeartbeat });
+      return stopDrag();
+    }
 
     dragTimer = setTimeout(step, DRAG_INTERVAL_MS);
     return undefined;
@@ -333,6 +368,16 @@ function stopDrag() {
     const size = sizeNow();
     const settled = clampToDisplay(at.x, at.y, size.width, size.height);
     moveTo(settled.x, settled.y);
+
+    // A clamp that actually moved the pet is worth seeing: the release is the
+    // one moment the position is rewritten by something other than the cursor,
+    // so it is where a per-drag bias would enter.
+    logDrag('end', {
+      tracked: at,
+      settled,
+      clamped: settled.x !== at.x || settled.y !== at.y,
+      os: petWindow.getPosition(),
+    });
   }
 
   schedulePersist();
@@ -465,6 +510,11 @@ export function createPetWindow(options) {
   onOpenSettings = options.onOpenSettings ?? (() => {});
   serverUrl = options.serverUrl;
 
+  // On by default while the drift is unexplained. It is a bounded, buffered
+  // append to userData; the cost is far smaller than another round of guessing
+  // at a gesture that cannot be reproduced on the machine doing the guessing.
+  openDragLog(app.getPath('userData'));
+
   const stored = readState().petWindow;
   hidden = Boolean(stored?.hidden);
 
@@ -517,7 +567,12 @@ export function createPetWindow(options) {
     if (!isAlive() || dragTimer) return;
     const [x, y] = petWindow.getPosition();
     const at = positionNow();
-    if (Math.abs(x - at.x) > 2 || Math.abs(y - at.y) > 2) trackedPosition = { x, y };
+    if (Math.abs(x - at.x) > 2 || Math.abs(y - at.y) > 2) {
+      // Adopting the OS value is the one path that can move the baseline
+      // without the cursor asking, so it is logged whenever it happens.
+      logDrag('reconcile', { from: at, to: { x, y } });
+      trackedPosition = { x, y };
+    }
   });
 
   petWindow.on('closed', () => {
@@ -560,4 +615,5 @@ export function destroyPetWindow() {
   stopWatchdog();
   if (isAlive()) petWindow.destroy();
   petWindow = null;
+  closeDragLog();
 }
