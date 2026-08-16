@@ -133,3 +133,32 @@ export function formatAdded(installedAt: string | null): string | null {
   if (Number.isNaN(date.getTime())) return null;
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
+
+/**
+ * The order pets appear in the carousel.
+ *
+ * Starred first, then whatever was used most recently, then everything else by
+ * name. The rule is "what am I likely to reach for", and the three tiers are
+ * the three answers: the ones I chose to keep, the ones I have been using, and
+ * the rest in an order that at least does not move about.
+ *
+ * Never-used pets sort after used ones rather than first: a pet nobody has
+ * tried is marked with a dot, which is a better way to say "new" than putting
+ * it where the muscle memory for "my usual pet" lives.
+ */
+export function orderForCarousel(pets: InstalledPet[]): InstalledPet[] {
+  return [...pets].sort((left, right) => {
+    if (left.starred !== right.starred) return left.starred ? -1 : 1;
+
+    if (left.lastUsedAt !== right.lastUsedAt) {
+      if (!left.lastUsedAt) return 1;
+      if (!right.lastUsedAt) return -1;
+      return right.lastUsedAt.localeCompare(left.lastUsedAt);
+    }
+
+    return left.definition.displayName.localeCompare(right.definition.displayName);
+  });
+}
+
+/** A pet nobody has put on screen yet. The carousel marks these with a dot. */
+export const isUntried = (pet: InstalledPet): boolean => pet.lastUsedAt === null;

@@ -60,6 +60,8 @@ const ADDED_COLUMNS: { name: string; definition: string }[] = [
   { name: 'hidden_at', definition: 'DATETIME' },
   { name: 'assigned_theme', definition: 'TEXT' },
   { name: 'thinking_phrases_json', definition: 'TEXT' },
+  { name: 'starred_at', definition: 'DATETIME' },
+  { name: 'last_used_at', definition: 'DATETIME' },
 ];
 
 /** Applies the pets schema to a connection. Idempotent. */
@@ -138,6 +140,16 @@ export type InstalledPetRecord = {
   assignedTheme: string | null;
   /** Things the pet says while it is thinking. Plain text, always. */
   thinkingPhrases: string[] | null;
+  /** When the user starred it, if they did. Starred pets lead the carousel. */
+  starredAt: string | null;
+  /**
+   * When this pet was last put on screen.
+   *
+   * Null means never — which is what the carousel's "new" dot marks. It is a
+   * separate fact from `installedAt`: a pet can sit in the library for weeks
+   * before anyone tries it.
+   */
+  lastUsedAt: string | null;
 };
 
 type InstalledPetRow = {
@@ -151,6 +163,8 @@ type InstalledPetRow = {
   hidden_at: string | null;
   assigned_theme: string | null;
   thinking_phrases_json: string | null;
+  starred_at: string | null;
+  last_used_at: string | null;
 };
 
 /**
@@ -179,10 +193,12 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   hiddenAt: row.hidden_at,
   assignedTheme: row.assigned_theme,
   thinkingPhrases: parseJson<string[]>(row.thinking_phrases_json),
+  starredAt: row.starred_at,
+  lastUsedAt: row.last_used_at,
 });
 
 const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, '
-  + 'hidden_at, assigned_theme, thinking_phrases_json';
+  + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -261,6 +277,31 @@ export const petsRepository = {
       input.thinkingPhrases ? JSON.stringify(input.thinkingPhrases) : null,
       id,
     );
+  },
+
+  /** Stars a pet, or unstars it. Starred pets come first in the carousel. */
+  setStarred(id: string, starred: boolean): void {
+    db().prepare(`
+      UPDATE installed_pets
+      SET starred_at = ${starred ? 'CURRENT_TIMESTAMP' : 'NULL'},
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(id);
+  },
+
+  /**
+   * Records that a pet has been put on screen.
+   *
+   * Drives both the carousel's ordering and its "not tried yet" dot, so it is
+   * written whenever a pet is actually chosen — activated globally, or given to
+   * a conversation — and never on mere discovery.
+   */
+  markUsed(id: string): void {
+    db().prepare(`
+      UPDATE installed_pets
+      SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(id);
   },
 
   /**

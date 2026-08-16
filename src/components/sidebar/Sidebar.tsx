@@ -4,7 +4,12 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { petsApi, type InstalledPet, type PetDragPayload } from '@/components/marketplace';
+import {
+  PetCarousel,
+  petsApi,
+  type InstalledPet,
+  type PetDragPayload,
+} from '@/components/marketplace';
 import { FloatingCard } from '@/components/sidebar/FloatingCard';
 import { SessionRow } from '@/components/sidebar/SessionRow';
 import { useWebSocket } from '@/contexts/WebSocketContext';
@@ -93,6 +98,8 @@ export function Sidebar({
   /** `sessionId -> petId`, from the pets module. The sessions list payload does not carry it. */
   const [assignments, setAssignments] = useState<Record<string, string>>({});
   const [dropStatus, setDropStatus] = useState<DropStatus>(null);
+  /** Bumped whenever this sidebar changes a pet, so the carousel re-reads. */
+  const [petsToken, setPetsToken] = useState(0);
   const [hover, setHover] = useState<HoverState>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -273,8 +280,13 @@ export function Sidebar({
       }
 
       await api.setSessionPet(session.id, payload.id);
+      // Assignment is a write the sessions module owns; the pet's own record of
+      // having been chosen is ours, and it is what the carousel orders by.
+      await petsApi.markUsed(payload.id).catch(() => {});
+
       setAssignments((current) => ({ ...current, [session.id]: payload.id }));
       setDropStatus(null);
+      setPetsToken((current) => current + 1);
       void loadPets();
     } catch (error) {
       setDropStatus({
@@ -678,6 +690,10 @@ export function Sidebar({
           </button>
         </FloatingCard>
       ) : null}
+
+      {/* Above Settings, where the hand already is: swapping companions should
+          not need a trip to the marketplace. */}
+      <PetCarousel refreshToken={petsToken} onEdit={() => onOpenMarketplace()} />
 
       <div className="border-t border-border p-2">
         <button

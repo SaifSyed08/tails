@@ -111,6 +111,10 @@ export type InstalledPet = {
   assignedTheme: string | null;
   /** What the pet says while it is thinking. Plain text, capped, possibly empty. */
   thinkingPhrases: string[];
+  /** Starred pets lead the carousel. */
+  starred: boolean;
+  /** When it was last put on screen, or null for one nobody has tried yet. */
+  lastUsedAt: string | null;
   /**
    * When T.A.I.L.S. first recorded this pet, as an ISO timestamp.
    *
@@ -451,6 +455,8 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     preview: describePreviewFrame(grid, states),
     assignedTheme: override?.assignedTheme ?? null,
     thinkingPhrases: override?.thinkingPhrases ?? [],
+    starred: Boolean(override?.starredAt),
+    lastUsedAt: toIsoTimestamp(override?.lastUsedAt),
     installedAt: toIsoTimestamp(override?.installedAt),
     removable: source === 'tails',
     hidden: Boolean(override?.hiddenAt),
@@ -1063,6 +1069,9 @@ export const petsService = {
 
     const pet = requirePet(id);
     petsRepository.setActivePetId(pet.definition.id);
+    // Putting a pet on screen is what "used" means: it drives the carousel's
+    // ordering and clears its not-tried-yet dot.
+    petsRepository.markUsed(pet.definition.id);
     return { activePetId: pet.definition.id };
   },
 
@@ -1115,6 +1124,28 @@ export const petsService = {
       contentType: spriteContentType(pet.definition.spritesheetPath),
       byteLength: stats.size,
     };
+  },
+
+  /** Stars a pet, or unstars it. */
+  setPetStarred(id: string, starred: boolean): InstalledPet {
+    const pet = requirePet(id);
+    petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
+    petsRepository.setStarred(pet.definition.id, starred);
+    return requirePet(id);
+  },
+
+  /**
+   * Records that a pet was chosen.
+   *
+   * Called when a pet is given to a conversation. Activation records itself;
+   * this exists because conversation assignment is the sessions module's write,
+   * not ours, and the carousel still needs the pet to count as tried.
+   */
+  markPetUsed(id: string): InstalledPet {
+    const pet = requirePet(id);
+    petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
+    petsRepository.markUsed(pet.definition.id);
+    return requirePet(id);
   },
 
   /**

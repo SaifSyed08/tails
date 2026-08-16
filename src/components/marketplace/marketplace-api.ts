@@ -112,6 +112,10 @@ export type InstalledPet = {
   removable: boolean;
   /** Hidden pets stay on disk and out of the library until the user brings them back. */
   hidden: boolean;
+  /** Starred pets lead the carousel. */
+  starred: boolean;
+  /** When the pet was last put on screen; null means nobody has tried it yet. */
+  lastUsedAt: string | null;
   active: boolean;
   warnings: string[];
 };
@@ -296,6 +300,22 @@ export const petsApi = {
       method: 'POST',
       body: JSON.stringify({ hidden }),
     }),
+
+  /** Stars a pet, or unstars it. Starred pets lead the carousel. */
+  setStarred: (id: string, starred: boolean) =>
+    request<InstalledPet>(`/${encodeURIComponent(id)}/starred`, {
+      method: 'POST',
+      body: JSON.stringify({ starred }),
+    }),
+
+  /**
+   * Records that a pet was chosen for a conversation.
+   *
+   * Activation records itself server-side; this is for assignment, whose write
+   * belongs to the sessions module while the tally belongs to pets.
+   */
+  markUsed: (id: string) =>
+    request<InstalledPet>(`/${encodeURIComponent(id)}/used`, { method: 'POST' }),
 
   /** One page of codex-pets.net, sorted by views, proxied through our server. */
   listCatalogue: (options: { page?: number; pageSize?: number; query?: string } = {}) => {

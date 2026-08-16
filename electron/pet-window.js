@@ -63,12 +63,28 @@ let hidden = false;
  */
 let suppressed = false;
 
+/**
+ * Where the window is, according to us.
+ *
+ * The authoritative value, because the OS is not one. On this display
+ * (scaleFactor 1.03) `setPosition(x, y)` followed by `getPosition()` returns
+ * `x-1, y-1` at many coordinates — every DIP is a fractional number of device
+ * pixels, and the round trip rounds. That is harmless once, and cumulative when
+ * each drag re-derives its grab offset from the value read back: the pet ends
+ * up sitting a pixel lower relative to the pointer every time it is picked up,
+ * until the grab point is off the sprite entirely and it cannot be picked up at
+ * all.
+ *
+ * So `setPosition` is write-only. Everything that needs to know where the pet
+ * is asks this variable.
+ */
+let trackedPosition = null;
+
 let interactive = false;
 let watchdogTimer = null;
 let dragTimer = null;
 let dragOffset = null;
 let dragSize = null;
-let lastPosition = null;
 let lastFacing = null;
 let lostPointerSince = null;
 let lastDragX = null;
@@ -76,6 +92,30 @@ let saveTimer = null;
 
 function isAlive() {
   return petWindow && !petWindow.isDestroyed();
+}
+
+/** Moves the window and records where it now is. The only caller of `setPosition`. */
+function moveTo(x, y) {
+  if (!isAlive()) return;
+  const next = { x: Math.round(x), y: Math.round(y) };
+  if (trackedPosition && trackedPosition.x === next.x && trackedPosition.y === next.y) return;
+
+  trackedPosition = next;
+  petWindow.setPosition(next.x, next.y);
+}
+
+/** Where the pet is. Falls back to the OS only before we have ever placed it. */
+function positionNow() {
+  if (trackedPosition) return trackedPosition;
+  const [x, y] = isAlive() ? petWindow.getPosition() : [0, 0];
+  trackedPosition = { x, y };
+  return trackedPosition;
+}
+
+/** The window's size, which the OS *is* authoritative about — we never set it by hand. */
+function sizeNow() {
+  const bounds = isAlive() ? petWindow.getBounds() : { width: DEFAULT_SIZE.width, height: DEFAULT_SIZE.height };
+  return { width: bounds.width, height: bounds.height };
 }
 
 /** Whether the pet should be on screen right now. */
@@ -88,7 +128,7 @@ function persistPosition() {
   saveTimer = null;
   if (!isAlive()) return;
 
-  const [x, y] = petWindow.getPosition();
+  const { x, y } = positionNow();
   writeState({ petWindow: { x, y, hidden } });
 }
 
@@ -173,9 +213,10 @@ function startWatchdog() {
     if (!isAlive() || !interactive || dragTimer) return;
 
     const cursor = screen.getCursorScreenPoint();
-    const bounds = petWindow.getBounds();
-    const inside = cursor.x >= bounds.x && cursor.x <= bounds.x + bounds.width
-      && cursor.y >= bounds.y && cursor.y <= bounds.y + bounds.height;
+    const at = positionNow();
+    const size = sizeNow();
+    const inside = cursor.x >= at.x && cursor.x <= at.x + size.width
+      && cursor.y >= at.y && cursor.y <= at.y + size.height;
 
     if (!inside) setInteractive(false);
   }, WATCHDOG_INTERVAL_MS);
@@ -199,20 +240,16 @@ function startDrag() {
   if (!isAlive() || dragTimer) return;
 
   const cursor = screen.getCursorScreenPoint();
-  const [originX, originY] = petWindow.getPosition();
+  const origin = positionNow();
 
-  // Both readings come from Electron, in one coordinate system, once. The
-  // renderer used to supply this from `event.screenX - window.screenX`, whose
-  // error grows with the window's position — which is what made the pet slide
-  // further from the cursor the further it was dragged.
-  dragOffset = { x: cursor.x - originX, y: cursor.y - originY };
+  // Against our own record of the position, never the OS's. Deriving this from
+  // `getPosition()` is what made each successive drag hand the pet a pixel
+  // further down relative to the pointer.
+  dragOffset = { x: cursor.x - origin.x, y: cursor.y - origin.y };
 
-  // Cached, not re-read per frame: `getBounds` round-trips through device
-  // pixels, so on a fractionally scaled display it can answer a pixel either
-  // side of what was set, and feeding that back into the clamp is how a drag
-  // develops a wobble.
-  const { width, height } = petWindow.getBounds();
-  dragSize = { width, height };
+  // The size is cached for the gesture: it cannot change mid-drag, and reading
+  // it per frame is another chance for a rounded value to reach the maths.
+  dragSize = sizeNow();
   lastDragX = cursor.x;
   setInteractive(true);
 
@@ -247,13 +284,9 @@ function startDrag() {
       y: Math.round(cursor.y - dragOffset.y),
     };
 
-    // Skipped when nothing moved: a stationary hand should not cost sixty
-    // compositor calls a second, and this is also what keeps the one-pixel
-    // rounding step from being re-applied over and over.
-    if (next.x !== lastPosition.x || next.y !== lastPosition.y) {
-      petWindow.setPosition(next.x, next.y);
-      lastPosition = next;
-    }
+    // `moveTo` skips a write when nothing moved, so a stationary hand costs no
+    // compositor calls.
+    moveTo(next.x, next.y);
 
     // Face the way it is being thrown. The threshold keeps a hand that is
     // holding still from flickering the sprite back and forth.
@@ -282,7 +315,6 @@ function startDrag() {
     return undefined;
   };
 
-  lastPosition = { x: originX, y: originY };
   step();
 }
 
@@ -291,7 +323,6 @@ function stopDrag() {
   dragTimer = null;
   dragOffset = null;
   dragSize = null;
-  lastPosition = null;
   lastFacing = null;
   lastDragX = null;
   lostPointerSince = null;
@@ -301,11 +332,10 @@ function stopDrag() {
   // edge comes back — clamped to the display it was dropped nearest, not to the
   // primary one.
   if (isAlive()) {
-    const bounds = petWindow.getBounds();
-    const settled = clampToDisplay(bounds.x, bounds.y, bounds.width, bounds.height);
-    if (settled.x !== bounds.x || settled.y !== bounds.y) {
-      petWindow.setPosition(settled.x, settled.y);
-    }
+    const at = positionNow();
+    const size = sizeNow();
+    const settled = clampToDisplay(at.x, at.y, size.width, size.height);
+    moveTo(settled.x, settled.y);
   }
 
   schedulePersist();
@@ -399,13 +429,14 @@ function installIpc() {
     // Nothing to do, and doing it anyway would matter: this reads the position
     // back and writes it again, so an unchanged size still nudged the window
     // every time the page polled — and mid-drag it fought the drag loop.
-    const bounds = petWindow.getBounds();
-    if (dragTimer || (bounds.width === width && bounds.height === height)) return;
+    const size = sizeNow();
+    if (dragTimer || (size.width === width && size.height === height)) return;
 
+    const at = positionNow();
     petWindow.setSize(width, height);
     // Re-clamped, because a window that just grew may now hang off the screen.
-    const clamped = clampToDisplay(bounds.x, bounds.y, width, height);
-    petWindow.setPosition(clamped.x, clamped.y);
+    const clamped = clampToDisplay(at.x, at.y, width, height);
+    moveTo(clamped.x, clamped.y);
   });
 
   ipcMain.on('pet:interactive', (_event, payload) => setInteractive(Boolean(payload?.over)));
@@ -469,6 +500,24 @@ export function createPetWindow(options) {
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   petWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  trackedPosition = { x: start.x, y: start.y };
+
+  /**
+   * Something outside this module moved the window.
+   *
+   * Our own moves go through `moveTo`, which records them, so a `move` event
+   * that disagrees with the record by more than a rounding step came from the
+   * OS — a display being unplugged, a workspace change. Trusting it keeps the
+   * record honest without letting the OS's rounded read-backs creep into the
+   * drag maths, which is the whole reason the record exists.
+   */
+  petWindow.on('move', () => {
+    if (!isAlive() || dragTimer) return;
+    const [x, y] = petWindow.getPosition();
+    const at = positionNow();
+    if (Math.abs(x - at.x) > 2 || Math.abs(y - at.y) > 2) trackedPosition = { x, y };
+  });
 
   petWindow.on('closed', () => {
     stopDrag();

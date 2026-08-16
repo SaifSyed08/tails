@@ -447,6 +447,36 @@ test('the pet library', async (t) => {
       );
     });
 
+    /**
+     * What the carousel orders by, from the side that stores it.
+     *
+     * "Used" has to mean "was actually put on screen", not "was discovered" —
+     * otherwise every pet counts as used the moment it is installed and both
+     * the ordering and the not-tried-yet dot say nothing.
+     */
+    await t.test('records starring, and being put on screen', () => {
+      const before = petsService.getPet('sonic-art');
+      assert.equal(before.starred, false);
+      assert.equal(before.lastUsedAt, null, 'discovery alone is not use');
+
+      assert.equal(petsService.setPetStarred('sonic-art', true).starred, true);
+      assert.equal(petsService.listPets().pets
+        .find((entry) => entry.definition.id === 'sonic-art')?.starred, true, 'and it survives a rescan');
+      assert.equal(petsService.setPetStarred('sonic-art', false).starred, false);
+
+      // Activating is using.
+      petsService.setActivePet('sonic-art');
+      const activated = petsService.getPet('sonic-art');
+      assert.ok(activated.lastUsedAt, 'putting a pet on screen counts as using it');
+      assert.doesNotThrow(() => new Date(activated.lastUsedAt as string).toISOString());
+
+      // So is being handed to a conversation, which another module writes.
+      const used = petsService.markPetUsed('testpet');
+      assert.ok(used.lastUsedAt);
+
+      petsService.setActivePet(null);
+    });
+
     await t.test('names one representative frame, always inside the sheet', () => {
       const pet = petsService.getPet('sonic');
       const lastFrame = pet.definition.frame.columns * pet.definition.frame.rows - 1;

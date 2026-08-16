@@ -30,6 +30,10 @@ export type { MarketplacePageProps } from './MarketplacePage';
  * framing. Whatever you use, `SPRITE_KEYFRAMES` must be rendered once somewhere
  * in the tree or nothing animates.
  */
+/** The pet strip for the sidebar: a row of faces, ordered starred-then-recent. */
+export { PetCarousel } from './PetCarousel';
+export type { PetCarouselProps } from './PetCarousel';
+
 export { PetSprite } from './PetSprite';
 export type { PetFacing } from './PetSprite';
 export { PetThumbnail } from './PetThumbnail';

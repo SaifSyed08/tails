@@ -104,6 +104,15 @@ export function createPetsRouter(): express.Router {
     req.body?.active === false ? null : String(req.params.petId),
   )));
 
+  /** Starring, which decides where a pet sits in the carousel. */
+  router.post('/:petId/starred', respond((req) => petsService.setPetStarred(
+    String(req.params.petId),
+    req.body?.starred !== false,
+  )));
+
+  /** "This pet was chosen" — assignment lives in another module, the tally lives here. */
+  router.post('/:petId/used', respond((req) => petsService.markPetUsed(String(req.params.petId))));
+
   /** Hiding is the only "remove" available for a pet Codex owns. */
   router.post('/:petId/hidden', respond((req) => petsService.setPetHidden(
     String(req.params.petId),
