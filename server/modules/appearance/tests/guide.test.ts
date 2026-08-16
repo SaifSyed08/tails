@@ -126,6 +126,9 @@ test('every capability that exists only in the guide is named there', () => {
     ['chroma', 'the saturation multiplier on a colour reference'],
     ['palette', 'the colour list a pixel tile indexes into'],
     ['grid', 'the pixel tile itself'],
+    ['pixel', 'the hard-edged square trail'],
+    ['minesweeper', 'the beveled click grid'],
+    ['--t-trail-radius', 'the token that squares a trail segment off'],
   ];
 
   const missing = capabilities

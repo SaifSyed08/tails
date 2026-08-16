@@ -297,11 +297,42 @@ export function readClickPaint(color: string): string {
   return `radial-gradient(circle closest-side, transparent 0%, transparent 52%, ${color} 66%, transparent 78%)`;
 }
 
-/** One trail segment. Always a soft dot: a hard edge repeated eight times reads as beads. */
+/**
+ * A Minesweeper tile: light top-left bevel, dark bottom-right, flat face.
+ *
+ * Two mitred quadrilaterals rather than four gradient stops, because the corner
+ * where the light edge meets the dark one is a 45-degree mitre and a gradient
+ * cannot make that join — it is the detail that separates the real Windows
+ * bevel from a rounded imitation of it. `crispEdges` keeps the mitre a hard
+ * line at any tile size.
+ *
+ * App-owned, so nothing here is authored: the theme picks the three colours by
+ * role and this writes the document.
+ */
+export function readMinesweeperTile(face: string, light: string, dark: string): string {
+  return `url("data:image/svg+xml,${encodeSvg(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+      <rect width="16" height="16" fill="${face}"/>
+      <path d="M0 0h16l-3 3H3v10L0 16Z" fill="${light}"/>
+      <path d="M16 0v16H0l3-3h10V3Z" fill="${dark}"/>
+    </svg>
+  `)}")`;
+}
+
+/**
+ * One trail segment.
+ *
+ * Soft dot for the two round kinds — a hard edge repeated eight times reads as
+ * beads rather than as motion. `pixel` is the opposite on purpose: a flat fill
+ * with no falloff at all, so each segment is a solid square. The squareness
+ * comes from the fill being flat; `--t-trail-radius` squares the element off,
+ * and the renderer snaps the positions so the squares land on a grid instead of
+ * on fractional pixels.
+ */
 export function readTrailPaint(kind: TrailKind, color: string): string {
-  return kind === 'none'
-    ? 'none'
-    : `radial-gradient(circle closest-side, ${color} 0%, ${color} 34%, transparent 70%)`;
+  if (kind === 'none') return 'none';
+  if (kind === 'pixel') return `linear-gradient(${color}, ${color})`;
+  return `radial-gradient(circle closest-side, ${color} 0%, ${color} 34%, transparent 70%)`;
 }
 
 /**

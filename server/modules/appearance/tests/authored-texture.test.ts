@@ -201,3 +201,80 @@ test('pinning the colour mode and moving the ramp anchor are structural', () => 
     true,
   );
 });
+
+/* ------------------------------------------------------------------ *
+ * The pointer kinds Prism needed.
+ * ------------------------------------------------------------------ */
+
+test('a trail no longer requires a drawn cursor', () => {
+  // It did, and that made a reasonable look unreachable: pixels following the
+  // native arrow with nothing glowing under it. The click effect was already
+  // independent, which is what made the coupling look like an oversight rather
+  // than a decision.
+  const spec = themeSpecV2Schema.parse({
+    ...base({}),
+    interaction: {
+      pointer: {
+        kind: 'system',
+        trail: { kind: 'pixel', length: 12, size: 10, opacity: 0.55 },
+        click: { kind: 'minesweeper', size: 104, seconds: 0.42 },
+      },
+    },
+  });
+  const tokens = deriveTokens(spec).light.interaction ?? {};
+
+  assert.equal(tokens['t-pointer-image'], 'none', 'no glow was asked for');
+  assert.notEqual(tokens['t-trail-image'], 'none', 'the trail must survive the cursor being off');
+  assert.notEqual(tokens['t-click-image'], 'none');
+});
+
+test('a pixel trail is square, flat and grid-snapped', () => {
+  const spec = themeSpecV2Schema.parse({
+    ...base({}),
+    interaction: { pointer: { kind: 'system', trail: { kind: 'pixel', length: 8, size: 10, opacity: 0.5 } } },
+  });
+  const tokens = deriveTokens(spec).light.interaction ?? {};
+
+  // Flat fill, not a radial dot: the falloff is what makes a segment read as a
+  // circle however square the element is.
+  assert.match(tokens['t-trail-image'], /^linear-gradient\(/);
+  assert.doesNotMatch(tokens['t-trail-image'], /radial-gradient/);
+
+  // Squares off the element, and is the same signal the renderer reads to
+  // quantise positions — a square on a fractional pixel is a blurry square.
+  assert.equal(tokens['t-trail-radius'], '0');
+  assert.equal(tokens['t-trail-taper'], '0', 'pixels keep their size; only opacity falls off');
+
+  const round = deriveTokens(themeSpecV2Schema.parse({
+    ...base({}),
+    interaction: { pointer: { kind: 'halo', trail: { kind: 'comet', length: 8, size: 10, opacity: 0.5 } } },
+  })).light.interaction ?? {};
+  assert.equal(round['t-trail-radius'], '50%');
+  assert.match(round['t-trail-image'], /^radial-gradient\(/);
+});
+
+test('the minesweeper click is a tiled bevel that presses in', () => {
+  const spec = themeSpecV2Schema.parse({
+    ...base({}),
+    interaction: { pointer: { kind: 'system', click: { kind: 'minesweeper', size: 104, seconds: 0.42 } } },
+  });
+  const tokens = deriveTokens(spec).light.interaction ?? {};
+
+  // Two mitred quadrilaterals over a face. A gradient cannot make the
+  // 45-degree join where the light edge meets the dark one, which is the
+  // detail that separates the real bevel from a rounded imitation.
+  assert.match(tokens['t-click-image'], /^url\("data:image\/svg\+xml,/);
+  assert.equal((tokens['t-click-image'].match(/%3Cpath/g) ?? []).length, 2);
+  assert.ok(tokens['t-click-image'].includes('crispEdges'));
+
+  // Tiled rather than stretched, and pressing in rather than expanding out.
+  assert.equal(tokens['t-click-tile'], '16px 16px');
+  assert.match(tokens['t-click-animation'], /^t-click-press 0\.42s/);
+
+  const ripple = deriveTokens(themeSpecV2Schema.parse({
+    ...base({}),
+    interaction: { pointer: { kind: 'halo', click: { kind: 'ripple', size: 88, seconds: 0.5 } } },
+  })).light.interaction ?? {};
+  assert.equal(ripple['t-click-tile'], '100% 100%');
+  assert.match(ripple['t-click-animation'], /^t-click-ripple /);
+});

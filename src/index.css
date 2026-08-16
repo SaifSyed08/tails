@@ -284,7 +284,8 @@
     --t-caret-cycle-4: inherit;
     --t-click-image: none;
     --t-click-size: 0px;
-    --t-click-duration: 0.45s;
+    --t-click-tile: 100% 100%;
+    --t-click-animation: none;
 
     /**
      * The default look's cursor glow.
@@ -317,6 +318,7 @@
     --t-trail-opacity: 0;
     --t-trail-length: 1;
     --t-trail-taper: 1;
+    --t-trail-radius: 50%;
   }
 
   /* Per-part floor values, mirroring what each part looked like when it was
@@ -376,12 +378,58 @@
    * room between "legible" and "the ink", and the derivation lands in the same
    * place for a generated theme.
    */
+  /**
+   * The user's own message: accent-tinted glass.
+   *
+   * The same construction proved in `tests/glass-composition.test.ts`, applied
+   * to one part of the floor — a translucent accent fill, a specular ring
+   * riding as the last fill layer clipped to `border-box`, an inset highlight
+   * on the top edge and a soft accent-coloured glow beneath.
+   *
+   * **Why the ink is `--foreground` and not `--primary-foreground`.** Once the
+   * fill is translucent the surface is no longer `--primary`, it is `--primary`
+   * composited over the page, and the pairing the contrast manifest asserts
+   * stops describing what is on screen. Solved against the real composite, the
+   * answer inverts: the light ramp's bubble lands near 76% lightness where
+   * white reads at 1.8:1 and near-black at 10.2:1, and the dark ramp's lands
+   * near 24% where white reads at 11.8:1. `--foreground` is exactly that pair —
+   * near-black on light, near-white on dark — so it is correct in both, and in
+   * the dark ramp it *is* the white text that was asked for.
+   *
+   * **Why there is no `backdrop-filter`.** It would cost a full-screen readback
+   * and blur per bubble per frame, on every user message in the transcript, and
+   * it would buy nothing: what sits behind a bubble here is the flat chat
+   * surface, and blurring a flat colour returns the same flat colour. Backdrop
+   * blur earns its cost over a textured or ambient ground; over a solid one it
+   * is pure expense. A theme that gives the page an ambient layer can add it
+   * back on its own surfaces, where it will actually be visible.
+   *
+   * 35% is where the tint stays unmistakably accent-coloured while leaving the
+   * ink 9:1 or better in both ramps. Nothing overlaps a bubble in the
+   * transcript, so there is no other message's text to read through it.
+   */
   [data-tails-part='bubbleUser'] {
-    --t-fill-color: hsl(var(--primary));
-    --t-ink: hsl(var(--primary-foreground));
-    --t-ink-muted: hsl(var(--primary-foreground) / 0.9);
-    --t-accent-on: hsl(var(--primary-foreground));
-    --t-border-width: 0;
+    --t-fill-color: transparent;
+    --t-fill-image:
+      linear-gradient(hsl(var(--primary) / 0.35), hsl(var(--primary) / 0.35)),
+      linear-gradient(145deg, hsl(0 0% 100% / 0.5) 0%, hsl(0 0% 100% / 0.06) 38%, hsl(var(--primary) / 0.45) 100%);
+    --t-fill-blend: normal, normal;
+    /* The fill clips inside the border, the ring fills it — which is what makes
+       the second layer read as an edge rather than as a diagonal wash. */
+    --t-fill-clip: padding-box, border-box;
+    --t-fill-origin: padding-box, border-box;
+    --t-border-width: 1px;
+    --t-border-style: solid;
+    --t-border-color: transparent;
+    --t-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.4),
+      0 1px 2px hsl(var(--primary) / 0.22),
+      0 10px 26px -10px hsl(var(--primary) / 0.5);
+    --t-ink: hsl(var(--foreground));
+    --t-ink-muted: hsl(var(--foreground) / 0.7);
+    /* Accent text on an accent-tinted pane is the pane. The ink is the only
+       thing that separates from it — 3.2:1 for `--primary` against 10:1 here. */
+    --t-accent-on: hsl(var(--foreground));
   }
 
   /* The assistant's turn is unbubbled by default — page text rather than a
@@ -752,6 +800,10 @@
     background-image: var(--t-trail-image);
     background-size: 100% 100%;
     background-repeat: no-repeat;
+    /* 50% for the round kinds, 0 for `pixel`. The renderer reads the same token
+       to decide whether to snap positions to a grid, because a square is the
+       only shape that looks wrong on a fractional pixel. */
+    border-radius: var(--t-trail-radius);
     mix-blend-mode: var(--t-pointer-blend);
     transform: translate(-50%, -50%);
     will-change: translate;
@@ -778,7 +830,7 @@
    * carries the centring and the scale, because the two properties compose in a
    * fixed order and neither has to know about the other.
    */
-  .t-click-ripple {
+  .t-click {
     position: fixed;
     left: 0;
     top: 0;
@@ -787,9 +839,10 @@
     width: var(--t-click-size);
     height: var(--t-click-size);
     background-image: var(--t-click-image);
-    background-size: 100% 100%;
-    background-repeat: no-repeat;
-    animation: t-click-ripple var(--t-click-duration) var(--ease-exit) forwards;
+    /* One stretched copy for a ripple, a repeating grid for a bevel tile. */
+    background-size: var(--t-click-tile);
+    background-repeat: repeat;
+    animation: var(--t-click-animation);
   }
 
   @keyframes t-click-ripple {
@@ -805,6 +858,27 @@
   }
 
   /**
+   * The Minesweeper press.
+   *
+   * Opposite direction to the ripple, which is the whole point: a ripple
+   * expands away from the click and a pressed tile sinks into it. Starting
+   * marginally over 1 and settling under it reads as the grid popping up and
+   * being pushed straight back down, which is the motion the original bevel
+   * makes when a tile is clicked.
+   */
+  @keyframes t-click-press {
+    from {
+      transform: translate(-50%, -50%) scale(1.06);
+      opacity: 0.95;
+    }
+
+    to {
+      transform: translate(-50%, -50%) scale(0.92);
+      opacity: 0;
+    }
+  }
+
+  /**
    * A trail and a click ripple are motion in the sense the preference means:
    * they move on their own after the user's own movement has stopped. The drawn
    * cursor is not — it tracks the user's hand, and stopping it would be like
@@ -812,7 +886,7 @@
    */
   @media (prefers-reduced-motion: reduce) {
     .t-trail-segment,
-    .t-click-ripple {
+    .t-click {
       display: none;
     }
   }

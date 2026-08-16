@@ -210,6 +210,62 @@ function partTokens(part: string): Record<string, string> {
 }
 
 /**
+ * The colour a part actually presents to the eye.
+ *
+ * Three cases, and the third is the one that made this a function rather than a
+ * line. An opaque `--t-fill-color` is the surface. A translucent one composites
+ * over the page. And a `transparent` fill-color means the paint lives in
+ * `--t-fill-image` instead — which is not "no fill", it is the glass
+ * construction, where the tint is a gradient layer and the fill-color is
+ * transparent so the ring beneath it can show through the border box.
+ *
+ * Reading that case as "no fill, so the surface is the page" is how the user's
+ * glass bubble would have been checked against the wrong background and passed
+ * for the wrong reason. The topmost layer's stops are averaged and composited,
+ * which is what `flattenFill` does in the derivation for exactly this.
+ */
+function effectiveFill(tokens: Record<string, string>, ramp: Record<string, Hsl>): Hsl | null {
+  const fillValue = (tokens['--t-fill-color'] ?? '').trim();
+
+  if (fillValue && fillValue !== 'transparent') {
+    const fill = resolveToken(fillValue, ramp);
+    if (!fill) return null;
+    return fill.alpha >= 1 ? fill.color : compositeOver(fill.color, fill.alpha, ramp.background);
+  }
+
+  const image = tokens['--t-fill-image'];
+  if (!image || image === 'none') return ramp.background;
+
+  // The first layer only: background layers paint first-on-top, so the topmost
+  // one is what the eye reads and what any ring beneath it is hidden by.
+  let depth = 0;
+  let end = image.length;
+  for (let index = 0; index < image.length; index += 1) {
+    if (image[index] === '(') depth += 1;
+    if (image[index] === ')') depth -= 1;
+    if (depth === 0 && image[index] === ',') {
+      end = index;
+      break;
+    }
+  }
+
+  const stops = [...image.slice(0, end).matchAll(/hsl\(\s*var\(\s*--([a-z-]+)\s*\)\s*(?:\/\s*([\d.]+)\s*)?\)/g)]
+    .map((match) => ({ color: ramp[match[1]], alpha: match[2] === undefined ? 1 : Number(match[2]) }))
+    .filter((stop) => stop.color);
+
+  if (stops.length === 0) return ramp.background;
+
+  const average: Hsl = {
+    h: stops[0].color.h,
+    s: stops.reduce((total, stop) => total + stop.color.s, 0) / stops.length,
+    l: stops.reduce((total, stop) => total + stop.color.l, 0) / stops.length,
+  };
+  const alpha = stops.reduce((total, stop) => total + stop.alpha, 0) / stops.length;
+
+  return compositeOver(average, alpha, ramp.background);
+}
+
+/**
  * The three tokens that exist only to be *corrected* for their surface.
  *
  * `--t-ink`, `--t-ink-muted` and `--t-accent-on` all mean "…on this surface".
@@ -253,17 +309,8 @@ test('no floor token is a passthrough of the value it exists to refine', () => {
       const tokens = { ...rootSurfaceTokens, ...partTokens(part) };
 
 
-      const fillValue = tokens['--t-fill-color'] ?? '';
-      // A transparent part shows the page through it, which is then the surface
-      // its text actually sits on.
-      const fill = fillValue === 'transparent'
-        ? { color: ramp.background, alpha: 1 }
-        : resolveToken(fillValue, ramp);
-      if (!fill) continue;
-
-      const surface = fill.alpha >= 1
-        ? fill.color
-        : compositeOver(fill.color, fill.alpha, ramp.background);
+      const surface = effectiveFill(tokens, ramp);
+      if (!surface) continue;
 
       for (const token of REFINEMENTS) {
         const raw = tokens[token];

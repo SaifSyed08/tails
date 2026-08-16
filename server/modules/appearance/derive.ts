@@ -26,6 +26,7 @@ import {
   readAmbientPaint,
   readClickPaint,
   readOverlayPaint,
+  readMinesweeperTile,
   readPointerPaint,
   readTexturePaint,
   readTrailPaint,
@@ -954,9 +955,25 @@ function buildInteractionTokens(
 
   const { pointer } = spec.interaction;
   const pointerColor = resolve(pointer.color, formatColor(colors.primary));
+  const clickColor = resolve(pointer.click.color, pointerColor);
+  const clickPaint = pointer.click.kind === 'ripple'
+    ? readClickPaint(clickColor)
+    : pointer.click.kind === 'minesweeper'
+      // The two bevel poles come from the ramp rather than from literal white
+      // and black, so the tile reads as lit rather than as a sticker in both
+      // ramps — the same reason shadows reference `light` and `shadow`.
+      ? readMinesweeperTile(
+        clickColor,
+        resolve({ role: 'light', tier: 11 }, clickColor),
+        resolve({ role: 'shadow', tier: 8 }, clickColor),
+      )
+      : 'none';
   const trailColor = resolve(pointer.trail.color, pointerColor);
   const drawn = pointer.kind !== 'system';
-  const trailOn = drawn && pointer.trail.kind !== 'none';
+  // The trail is no longer gated on a drawn cursor. It was, and that made a
+  // perfectly reasonable look unreachable: a trail with no glow under the
+  // pointer. The click effect was already independent for the same reason.
+  const trailOn = pointer.trail.kind !== 'none';
 
   // Four stops, always, padded by repeating whatever the author gave. The
   // keyframes live in `index.css` as an app-owned constant and read these
@@ -1010,15 +1027,24 @@ function buildInteractionTokens(
     // fades only (a ribbon). One number instead of two shapes, so the falloff
     // is a single formula in the renderer and a bindable control here.
     't-trail-taper': pointer.trail.kind === 'comet' ? '1' : '0',
+    // Squares off the segment, and doubles as the renderer's signal to snap
+    // positions to a grid — a square landing on a fractional pixel is a blurry
+    // square, which is the one thing a pixel trail must not be.
+    't-trail-radius': pointer.trail.kind === 'pixel' ? '0' : '50%',
 
     // Click feedback is independent of the drawn cursor: a look can want a
     // ripple without wanting to replace the pointer, which is why this is not
     // gated on `drawn`.
-    't-click-image': pointer.click.kind === 'ripple'
-      ? readClickPaint(resolve(pointer.click.color, pointerColor))
-      : 'none',
+    't-click-image': clickPaint,
     't-click-size': `${pointer.click.size}px`,
-    't-click-duration': `${pointer.click.seconds}s`,
+    // A repeating tile for the bevel grid, one stretched copy for the ripple.
+    't-click-tile': pointer.click.kind === 'minesweeper' ? '16px 16px' : '100% 100%',
+    // The two effects move in opposite directions — a ripple expands outward,
+    // a pressed tile sinks in — so the keyframe name travels with the paint
+    // rather than the renderer guessing from the image.
+    't-click-animation': pointer.click.kind === 'none'
+      ? 'none'
+      : `${pointer.click.kind === 'minesweeper' ? 't-click-press' : 't-click-ripple'} ${pointer.click.seconds}s var(--ease-exit) forwards`,
   };
 }
 

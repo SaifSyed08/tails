@@ -251,6 +251,22 @@ default is a colour.
 | `--t-trail-opacity` | `<number>` | nearest segment; the rest fall off |
 | `--t-trail-length` | `<number>`, never `0` | segment count *and* falloff divisor |
 | `--t-trail-taper` | `0` or `1` | 1 shrinks each segment (comet), 0 keeps width (ribbon) |
+| `--t-trail-radius` | `50%` or `0` | segment shape; `0` also tells the renderer to snap positions to a grid |
+| `--t-click-image` | `<image>` or `none` | `.t-click { background-image }` |
+| `--t-click-size` | `<length>` | how far the effect reaches |
+| `--t-click-tile` | `<bg-size>` | `100% 100%` for a stretched ripple, a tile size for a repeating bevel grid |
+| `--t-click-animation` | `<animation>` or `none` | names the keyframe, because a ripple expands and a pressed tile sinks |
+
+**The trail is independent of the drawn cursor.** It was gated on one, which
+made "pixels following the native arrow with nothing glowing under it"
+inexpressible; the click effect was already independent, which is what made the
+coupling look like an oversight rather than a decision.
+
+**`--t-trail-radius: 0` carries two meanings on purpose.** It squares the
+segment off in CSS *and* is the renderer's signal to quantise positions to a
+grid. They are one decision: a circle at x=104.3 is a circle, a square at
+x=104.3 is a blurry square, so the snapping exists precisely because the shape
+is square. Splitting it into two tokens would let them disagree.
 
 **A custom cursor is never an image.** `cursor: url(...)` is refused by the
 validator and always will be — a stylesheet that can name a remote resource can
@@ -560,6 +576,21 @@ field was always the look and the drift was always the garnish.
 
 `corner-shape` degrades to a plain rounded corner where it is unsupported, which
 is correct — Electron 38 is Chromium 140 and supports it.
+
+**The floor's user bubble is glass, and it has no `backdrop-filter`.** That is a
+deliberate omission rather than an incomplete construction. A backdrop blur
+costs a readback and a blur pass per element per frame, and here it would run on
+every user message in the transcript — while buying nothing, because what sits
+behind a bubble is the flat chat surface and blurring a flat colour returns the
+same flat colour. Backdrop blur earns its cost over a textured or ambient
+ground. A theme that gives the page one can add it back on its own surfaces.
+
+The same omission has a second consequence worth stating: because the bubble's
+fill is a translucent gradient layer rather than a `--t-fill-color`, anything
+measuring the surface has to read `--t-fill-image`'s topmost layer and
+composite it. `tests/default-ramp.test.ts` does; a naive reading of
+`--t-fill-color: transparent` as "no fill" would check the bubble's ink against
+the page and pass for the wrong reason.
 
 `--t-accent-on` is the colour for links and accent-coloured icons **inside** a
 surface. Using `--primary` there is wrong on a glass popover or an accent-filled

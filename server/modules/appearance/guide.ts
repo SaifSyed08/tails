@@ -235,11 +235,22 @@ places where the pointer's shape or exact position is carrying information, and
 that is not a style decision. Elements with their own \`cursor\` — resize
 handles and the like — keep it too.
 
-\`trail.kind\` is \`comet\`, which tapers each segment toward nothing, or
-\`ribbon\`, which keeps the width and lets opacity do all the work.
+\`trail.kind\` is \`comet\`, which tapers each segment toward nothing;
+\`ribbon\`, which keeps the width and lets opacity do all the work; or
+\`pixel\`, hard-edged squares snapped to a grid. Reach for \`pixel\` when the
+look is flat, squared-off or 8-bit — round segments fight a block caret and
+zero-radius corners, and a square landing on a fractional pixel is a blurry
+square, so the renderer quantises the positions for you.
 
-\`click: { kind: 'ripple', size, seconds }\` expands a ring from wherever the
-pointer went down. It is independent of the drawn cursor — a look can want click
+The trail no longer needs a drawn cursor. \`kind: 'system'\` with a trail is a
+perfectly good look: pixels following the native arrow, nothing glowing under
+it.
+
+\`click.kind\` is \`ripple\`, which expands a ring from wherever the pointer
+went down, or \`minesweeper\`, which lays a brief grid of beveled tiles around
+the point — light top-left edge, dark bottom-right, mitred corners — and presses
+them in. The bevel is the classic Windows dialog one and it belongs with a flat,
+squared-off theme; it will look like a costume on anything soft or rounded. It is independent of the drawn cursor — a look can want click
 feedback without wanting to replace the pointer — and like the trail it is off
 entirely under reduced motion and adds no listener when the kind is \`none\`.
 
@@ -269,11 +280,16 @@ bind them with no \`theme_css\` layer at all:
 | \`--t-trail-opacity\` | how strong the trail is |
 | \`--t-trail-length\` | how far the trail reaches — re-shapes it live |
 | \`--t-trail-taper\` | 1 tapers to a comet, 0 keeps a ribbon's width |
+| \`--t-trail-radius\` | 50% for round segments, 0 for square ones |
 | \`--t-selection-fill\`, \`--t-caret-color\` | colour controls that need no setup |
 
 A cursor look almost writes its own panel: *Glow size* on
 \`--t-pointer-scale\`, *Glow strength* on \`--t-pointer-opacity\`, *Trail
-length* on \`--t-trail-length\`.
+length* on \`--t-trail-length\`. A pixel trail wants *Length*, *Strength* on
+\`--t-trail-opacity\` and *Pixel size* on \`--t-trail-size\` — publish them,
+because a preset cannot: a preset is a static spec and controls are a runtime
+broadcast, so a look that ships knobs has to be applied *and then* have
+\`theme_controls\` called for it.
 
 For anything else, introduce the property yourself in a \`theme_css\` layer —
 write \`blur(var(--glass-blur, 20px))\` rather than \`blur(20px)\` — and then

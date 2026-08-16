@@ -174,7 +174,7 @@ const PRESET_SPECS: Record<string, unknown> = {
     // appears where the user touches it — the caret, the pointer, the click.
     // That is also why it is not called after the search engine whose palette
     // it borrows; naming it that would make it a costume rather than a look.
-    summary: 'White paper and black ink, with colour only where you are — a caret that cycles and a pointer that leaves light behind.',
+    summary: 'White paper and black ink, with colour only where you are — a caret that cycles and a pointer that leaves pixels behind.',
     mode: 'light',
     palette: {
       surfaceHue: 220, surfaceChroma: 'neutral',
@@ -215,16 +215,27 @@ const PRESET_SPECS: Record<string, unknown> = {
       caretShape: 'block',
       selectionFill: { role: 'accent', alpha: 0.22 },
       pointer: {
-        // A companion halo, not a replacement: the native arrow stays, so
-        // there is no frame of lag to notice.
-        kind: 'halo',
+        // No glow. A halo under the cursor was softening a look whose whole
+        // idea is flat white, black ink and hard-edged colour — the trail and
+        // the click carry the character here, and a diffuse blob under the
+        // pointer was working against both.
+        kind: 'system',
         size: 64,
         opacity: 0.3,
         blend: 'multiply',
         replace: false,
         color: { role: 'accent' },
-        trail: { kind: 'comet', length: 10, size: 16, opacity: 0.32 },
-        click: { kind: 'ripple', size: 88, seconds: 0.5 },
+        // Hard squares on a grid rather than shrinking circles. `pixel` keeps
+        // each segment the same size and lets opacity do the falling off, which
+        // is what makes it read as a cursor leaving pixels behind instead of a
+        // comet — and it squares off against the block caret rather than
+        // rounding away from it.
+        trail: { kind: 'pixel', length: 12, size: 10, opacity: 0.55 },
+        // The bevel grid. Flat faces, mitred light and dark edges, gone in half
+        // a second — the one moment this theme is allowed to look like a
+        // dialog box from 1995, which is exactly the register its squared-off
+        // corners and block caret are already in.
+        click: { kind: 'minesweeper', size: 104, seconds: 0.42, color: { role: 'surface', tier: 2 } },
       },
     },
     surfaces: {

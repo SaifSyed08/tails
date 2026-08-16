@@ -109,10 +109,18 @@ export function PointerLayer() {
     if (!container) return undefined;
 
     const nodes = [...container.children] as HTMLElement[];
-    const gap = Math.max(
-      6,
-      Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--t-trail-size')) * 0.7 || 8,
-    );
+    const computed = getComputedStyle(document.documentElement);
+    const segment = Number.parseFloat(computed.getPropertyValue('--t-trail-size')) || 12;
+    const gap = Math.max(6, segment * 0.7);
+
+    // `--t-trail-radius: 0` is the pixel kind. Squares are the only shape that
+    // looks wrong on a fractional pixel — a circle at x=104.3 is a circle, a
+    // square at x=104.3 is a blurry square — so the same token that squares the
+    // segment off also puts it on a grid. Snapping a round trail would only
+    // make it stutter.
+    const radius = computed.getPropertyValue('--t-trail-radius').trim();
+    const snap = radius === '0' || radius === '0px' ? Math.max(2, Math.round(segment)) : 0;
+    const quantise = (value: number): number => (snap ? Math.round(value / snap) * snap : value);
 
     const path: { x: number; y: number }[] = [];
     let latest: { x: number; y: number } | null = null;
@@ -128,7 +136,7 @@ export function PointerLayer() {
         return;
       }
       node.style.opacity = '';
-      node.style.translate = `${point.x}px ${point.y}px`;
+      node.style.translate = `${quantise(point.x)}px ${quantise(point.y)}px`;
     };
 
     const draw = () => {
@@ -192,7 +200,7 @@ export function PointerLayer() {
 
     const onDown = (event: PointerEvent) => {
       const ripple = document.createElement('div');
-      ripple.className = 't-click-ripple';
+      ripple.className = 't-click';
       ripple.setAttribute('aria-hidden', 'true');
       ripple.style.translate = `${event.clientX}px ${event.clientY}px`;
       // `once` and `remove` together, so a ripple whose animation never fires

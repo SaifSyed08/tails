@@ -125,7 +125,7 @@ export const POINTER_KINDS = ['system', 'halo', 'ring', 'dot'] as const;
 
 export type PointerKind = (typeof POINTER_KINDS)[number];
 
-export const TRAIL_KINDS = ['none', 'comet', 'ribbon'] as const;
+export const TRAIL_KINDS = ['none', 'comet', 'ribbon', 'pixel'] as const;
 
 export type TrailKind = (typeof TRAIL_KINDS)[number];
 
@@ -182,10 +182,10 @@ const pointerRecipeSchema = z.object({
     .describe('Hide the native cursor and let the drawn shape stand in for it. Read the note on lag before setting this: it is correct for a large soft shape and a mistake for a small hard one. The native cursor returns over text fields and critical controls regardless.'),
   trail: trailRecipeSchema,
   click: z.object({
-    kind: z.enum(['none', 'ripple']).default('none')
-      .describe('What happens where the user clicks. "ripple" expands a ring from the click point and fades it. Off by default: feedback on every click in the app is a strong choice, and it is the wrong one for anything that wants to feel quiet.'),
+    kind: z.enum(['none', 'ripple', 'minesweeper']).default('none')
+      .describe('What happens where the user clicks. "ripple" expands a ring from the click point and fades it. "minesweeper" briefly lays a grid of beveled tiles around the point — light top-left edge, dark bottom-right — and presses them in, which is the classic Windows dialog bevel and suits a flat, squared-off look. Off by default: feedback on every click in the app is a strong choice, and the wrong one for anything that wants to feel quiet.'),
     size: z.number().min(8).max(240).default(72)
-      .describe('Diameter the ripple reaches, in pixels. Around 60-100 reads as acknowledgement; past ~150 it reads as a splash and starts competing with whatever the click actually did.'),
+      .describe('How far the effect reaches, in pixels. Around 60-100 reads as acknowledgement; past ~150 it reads as a splash and starts competing with whatever the click actually did. For "minesweeper" this is the width of the patch of tiles, so it decides how many appear.'),
     color: colorRefSchema.optional()
       .describe('Ripple colour. Omit to follow the cursor colour.'),
     seconds: z.number().min(0.15).max(2).default(0.45)
