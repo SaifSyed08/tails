@@ -73,7 +73,7 @@ const paletteSchema = z.object({
   surfaceChroma: z.enum(['neutral', 'tinted', 'rich'])
     .describe('How much colour the backgrounds carry. "neutral" is near-grey, "tinted" is a subtle wash, "rich" is unmistakably coloured.'),
   accentHue: z.number().int().min(0).max(360)
-    .describe('Hue for buttons, links, focus rings and the primary action colour, 0-360.'),
+    .describe('Hue for buttons, links, focus rings and the primary action colour, 0-360. HSL hue is not the scale people name colours on, and the gap is widest exactly where it gets asked for most: 240 is the canonical CSS "blue" and resolves to indigo once the accent is darkened enough to carry text — ask for blue, get purple. Read these as where each name actually lands: red 0-10, orange 20-35, amber 35-50, yellow 50-60, green 100-150, teal 165-185, cyan 185-195, BLUE 200-220, indigo 225-250, violet 260-280, magenta 300-320, pink 330-345. Check the hex the preview hands back before committing; that is what it is for.'),
   accentChroma: z.enum(['muted', 'vivid', 'electric'])
     .describe('Accent intensity. "muted" is restrained and editorial, "vivid" is confident, "electric" is high-energy and works best against dark or neutral surfaces.'),
   scheme: z.enum(['mono', 'analogous', 'complement', 'triad'])
@@ -125,7 +125,7 @@ export const POINTER_KINDS = ['system', 'halo', 'ring', 'dot'] as const;
 
 export type PointerKind = (typeof POINTER_KINDS)[number];
 
-export const TRAIL_KINDS = ['none', 'comet', 'ribbon', 'pixel'] as const;
+export const TRAIL_KINDS = ['none', 'comet', 'ribbon', 'pixel', 'rainbow', 'fluid'] as const;
 
 export type TrailKind = (typeof TRAIL_KINDS)[number];
 
@@ -155,7 +155,7 @@ export type TrailKind = (typeof TRAIL_KINDS)[number];
  */
 const trailRecipeSchema = z.object({
   kind: z.enum(TRAIL_KINDS).default('none')
-    .describe('The decaying trail behind the pointer. "comet" tapers to nothing; "ribbon" keeps its width and only fades. Both retract to nothing when the mouse stops, because a trail that pools into a blob under a stationary cursor is the failure mode of every implementation of this.'),
+    .describe('The trail behind the pointer. Three are drawn as elements: "comet" tapers to nothing, "ribbon" keeps its width and only fades, "pixel" is hard-edged squares snapped to a grid — reach for that one when the look is flat or 8-bit, because round segments fight a block caret and square corners. Two are drawn on a canvas: "rainbow" is a stacked multi-colour ribbon lagging behind the pointer, "fluid" is soft additive blobs carrying pointer velocity and dissipating. The canvas pair run a frame loop while the pointer moves, so pick them when the trail *is* the look rather than as decoration. All of them retract to nothing when the mouse stops, because a trail that pools into a blob under a stationary cursor is the failure mode of every implementation of this.'),
   length: z.number().int().min(2).max(16).default(8)
     .describe('How many segments, 2-16, which is also how far back the trail reaches. The segments are spaced by distance travelled rather than by time, so a fast flick draws a long trail and a slow drag draws a short one — which is what a trail is supposed to mean.'),
   size: z.number().min(2).max(80).default(12)
@@ -163,7 +163,9 @@ const trailRecipeSchema = z.object({
   opacity: z.number().min(0).max(1).default(0.35)
     .describe('Opacity of the nearest segment, 0-1; the rest fall off from there. The single best knob to publish as a control.'),
   color: colorRefSchema.optional()
-    .describe('Trail colour. Omit to follow the cursor colour.'),
+    .describe('Trail colour. Omit to follow the cursor colour. Used by the element-drawn kinds; the canvas kinds prefer `palette`.'),
+  palette: z.array(colorRefSchema).min(2).max(6).optional()
+    .describe('Two to six colours for the canvas kinds. "rainbow" strokes one band per entry — this is what makes it a rainbow rather than one ribbon — and "fluid" cycles its blobs through them. Role references, so the trail re-tints with the theme instead of freezing a palette.'),
 }).strict().default({ kind: 'none', length: 8, size: 12, opacity: 0.35 })
   .describe('Motion, so it is switched off entirely for anyone who asked for reduced motion, and it never runs an animation frame loop while the pointer is still.');
 
@@ -182,8 +184,8 @@ const pointerRecipeSchema = z.object({
     .describe('Hide the native cursor and let the drawn shape stand in for it. Read the note on lag before setting this: it is correct for a large soft shape and a mistake for a small hard one. The native cursor returns over text fields and critical controls regardless.'),
   trail: trailRecipeSchema,
   click: z.object({
-    kind: z.enum(['none', 'ripple', 'minesweeper']).default('none')
-      .describe('What happens where the user clicks. "ripple" expands a ring from the click point and fades it. "minesweeper" briefly lays a grid of beveled tiles around the point — light top-left edge, dark bottom-right — and presses them in, which is the classic Windows dialog bevel and suits a flat, squared-off look. Off by default: feedback on every click in the app is a strong choice, and the wrong one for anything that wants to feel quiet.'),
+    kind: z.enum(['none', 'ripple', 'minesweeper', 'crack']).default('none')
+      .describe('What happens where the user clicks. "ripple" expands a ring from the click point and fades it. "minesweeper" briefly lays a grid of beveled tiles around the point — light top-left edge, dark bottom-right — and presses them in, which is the classic Windows dialog bevel and suits a flat, squared-off look. "crack" presses pixels in along a fracture radiating from the click, with the bevel inverted so each one reads as a dent rather than a button. Off by default: feedback on every click in the app is a strong choice, and the wrong one for anything that wants to feel quiet.'),
     size: z.number().min(8).max(240).default(72)
       .describe('How far the effect reaches, in pixels. Around 60-100 reads as acknowledgement; past ~150 it reads as a splash and starts competing with whatever the click actually did. For "minesweeper" this is the width of the patch of tiles, so it decides how many appear.'),
     color: colorRefSchema.optional()

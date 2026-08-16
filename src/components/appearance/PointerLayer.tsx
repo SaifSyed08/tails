@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { refreshPointerTracking } from '@/components/appearance/pointerTokens';
+import { startTrailCanvas } from '@/components/appearance/trailCanvas';
 
 /**
  * The app-drawn cursor and its trail.
@@ -43,9 +44,15 @@ const MAX_SEGMENTS = 16;
 /** Frames with nothing left to draw before the loop gives up and waits for a move. */
 const IDLE_FRAMES = 3;
 
-type DrawnPointer = { cursor: boolean; segments: number; click: boolean };
+type DrawnPointer = {
+  cursor: boolean;
+  segments: number;
+  click: boolean;
+  /** Set when the theme wants a canvas-drawn trail instead of placed elements. */
+  canvas: 'rainbow' | 'fluid' | null;
+};
 
-const OFF: DrawnPointer = { cursor: false, segments: 0, click: false };
+const OFF: DrawnPointer = { cursor: false, segments: 0, click: false, canvas: null };
 
 /** What the current theme has asked for, read back from the resolved tokens. */
 function readDrawnPointer(): DrawnPointer {
@@ -62,18 +69,25 @@ function readDrawnPointer(): DrawnPointer {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const length = Number.parseFloat(computed.getPropertyValue('--t-trail-length'));
 
+  const mode = computed.getPropertyValue('--t-trail-mode').trim();
+  const canvas = !reduced && (mode === 'rainbow' || mode === 'fluid') ? mode : null;
+
   return {
     cursor,
-    segments: trail && !reduced && Number.isFinite(length)
+    // The two renderers are mutually exclusive: a canvas trail places no
+    // segments, and the derivation emits no segment image for one.
+    segments: trail && !canvas && !reduced && Number.isFinite(length)
       ? Math.min(MAX_SEGMENTS, Math.max(0, Math.round(length)))
       : 0,
     click: !reduced && computed.getPropertyValue('--t-click-image').trim() !== 'none',
+    canvas,
   };
 }
 
 export function PointerLayer() {
   const [drawn, setDrawn] = useState<DrawnPointer>(OFF);
   const trailRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Re-read the tokens whenever the appearance changes.
   useEffect(() => {
@@ -192,6 +206,35 @@ export function PointerLayer() {
     };
   }, [drawn.segments]);
 
+  // The canvas trail. Mounted only while a theme asks for one, and torn down
+  // completely when it stops — the renderer owns its own frame loop and its own
+  // pointer listener, so leaving it running would be a second loop competing
+  // with the element-drawn one.
+  useEffect(() => {
+    if (!drawn.canvas) return undefined;
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    const computed = getComputedStyle(document.documentElement);
+    const read = (token: string, fallback: number): number => {
+      const value = Number.parseFloat(computed.getPropertyValue(token));
+      return Number.isFinite(value) ? value : fallback;
+    };
+
+    const palette = computed.getPropertyValue('--t-trail-palette')
+      .split(/,(?![^(]*\))/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    return startTrailCanvas(canvas, {
+      mode: drawn.canvas,
+      colors: palette,
+      size: read('--t-trail-size', 12),
+      length: Math.max(2, Math.round(read('--t-trail-length', 12))),
+      opacity: read('--t-trail-opacity', 0.5),
+    });
+  }, [drawn.canvas]);
+
   // Click feedback. No React state and no listener at all unless a theme asked
   // for it: each ripple is a bare element that removes itself when its
   // animation ends, so nothing is in the tree between clicks.
@@ -213,10 +256,11 @@ export function PointerLayer() {
     return () => window.removeEventListener('pointerdown', onDown);
   }, [drawn.click]);
 
-  if (!drawn.cursor && drawn.segments === 0) return null;
+  if (!drawn.cursor && drawn.segments === 0 && !drawn.canvas) return null;
 
   return (
     <>
+      {drawn.canvas ? <canvas ref={canvasRef} className="t-trail-canvas" aria-hidden /> : null}
       {drawn.segments > 0 ? (
         <div ref={trailRef} aria-hidden>
           {Array.from({ length: drawn.segments }, (_, index) => (

@@ -39,7 +39,7 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
      * For handing an in-window pet back: he should appear where he was let go
      * of, not wherever the window was left last time.
      */
-    place: (x, y) => ipcRenderer.send('tails:desktop-pet', { action: 'place', x, y }),
+    place: (x, y, holding) => ipcRenderer.send('tails:desktop-pet', { action: 'place', x, y, holding }),
     readState: () => ipcRenderer.invoke('tails:desktop-pet-state'),
   },
 

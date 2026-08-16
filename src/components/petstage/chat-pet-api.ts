@@ -99,3 +99,28 @@ export async function activatePet(petId: string): Promise<void> {
   });
   if (!response.ok) throw new Error(`That pet could not be put on the desktop (${response.status}).`);
 }
+
+/**
+ * Gives a pet to a conversation.
+ *
+ * The way back in. Taking him out of a chat is a gesture — carry him past the
+ * edge — and until now the only way to reverse it was to find him in the
+ * marketplace and drop him on the right conversation, which is a lot of
+ * furniture to move to undo one flick of the wrist.
+ *
+ * Assignment belongs to the sessions module, so this posts there. The pets
+ * module hears about it separately, which is why the caller also marks him
+ * used: the carousel's ordering is built on that.
+ */
+export async function assignPetToSession(sessionId: string, petId: string): Promise<void> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ petId }),
+  });
+  if (!response.ok) throw new Error(`He could not be sent to this chat (${response.status}).`);
+
+  // Best effort: a pet who is in a conversation has been tried, and the
+  // carousel says so. A failure here costs a dot, not the assignment.
+  void fetch(`/api/pets/${encodeURIComponent(petId)}/used`, { method: 'POST' }).catch(() => {});
+}

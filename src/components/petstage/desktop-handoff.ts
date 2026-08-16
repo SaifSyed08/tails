@@ -12,7 +12,7 @@
  */
 
 type PlacingBridge = {
-  place?: (x: number, y: number) => void;
+  place?: (x: number, y: number, holding?: boolean) => void;
 };
 
 type TailsDesktop = {
@@ -25,7 +25,11 @@ const desktop = () => (window as unknown as { tailsDesktop?: TailsDesktop }).tai
 /**
  * Moves the desktop pet to a point in *this page's* coordinates.
  *
- * Client pixels, which the shell converts — see `clientPointToDip`. A page
+ * Client pixels, which the shell converts — see `clientPointToDip`. `holding`
+ * says the hand has not opened yet: the shell ends a carry by noticing the
+ * moves have stopped, which is wrong for a hand that is simply holding still,
+ * and produced a frame of idle in the middle of the run.
+ * A page
  * cannot answer where it is on the screen: `window.screenX` and a pointer's
  * `screenX` are both in CSS pixels, so under any zoom but 1.0 they describe a
  * position that drifts further from the truth the further the pointer travels.
@@ -34,8 +38,8 @@ const desktop = () => (window as unknown as { tailsDesktop?: TailsDesktop }).tai
  * call: a pet who reappears in his last corner is a worse handoff, not a broken
  * app, and there is nothing the user could do about it either way.
  */
-export function placeDesktopPetAt(clientX: number, clientY: number): void {
-  desktop()?.desktopPet?.place?.(clientX, clientY);
+export function placeDesktopPetAt(clientX: number, clientY: number, holding = false): void {
+  desktop()?.desktopPet?.place?.(clientX, clientY, holding);
 }
 
 /**

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { themesRepository, type StoredTheme, type ThemeScope } from '@/db/themes.repository.js';
 import { validateControls } from '@/modules/appearance/controls.js';
-import { deriveTokens } from '@/modules/appearance/derive.js';
+import { deriveTokens, paletteReadout } from '@/modules/appearance/derive.js';
 import { validateFreeformCss } from '@/modules/appearance/freeform-css.js';
 import { THEME_PRESETS } from '@/modules/appearance/presets.js';
 import { serializeScoped, serializeStylesheet } from '@/modules/appearance/serialize.js';
@@ -139,6 +139,10 @@ export const themeService = {
       spec: parsed.data,
       derived,
       css: serializeStylesheet(derived),
+      // What the spec actually resolved to, in hex. The contrast report says
+      // whether the result is legible; this says what colour it *is*, which is
+      // the question a model asked for "blue" cannot otherwise answer.
+      palette: paletteReadout(derived),
       contrast: {
         target: upgradeSpec(parsed.data).surface.contrastTarget,
         minRatio: Math.round(derived.minRatio * 100) / 100,
@@ -459,7 +463,7 @@ export const themeService = {
   proposeVariants(
     variants: { label: string; note?: string; spec: unknown }[],
     sessionId = '',
-  ): { variants: { label: string; name: string; contrast: unknown }[] } {
+  ): { variants: { label: string; name: string; palette: unknown; contrast: unknown }[] } {
     if (variants.length < 2) {
       throw new AppError('A proposal needs at least two variants — the point is the comparison.', {
         code: 'THEME_PROPOSAL_INVALID',
@@ -502,6 +506,7 @@ export const themeService = {
       variants: compiled.map((entry) => ({
         label: entry.label,
         name: entry.compiled.spec.name,
+        palette: entry.compiled.palette,
         contrast: entry.compiled.contrast,
       })),
     };

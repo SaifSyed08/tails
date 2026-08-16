@@ -242,6 +242,17 @@ look is flat, squared-off or 8-bit — round segments fight a block caret and
 zero-radius corners, and a square landing on a fractional pixel is a blurry
 square, so the renderer quantises the positions for you.
 
+Two kinds are drawn on a canvas instead of as elements: \`rainbow\` is a
+stacked multi-colour ribbon that lags behind the pointer, and \`fluid\` is soft
+additive blobs carrying pointer velocity and dissipating. Give those a
+\`palette\` of two to six colour roles — \`rainbow\` strokes one band per entry,
+which is what makes it a rainbow rather than one ribbon.
+
+The canvas pair run a frame loop while the pointer moves, so reach for them
+when the trail *is* the look rather than as decoration, and never alongside a
+drawn cursor doing something else. The app owns both renderers: a theme picks
+the effect and its colours, it does not supply the code.
+
 The trail no longer needs a drawn cursor. \`kind: 'system'\` with a trail is a
 perfectly good look: pixels following the native arrow, nothing glowing under
 it.
@@ -263,9 +274,19 @@ cursor retracts the trail to nothing instead of pooling it into a blob.
 ## Then publish the knobs
 
 After the look is applied, call **\`theme_controls\`** with the three or four
-things worth adjusting *for that look*. Glass wants transparency, blur and ring
-thickness; a CRT wants scanline intensity and glow; clouds want speed. Dragging
-one repaints instantly.
+things worth adjusting *for that look*. Dragging one repaints instantly.
+
+**Publish the knobs that decide whether the look is wearable, not the ones that
+show it off.** In order: how dark or light the surfaces are, how much contrast
+the text has, how transparent or blurred the backgrounds are, how strong the
+accent is. Those answer "too dark", "I cannot read this", "too busy" — which is
+what somebody reaches for after a restyle, and what decides whether they keep it
+or ask you to undo it.
+
+Decorative knobs go last and usually go nowhere. This has already gone wrong
+once: a user got a panel of cursor and trail sliders while the thing they wanted
+to fix, the background being too dark, had no control at all. If you have four
+slots, spend at most one on an effect.
 
 A control binds a CSS custom property, so it only works if something reads that
 property through \`var()\`. These the derived theme already reads, so you can

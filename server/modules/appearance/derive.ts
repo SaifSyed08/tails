@@ -1,6 +1,7 @@
 import {
   buildLadder,
   clamp,
+  hslToRgb,
   compositeOver,
   contrastRatio,
   CONTRAST_TARGETS,
@@ -26,6 +27,7 @@ import {
   readAmbientPaint,
   readClickPaint,
   readOverlayPaint,
+  readCrackTile,
   readMinesweeperTile,
   readPointerPaint,
   readTexturePaint,
@@ -165,6 +167,23 @@ const LINE_HEIGHT = { tight: '1.35', default: '1.55', loose: '1.75' } as const;
 const MEASURE = { narrow: '58ch', default: '72ch', wide: '88ch', full: 'none' } as const;
 
 /**
+ * Which keyframe each click effect moves on.
+ *
+ * A ripple expands away from the point, a bevel tile sinks into it, and a crack
+ * propagates outward while holding its shape — three motions, so the name
+ * travels with the paint rather than the renderer inferring it from the image.
+ */
+/** Trail kinds drawn on a canvas rather than as positioned elements. */
+const CANVAS_TRAILS = new Set(['rainbow', 'fluid']);
+
+const CLICK_KEYFRAME = {
+  none: 'none',
+  ripple: 't-click-ripple',
+  minesweeper: 't-click-press',
+  crack: 't-click-crack',
+} as const;
+
+/**
  * Motion feel, the single source for both CSS variables and the TS constants
  * the renderer reads back.
  */
@@ -216,6 +235,37 @@ type Ramp = {
 };
 
 const round = (value: number): number => Math.round(value * 10) / 10;
+
+/**
+ * A resolved colour as a hex string.
+ *
+ * Exists so the model can be *shown what it made*. Everything else in this
+ * module speaks HSL, and a model reasoning in HSL has no way to notice that the
+ * hue it picked for "blue" came out violet — hue 240 is `#1e1ec8` once the
+ * accent solve has darkened it for text contrast, which is indigo by any
+ * ordinary reading of the word. It designed blind, and the fix is not to
+ * second-guess its hue but to hand back the answer.
+ */
+export const formatHex = (color: Hsl): string =>
+  `#${hslToRgb(color).map((channel) => Math.round(channel * 255).toString(16).padStart(2, '0')).join('')}`;
+
+/**
+ * The handful of colours worth reporting back after a compile.
+ *
+ * Keys the eye actually judges a theme by, in both ramps. Not the whole token
+ * set: a wall of forty hexes is as unreadable as none.
+ */
+export function paletteReadout(theme: DerivedTheme): Record<string, unknown> {
+  const ramp = (tokens: ThemeTokens | null) => (tokens ? {
+    background: formatHex(tokens.colors.background),
+    foreground: formatHex(tokens.colors.foreground),
+    primary: formatHex(tokens.colors.primary),
+    secondary: formatHex(tokens.colors.secondary),
+    border: formatHex(tokens.colors.border),
+  } : null);
+
+  return { light: ramp(theme.light), dark: ramp(theme.dark) };
+}
 
 /** Formats a resolved colour as a complete CSS colour value. */
 export const formatColor = (color: Hsl, alpha = 1): string => {
@@ -958,7 +1008,13 @@ function buildInteractionTokens(
   const clickColor = resolve(pointer.click.color, pointerColor);
   const clickPaint = pointer.click.kind === 'ripple'
     ? readClickPaint(clickColor)
-    : pointer.click.kind === 'minesweeper'
+    : pointer.click.kind === 'crack'
+      ? readCrackTile(
+        clickColor,
+        resolve({ role: 'shadow', tier: 9 }, clickColor),
+        resolve({ role: 'light', tier: 11 }, clickColor),
+      )
+      : pointer.click.kind === 'minesweeper'
       // The two bevel poles come from the ramp rather than from literal white
       // and black, so the tile reads as lit rather than as a sticker in both
       // ramps — the same reason shadows reference `light` and `shadow`.
@@ -1016,7 +1072,11 @@ function buildInteractionTokens(
     't-pointer-opacity': drawn ? String(pointer.opacity) : '0',
     't-pointer-blend': drawn ? pointer.blend : 'normal',
 
-    't-trail-image': trailOn ? readTrailPaint(pointer.trail.kind, trailColor) : 'none',
+    // Canvas kinds draw nothing in the DOM, so they emit no segment image and
+    // the renderer mounts no segments for them.
+    't-trail-image': trailOn && !CANVAS_TRAILS.has(pointer.trail.kind)
+      ? readTrailPaint(pointer.trail.kind, trailColor)
+      : 'none',
     't-trail-size': `${pointer.trail.size}px`,
     't-trail-opacity': trailOn ? String(pointer.trail.opacity) : '0',
     // Never zero, even when the trail is off: it is a divisor in the
@@ -1031,6 +1091,16 @@ function buildInteractionTokens(
     // positions to a grid — a square landing on a fractional pixel is a blurry
     // square, which is the one thing a pixel trail must not be.
     't-trail-radius': pointer.trail.kind === 'pixel' ? '0' : '50%',
+    // Which renderer draws the trail. The DOM kinds place elements the
+    // stylesheet can shape; the canvas kinds hand the whole job to an
+    // app-owned frame loop, and no CSS property can express "run this
+    // renderer" — see the exemption in `renderer-contract.test.ts`.
+    't-trail-mode': trailOn
+      ? (CANVAS_TRAILS.has(pointer.trail.kind) ? pointer.trail.kind : 'dom')
+      : 'none',
+    't-trail-palette': trailOn && pointer.trail.palette
+      ? pointer.trail.palette.map((ref) => resolve(ref, trailColor)).join(', ')
+      : trailColor,
 
     // Click feedback is independent of the drawn cursor: a look can want a
     // ripple without wanting to replace the pointer, which is why this is not
@@ -1044,7 +1114,7 @@ function buildInteractionTokens(
     // rather than the renderer guessing from the image.
     't-click-animation': pointer.click.kind === 'none'
       ? 'none'
-      : `${pointer.click.kind === 'minesweeper' ? 't-click-press' : 't-click-ripple'} ${pointer.click.seconds}s var(--ease-exit) forwards`,
+      : `${CLICK_KEYFRAME[pointer.click.kind]} ${pointer.click.seconds}s var(--ease-exit) forwards`,
   };
 }
 

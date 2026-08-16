@@ -320,6 +320,71 @@ export function readMinesweeperTile(face: string, light: string, dark: string): 
 }
 
 /**
+ * A fracture, drawn as pressed-in pixels.
+ *
+ * The ripple and the bevel grid both fade a shape out; this one is meant to
+ * read as damage — pixels along a crack being pushed *into* the surface. So the
+ * bevel is inverted relative to `readMinesweeperTile`: shadow on the top-left
+ * edge and light on the bottom-right is what the eye reads as a dent, and the
+ * same two strips the other way round is what it reads as a button.
+ *
+ * The arm geometry comes from a fixed-seed generator rather than `Math.random`
+ * because the derivation is required to be deterministic — the same spec must
+ * produce byte-identical CSS, and a crack that reshuffled on every compile
+ * would break that and make every saved theme's cached tokens wrong.
+ */
+export function readCrackTile(pixel: string, shade: string, light: string): string {
+  const SPAN = 48;
+  const centre = SPAN / 2;
+  const cell = 2;
+
+  // A tiny LCG. Deterministic, seeded once, and the constants are the usual
+  // Numerical Recipes pair — this only has to look irregular, not be random.
+  let seed = 0x2f6e2b1;
+  const next = (): number => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+
+  const blocks: string[] = [];
+  const arms = 6;
+
+  for (let arm = 0; arm < arms; arm += 1) {
+    // Evenly spread, then jittered, so the arms do not read as a snowflake.
+    let angle = (arm / arms) * Math.PI * 2 + (next() - 0.5) * 0.7;
+    let x = centre;
+    let y = centre;
+    const reach = centre * (0.55 + next() * 0.45);
+
+    for (let step = 0; step * cell < reach; step += 1) {
+      // The walk wanders as it travels, which is what makes it a fracture
+      // rather than a spoke.
+      angle += (next() - 0.5) * 0.55;
+      x += Math.cos(angle) * cell;
+      y += Math.sin(angle) * cell;
+
+      const bx = Math.round(x / cell) * cell;
+      const by = Math.round(y / cell) * cell;
+      if (bx < 0 || by < 0 || bx >= SPAN || by >= SPAN) break;
+
+      blocks.push(
+        `<rect x="${bx}" y="${by}" width="${cell}" height="${cell}" fill="${pixel}"/>`
+        + `<rect x="${bx}" y="${by}" width="${cell}" height="0.5" fill="${shade}"/>`
+        + `<rect x="${bx}" y="${by}" width="0.5" height="${cell}" fill="${shade}"/>`
+        + `<rect x="${bx}" y="${by + cell - 0.5}" width="${cell}" height="0.5" fill="${light}"/>`
+        + `<rect x="${bx + cell - 0.5}" y="${by}" width="0.5" height="${cell}" fill="${light}"/>`,
+      );
+    }
+  }
+
+  return `url("data:image/svg+xml,${encodeSvg(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SPAN} ${SPAN}" shape-rendering="crispEdges">
+      ${blocks.join('')}
+    </svg>
+  `)}")`;
+}
+
+/**
  * One trail segment.
  *
  * Soft dot for the two round kinds — a hard edge repeated eight times reads as

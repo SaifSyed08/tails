@@ -1,4 +1,4 @@
-import { EyeOff, Monitor, X } from 'lucide-react';
+import { EyeOff, MessageSquare, Monitor, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -34,6 +34,11 @@ export type PetDetailsPanelProps = {
   onClose: () => void;
   /** Puts him on the desktop, out of the chat. Absent when he is already there. */
   onSendToDesktop?: () => void;
+  /**
+   * Gives him to the conversation on screen. Absent when there is no
+   * conversation to give him to, or when he is already in it.
+   */
+  onSendToChat?: () => void;
   onHide: () => void;
 };
 
@@ -54,6 +59,7 @@ export function PetDetailsPanel({
   onChange,
   onClose,
   onSendToDesktop,
+  onSendToChat,
   onHide,
 }: PetDetailsPanelProps) {
   const { definition } = pet;
@@ -171,16 +177,34 @@ export function PetDetailsPanel({
         </div>
 
         <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-4 py-3">
-          {onSendToDesktop ? (
-            <button
-              type="button"
-              onClick={onSendToDesktop}
-              className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
-            >
-              <Monitor className="size-3.5" aria-hidden="true" />
-              Put on the desktop
-            </button>
-          ) : <span />}
+          <div className="flex items-center gap-1">
+            {onSendToDesktop ? (
+              <button
+                type="button"
+                onClick={onSendToDesktop}
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+              >
+                <Monitor className="size-3.5" aria-hidden="true" />
+                Put on the desktop
+              </button>
+            ) : null}
+
+            {/*
+              The way back in. Carrying him out is a flick of the wrist, and
+              until this existed undoing it meant opening the marketplace and
+              dropping him on the right conversation.
+            */}
+            {onSendToChat ? (
+              <button
+                type="button"
+                onClick={onSendToChat}
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+              >
+                <MessageSquare className="size-3.5" aria-hidden="true" />
+                Send to this chat
+              </button>
+            ) : null}
+          </div>
 
           <button
             type="button"

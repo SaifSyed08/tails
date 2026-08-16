@@ -393,7 +393,7 @@ function stopWatchdog() {
  * three things that produced six rounds of bugs. What is left is telling the
  * pet which way it is going, so it can face that way and run.
  */
-function onCarried(x, y, source = 'os') {
+function onCarried(x, y, source = 'os', holding = false) {
   carrySource = source;
   if (!carrying) {
     carrying = true;
@@ -412,10 +412,20 @@ function onCarried(x, y, source = 'os') {
     carryFrom = { x, y };
   }
 
-  // The OS reports no drop, so the end of the gesture is inferred from the
-  // moves stopping. Only the animation and the save depend on it, so guessing
-  // slightly early or late costs nothing.
+  /*
+   * The OS reports no drop, so the end of an OS drag is inferred from the moves
+   * stopping. That inference is wrong for a carry the *app* is driving: a hand
+   * that holds still is still a hand holding him, and the timer firing under it
+   * ended the carry, dropped him to idle, and then the next pixel of movement
+   * started it again — the single frame of idle in the middle of a run.
+   *
+   * So a holding carry has no timer at all. The app says when it lets go.
+   */
   if (settleTimer) clearTimeout(settleTimer);
+  if (holding) {
+    settleTimer = null;
+    return;
+  }
   settleTimer = setTimeout(() => {
     settleTimer = null;
     carrying = false;
@@ -452,18 +462,30 @@ function onCarried(x, y, source = 'os') {
 function resyncAfterShow() {
   if (!isAlive()) return;
 
-  if (settleTimer) {
-    clearTimeout(settleTimer);
-    settleTimer = null;
+  /*
+   * Unless the app is holding him right now.
+   *
+   * The handoff shows this window *because* a carry has started, so resetting
+   * "he is being carried" here would immediately contradict the thing that
+   * caused the show: the page would drop to idle and then be told to run again
+   * on the next placement — a single frame of standing still in the middle of a
+   * run, which is exactly what was reported.
+   */
+  const held = carrying && carrySource === 'app';
+  if (!held) {
+    if (settleTimer) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
+    carrying = false;
+    carrySource = null;
+    carryFacing = null;
+    petWindow.webContents.send('pet:resync');
   }
-  carrying = false;
-  carrySource = null;
-  carryFacing = null;
 
   interactive = false;
   petWindow.setIgnoreMouseEvents(true, { forward: true });
   petWindow.setMovable(true);
-  petWindow.webContents.send('pet:resync');
 }
 
 /**
@@ -819,7 +841,7 @@ export function resetPetPosition() {
  * no reliable way to ask either question about itself, and every attempt to do
  * it from that side has been a position that drifts as the hand travels.
  */
-export function placePetFromWindow(fromWindow, clientX, clientY) {
+export function placePetFromWindow(fromWindow, clientX, clientY, holding) {
   if (!fromWindow || fromWindow.isDestroyed()) return;
   if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
 
@@ -831,10 +853,10 @@ export function placePetFromWindow(fromWindow, clientX, clientY) {
     clientY,
   );
 
-  placePetAt(point.x, point.y);
+  placePetAt(point.x, point.y, holding);
 }
 
-export function placePetAt(x, y) {
+export function placePetAt(x, y, holding = false) {
   if (!isAlive()) return;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
@@ -846,7 +868,7 @@ export function placePetAt(x, y) {
   // desktop. That gets him the running animation, the facing, the pause on the
   // watchdog and the resize handler, and the save when the moves stop, all from
   // the same place a handle drag gets them.
-  onCarried(clamped.x, clamped.y, 'app');
+  onCarried(clamped.x, clamped.y, 'app', holding);
 }
 
 /** The user's own hide/show, which survives a restart. */

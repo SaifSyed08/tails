@@ -230,12 +230,15 @@ const PRESET_SPECS: Record<string, unknown> = {
         // is what makes it read as a cursor leaving pixels behind instead of a
         // comet — and it squares off against the block caret rather than
         // rounding away from it.
-        trail: { kind: 'pixel', length: 12, size: 10, opacity: 0.55 },
+        trail: { kind: 'pixel', length: 16, size: 5, opacity: 0.6 },
         // The bevel grid. Flat faces, mitred light and dark edges, gone in half
         // a second — the one moment this theme is allowed to look like a
         // dialog box from 1995, which is exactly the register its squared-off
         // corners and block caret are already in.
-        click: { kind: 'minesweeper', size: 104, seconds: 0.42, color: { role: 'surface', tier: 2 } },
+        // Pressed in along a fracture rather than a decal fading out. The
+        // inverted bevel is what separates the two: shadow on the top-left of
+        // each pixel reads as a dent, the other way round reads as a button.
+        click: { kind: 'crack', size: 120, seconds: 0.52, color: { role: 'surface', tier: 3 } },
       },
     },
     surfaces: {
@@ -280,6 +283,178 @@ const PRESET_SPECS: Record<string, unknown> = {
         border: { style: 'none' },
         corner: { radius: 0, shape: 'square' },
         shadows: [],
+      },
+    },
+  },
+
+  creative: {
+    specVersion: 2,
+    name: 'Creative',
+    summary: 'Black on white with a grey rail — a sober page whose only colour is the one following your cursor.',
+    mode: 'light',
+    palette: {
+      surfaceHue: 220, surfaceChroma: 'neutral',
+      accentHue: 214, accentChroma: 'vivid',
+      scheme: 'triad', statusHueShift: 0,
+    },
+    surface: { lightAnchor: 'true-white', darkAnchor: 'near-black', step: 6, contrastTarget: 'aaa' },
+    type: {
+      // `grotesk` leads with Space Grotesk. It is not bundled and not installed
+      // on a stock machine, so in practice this resolves to Inter or Arial —
+      // the name is honoured where it exists rather than promised where it
+      // does not.
+      sansFamily: 'grotesk', displayFamily: 'grotesk', monoFamily: 'mono',
+      scale: 'default', displayWeight: 'medium', letterSpacing: 'normal',
+      lineHeight: 'default', measure: 'default',
+    },
+    density: 'default',
+    motion: 'standard',
+    interaction: {
+      caretCycle: [
+        { role: 'accent' },
+        { role: 'destructive' },
+        { role: 'warning' },
+        { role: 'positive' },
+      ],
+      // About one change per blink. The blink itself belongs to the operating
+      // system and no CSS property reaches it, so this is the closest honest
+      // approximation: the standard caret period is roughly 1.06 seconds, and
+      // stepping the colour on that interval lands a new colour on most blinks
+      // without ever being locked to one.
+      caretCycleSeconds: 1.06,
+      caretShape: 'auto',
+      selectionFill: { role: 'accent', alpha: 0.2 },
+      pointer: {
+        kind: 'system',
+        size: 40, opacity: 0.3, blend: 'normal', replace: false,
+        // The cursify rainbow ribbon, reimplemented app-side. See
+        // docs/reference/cursify-rainbow-cursor.md.
+        trail: {
+          kind: 'rainbow', length: 14, size: 3, opacity: 0.85,
+          palette: [
+            { role: 'accent' },
+            { role: 'destructive' },
+            { role: 'warning' },
+            { role: 'positive' },
+            { role: 'support' },
+          ],
+        },
+        click: { kind: 'none', size: 72, seconds: 0.45 },
+      },
+    },
+    surfaces: {
+      default: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'surface', tier: 0 } }] }],
+        border: { width: 1, color: { role: 'ink', alpha: 0.14 } },
+        corner: { radius: 4, shape: 'round' },
+        // No shadow anywhere. The page is flat stock and the rail does the
+        // separating, which is what leaves the trail as the only thing moving.
+        shadows: [],
+        texture: { kind: 'none' },
+        overlay: { kind: 'none' },
+      },
+      sidebar: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'surface', tier: 2 } }] }],
+        border: { width: 1, sides: ['right'], color: { role: 'ink', alpha: 0.12 } },
+        shadows: [],
+        corner: { radius: 0, shape: 'square' },
+      },
+      input: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'surface', tier: 1 } }] }],
+        border: { width: 1, color: { role: 'ink', alpha: 0.18 } },
+      },
+      code: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'surface', tier: 1 } }] }],
+        border: { width: 1, sides: ['left'], color: { role: 'accent' } },
+      },
+      bubbleUser: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'surface', tier: 2 } }] }],
+        border: { width: 1, color: { role: 'ink', alpha: 0.14 } },
+      },
+      scrim: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'ink', alpha: 0.34 } }] }],
+        border: { style: 'none' },
+        corner: { radius: 0, shape: 'square' },
+        shadows: [],
+      },
+    },
+  },
+
+  aurora: {
+    specVersion: 2,
+    name: 'Aurora',
+    summary: 'Black glass — heavily blurred translucent panels over an OLED ground, with a slow fluid wake behind the cursor.',
+    mode: 'dark',
+    palette: {
+      surfaceHue: 260, surfaceChroma: 'tinted',
+      accentHue: 172, accentChroma: 'vivid',
+      scheme: 'triad', statusHueShift: 0,
+    },
+    surface: { lightAnchor: 'paper', darkAnchor: 'true-black', step: 6, contrastTarget: 'aa' },
+    type: {
+      sansFamily: 'grotesk', displayFamily: 'grotesk', monoFamily: 'mono',
+      scale: 'default', displayWeight: 'medium', letterSpacing: 'normal',
+      lineHeight: 'default', measure: 'default',
+    },
+    density: 'airy',
+    motion: 'calm',
+    interaction: {
+      caretShape: 'auto',
+      caretCycleSeconds: 4,
+      selectionFill: { role: 'accent', alpha: 0.24 },
+      pointer: {
+        kind: 'system',
+        size: 40, opacity: 0.25, blend: 'screen', replace: false,
+        // Deliberately small and short-lived. The original is a WebGL fluid
+        // solver and this is a canvas approximation of it — see
+        // docs/reference/cursify-fluid-cursor.md — and the request was for
+        // something much subtler than the original either way.
+        trail: {
+          kind: 'fluid', length: 14, size: 26, opacity: 0.22,
+          palette: [{ role: 'accent' }, { role: 'support' }],
+        },
+        click: { kind: 'none', size: 72, seconds: 0.45 },
+      },
+    },
+    surfaces: {
+      default: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'light', tier: 2, alpha: 0.1 } }] }],
+        border: {
+          width: 1,
+          variant: 'gradient-ring',
+          ring: { angle: 145, stops: [
+            { color: { role: 'light', tier: 12, alpha: 0.4 }, position: 0 },
+            { color: { role: 'light', tier: 6, alpha: 0.06 }, position: 45 },
+            { color: { role: 'shadow', tier: 4, alpha: 0.3 }, position: 100 },
+          ] },
+        },
+        corner: { radius: 20, shape: 'squircle' },
+        shadows: [
+          { inset: true, y: 1, blur: 1, color: { role: 'light', tier: 12 }, alpha: 0.28 },
+          { y: 18, blur: 48, spread: -14, color: { role: 'shadow', tier: 10 }, alpha: 0.5 },
+        ],
+        backdrop: { blur: 32, saturate: 1.7, brightness: 1.04, refraction: 0.4 },
+        texture: { kind: 'none' },
+        overlay: { kind: 'none' },
+      },
+      sidebar: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'surface', tier: 2 } }] }],
+        border: { width: 1, sides: ['right'], color: { role: 'light', tier: 6, alpha: 0.12 } },
+        shadows: [],
+        corner: { radius: 0, shape: 'square' },
+        backdrop: { blur: 20, saturate: 1.3 },
+      },
+      code: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'shadow', tier: 2, alpha: 0.5 } }] }],
+        border: { width: 1, color: { role: 'accent', alpha: 0.22 } },
+        shadows: [],
+      },
+      scrim: {
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'shadow', tier: 12, alpha: 0.6 } }] }],
+        border: { style: 'none' },
+        corner: { radius: 0, shape: 'square' },
+        shadows: [],
+        backdrop: { blur: 10, saturate: 1.1 },
       },
     },
   },

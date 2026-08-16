@@ -425,7 +425,14 @@ function installPetBridge() {
     // point is in the app page's coordinates, and only the shell can turn those
     // into a place on the screen — see `placePetFromWindow`.
     else if (action === 'place') {
-      placePetFromWindow(BrowserWindow.fromWebContents(event.sender), Number(payload?.x), Number(payload?.y));
+      placePetFromWindow(
+        BrowserWindow.fromWebContents(event.sender),
+        Number(payload?.x),
+        Number(payload?.y),
+        // Still in the hand. A held pet keeps running until the app says
+        // otherwise, rather than settling every time the hand pauses.
+        payload?.holding === true,
+      );
     }
   });
 

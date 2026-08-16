@@ -319,6 +319,8 @@
     --t-trail-length: 1;
     --t-trail-taper: 1;
     --t-trail-radius: 50%;
+    --t-trail-mode: none;
+    --t-trail-palette: hsl(var(--primary));
   }
 
   /* Per-part floor values, mirroring what each part looked like when it was
@@ -875,6 +877,45 @@
   }
 
   /**
+   * The canvas trail surface.
+   *
+   * One full-viewport canvas, mounted only for the canvas-drawn trail kinds and
+   * unmounted the moment the theme stops asking for one. It sits at the same
+   * depth as the element-drawn segments so the two can never be on screen at
+   * once and argue about which is in front.
+   */
+  .t-trail-canvas {
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    pointer-events: none;
+  }
+
+  /**
+   * The crack.
+   *
+   * Propagates outward from the impact and fades, holding its shape rather than
+   * inflating — the pixels are pressed in along the fracture, so the motion is
+   * the fracture spreading, not a decal being scaled away. The brief hold at
+   * full opacity is what makes it read as damage rather than as a flash.
+   */
+  @keyframes t-click-crack {
+    0% {
+      transform: translate(-50%, -50%) scale(0.7);
+      opacity: 0;
+    }
+
+    22% {
+      opacity: 1;
+    }
+
+    100% {
+      transform: translate(-50%, -50%) scale(1);
+      opacity: 0;
+    }
+  }
+
+  /**
    * A trail and a click ripple are motion in the sense the preference means:
    * they move on their own after the user's own movement has stopped. The drawn
    * cursor is not — it tracks the user's hand, and stopping it would be like
@@ -882,6 +923,7 @@
    */
   @media (prefers-reduced-motion: reduce) {
     .t-trail-segment,
+    .t-trail-canvas,
     .t-click {
       display: none;
     }

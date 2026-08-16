@@ -55,6 +55,10 @@ const DELIBERATELY_UNCONSUMED: Record<string, string> = {
     'A 0-or-1 presence flag, not a strength. The authored strength is baked into --t-texture-image itself, because a pseudo-element has one opacity and the texture and overlay layers sharing it need two. The renderer relies on the image being `none` when absent, so it has nothing to read here — the flag exists for v1 token blobs, which are replayed from cache and must keep resolving every name they were saved with.',
   '--t-overlay-opacity':
     'A 0-or-1 presence flag, for the same reason as --t-texture-opacity. The strength is baked into --t-overlay-image.',
+  '--t-trail-mode':
+    'Selects which renderer draws the trail: element-placed segments, or one of the app-owned canvas effects. There is no CSS property that means "run this frame loop", so this one genuinely cannot have a consumer in index.css — it is read by trailCanvas.ts. Distinct from the tokens that shape the trail, all of which are consumed: this decides which code runs, not what it looks like.',
+  '--t-trail-palette':
+    'A comma-separated colour list for the canvas trails, where "rainbow" strokes one band per entry. CSS has no way to consume a variable-length colour list — a gradient would fix the count and the geometry, which is exactly what the renderer needs to decide per effect. Read by trailCanvas.ts alongside --t-trail-mode.',
 };
 
 test('the renderer consumes every surface token the presets emit', () => {

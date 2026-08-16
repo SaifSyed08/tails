@@ -38,25 +38,22 @@ const PADDING = 12;
 const HIT_TOLERANCE = 6;
 
 /**
- * The scruff of the neck: how deep the draggable band is, in cell pixels.
+ * How much of the artwork's edge stays out of the drag region, in cell pixels.
  *
- * Measured down from the top of the artwork, past the inset below. Generous —
- * head and shoulders — because it is the only place the window can be grabbed
- * and a band you have to aim at is worse than one that is slightly too big.
- */
-const HANDLE_BAND = 64;
-
-/**
- * How much of the artwork's rim stays out of the band, in cell pixels.
+ * This is the whole design, so it is worth stating plainly: **everything inside
+ * this rim is draggable, and the rim itself is what makes that possible.**
  *
- * This is not styling. A drag region does not deliver mouse events to the page,
- * and the page reporting "the pointer is on the pet" is the only thing that
- * makes this window stop ignoring the mouse — so a pointer that arrives
- * *directly* on the band would be over a window that is still click-through,
- * which is never hit-tested, so the band is never reached either. The rim is
- * the part of him that always answers: approach from any direction and the
- * pointer crosses ordinary, no-drag pet before it reaches the region that
- * swallows events. See the note above `#pet` in the stylesheet.
+ * A drag region does not deliver mouse events to the page, and the page
+ * reporting "the pointer is on the pet" is the only thing that makes this
+ * window stop ignoring the mouse. So the pet needs a part of himself that still
+ * *receives events* — not a part that lacks a menu, which is what an earlier
+ * comment here claimed and was never the point. Approach him from any
+ * direction and the pointer crosses ordinary, event-receiving pet before it
+ * reaches the region that swallows them.
+ *
+ * 10 cell pixels is about 6 CSS pixels at his usual size, and the shell's
+ * pointer poll is a second route in behind it — see `startWatchdog` — which is
+ * what makes a rim this thin safe and lets the grabbable area be this large.
  */
 const HANDLE_RIM = 10;
 
@@ -170,11 +167,27 @@ export function renderDesktopWindowHtml(): string {
     justify-content: center;
     box-sizing: border-box;
     border-radius: 999px;
-    background: rgba(16, 16, 18, 0.82);
-    color: rgba(255, 255, 255, 0.92);
-    transition: height 120ms ease-out, width 120ms ease-out, opacity 120ms ease-out;
+    background: rgba(16, 16, 18, 0.94);
+    color: rgba(255, 255, 255, 0.94);
+    /*
+     * One easing for every property that moves, including the ones set from
+     * script. The pill's box is re-placed by placePill when it opens — width,
+     * height *and* position all change at once — and animating only two of the
+     * four made it jump sideways and then grow, which is the jank. An ease-out
+     * over 120ms also lands hard; this is the standard soft stop.
+     */
+    transition: width 180ms cubic-bezier(0.2, 0, 0, 1),
+                height 180ms cubic-bezier(0.2, 0, 0, 1),
+                left 180ms cubic-bezier(0.2, 0, 0, 1),
+                top 180ms cubic-bezier(0.2, 0, 0, 1),
+                opacity 180ms cubic-bezier(0.2, 0, 0, 1),
+                box-shadow 180ms cubic-bezier(0.2, 0, 0, 1);
     overflow: hidden;
   }
+
+  /* A hairline so the open pill reads as a control rather than as a smudge.
+     Inset, so it cannot change the box the transition is animating. */
+  #pill.open { box-shadow: inset 0 0 0 1px rgba(148, 148, 156, 0.55); }
 
   #pill button {
     height: 100%;
@@ -223,7 +236,6 @@ const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
 const PADDING = ${PADDING};
 const HIT_TOLERANCE = ${HIT_TOLERANCE};
-const HANDLE_BAND = ${HANDLE_BAND};
 const HANDLE_RIM = ${HANDLE_RIM};
 const ACTIVE_RATE = ${ACTIVE_RATE};
 const RESTING_RATES = ${JSON.stringify(RESTING_RATES)};
@@ -524,28 +536,29 @@ function placeFurniture() {
 
   const rect = pet.getBoundingClientRect();
   const stageRect = stage.getBoundingClientRect();
-  placeHandle(rect, stageRect, minX, maxX, minY);
+  placeHandle(rect, stageRect, minX, maxX, minY, maxY);
   placePill(rect, stageRect, minX, maxX, maxY);
 }
 
 /**
- * Puts the drag band over the pet's scruff, inside a rim of ordinary pet.
+ * Makes almost all of him draggable, inside a rim that is not.
  *
- * Inset on three sides rather than flush with the artwork, because the band
- * swallows the mouse events the window's own click-through depends on: the
- * pointer has to cross a part of him that still reports before it reaches the
- * part that drags. Arriving from above, from the left or from the right, the
- * rim is what answers. See HANDLE_RIM.
+ * The grabbable area is his opaque bounding box less HANDLE_RIM on every side
+ * — roughly three quarters of him by area, and the whole of his middle. It was
+ * a shallow band across his shoulders, which worked but had to be aimed at.
+ *
+ * The rim is not decoration and must not be trimmed to nothing: see the note on
+ * HANDLE_RIM, and the one above the sprite in the stylesheet.
  */
-function placeHandle(rect, stageRect, minX, maxX, minY) {
+function placeHandle(rect, stageRect, minX, maxX, minY, maxY) {
   const left = rect.left - stageRect.left + (minX + HANDLE_RIM) * box.scale;
   const top = rect.top - stageRect.top + (minY + HANDLE_RIM) * box.scale;
   const width = (maxX - minX + 1 - HANDLE_RIM * 2) * box.scale;
-  const height = HANDLE_BAND * box.scale;
+  const height = (maxY - minY + 1 - HANDLE_RIM * 2) * box.scale;
 
-  // A pet drawn too small for a rim and a band both is a pet with no handle
-  // rather than a pet who is all handle: the deadlock above is worse than a
-  // grab that has to be aimed.
+  // A pet drawn too small for a rim and a region both is a pet with no handle
+  // rather than a pet who is all handle: the deadlock the rim prevents is worse
+  // than a grab that has to be aimed.
   if (width < 12 || height < 10) {
     handle.style.display = 'none';
     return;
@@ -584,7 +597,9 @@ function placePill(rect, stageRect, minX, maxX, maxY) {
   pill.style.top = Math.round(
     Math.min(feet + 2, stageRect.height - height),
   ) + 'px';
-  pill.style.opacity = open ? '1' : '0.55';
+  // Visible at rest rather than a ghost: it is the only thing on screen that
+  // says he has controls at all.
+  pill.style.opacity = open ? '1' : '0.85';
 }
 
 /** Where the pill is on screen, or null when it is not shown. */

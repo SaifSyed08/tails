@@ -105,6 +105,11 @@ const themePreviewTool = tool(
         ok: true,
         preview: true,
         name: compiled.spec.name,
+        // Check this against what was asked for before going further. HSL hue
+        // and the colour a person names are not the same scale — 240 is the
+        // canonical "blue" in CSS and resolves to an indigo once the accent is
+        // darkened enough to carry text.
+        palette: compiled.palette,
         // Reporting what the solver changed teaches the model which choices
         // were near the contrast floor, so the next spec is better. An empty
         // `adjusted` means the theme was authored legibly rather than rescued.
@@ -278,7 +283,9 @@ const themeControlsTool = tool(
   'theme_controls',
   [
     'Publish live controls for the look you just made. This is the part of the system that makes a generated theme feel like a thing the user owns rather than a thing that happened to them: after you build a look, you publish the knobs *for that look*, and dragging one repaints instantly — no confirm step, no round trip back to you, no re-derivation.',
-    'The knobs are yours to choose, because only you know what is worth adjusting. Glass wants transparency, blur and ring thickness. A CRT wants scanline intensity and glow. Drifting clouds want speed and how faint. A mouse-trail wants how much. None of those belong in a general settings panel, because none of them exist until the look that needs them exists.',
+    'Publish the knobs that decide whether the user can LIVE with the look, in this order: how dark or light the surfaces are, how much contrast the text has, how transparent or blurred the backgrounds are, and how strong the accent is. Those four answer "this is too dark", "I cannot read this", "this is too busy" — the things somebody actually reaches for after a restyle, and the reason they either keep a theme or ask you to undo it.',
+    'Decorative knobs go last, and usually go nowhere. A panel of cursor and trail settings is a real failure that has happened: the user asked for a theme and got sliders for pointer effects while the thing they wanted to fix — the background being too dark — had no control at all. If you have four slots, spend at most one on an effect.',
+    'Concretely, for almost any look: *Background* on a lightness or surface token, *Contrast* on the ink, *Transparency* on a fill alpha or backdrop scale, *Accent strength* on the accent. Then, if the look has one, a single effect knob.',
     'A control binds a CSS custom property and writes it on :root. That is what makes it instant, and it is also the constraint: publish a control only for a property something in the current look actually reads through var(). If the theme spec does not expose the knob you want, introduce the property yourself in a theme_css layer first — write blur(var(--glass-blur, 20px)) rather than blur(20px) — and then bind it. A slider wired to a property nobody reads moves and changes nothing, which is worse than no slider.',
     'Three or four controls is a good panel. Twelve is the limit and is almost never right: every extra knob makes the ones that matter harder to find. Publish once, after the look is applied, and republish the whole set if it changes. An empty array removes the panel.',
     'Controls are ephemeral like the CSS layer — a reload clears them.',

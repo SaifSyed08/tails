@@ -5,9 +5,12 @@ import test from 'node:test';
 // only test runner. Same arrangement as `thinking-phrases.test.ts`.
 import {
   advanceMotion,
+  BOUNCE,
   GRAVITY,
   MAX_STEP_S,
+  REST_SPEED,
   WALK_SPEED,
+  type Bounds,
   type Motion,
 } from '../../../../src/components/petstage/pet-motion.js';
 
@@ -31,16 +34,22 @@ const STANDING: Motion = {
   grow: 1,
   carried: false,
   squash: false,
+  vx: 0,
 };
 
+/** A chat 400px across with 200px of headroom. */
+const ROOM: Bounds = { maxX: 400, ceiling: -200 };
+
 /** Runs frames until the predicate holds, or gives up. Returns the frame count. */
-function until(start: Motion, stop: (motion: Motion) => boolean, limit = 600): {
-  motion: Motion;
-  frames: number;
-} {
+function until(
+  start: Motion,
+  stop: (motion: Motion) => boolean,
+  limit = 600,
+  bounds?: Bounds,
+): { motion: Motion; frames: number } {
   let motion = start;
   for (let frames = 1; frames <= limit; frames += 1) {
-    motion = advanceMotion(motion, 1 / 60);
+    motion = advanceMotion(motion, 1 / 60, bounds);
     if (stop(motion)) return { motion, frames };
   }
   return { motion, frames: limit };
@@ -122,4 +131,76 @@ test('a pet dropped in grows to full size, and only once', () => {
   assert.equal(motion.grow, 1);
   assert.ok(frames < 30, `took ${frames} frames`);
   assert.equal(advanceMotion(motion, 1 / 60), motion);
+});
+
+
+/**
+ * Throwing him.
+ *
+ * The rule the physics has to encode is that the chat is a *room*: a throw ends
+ * against a wall, never outside. Leaving is something you do by carrying him
+ * out, and if a hard enough throw could do it instead, the two gestures would
+ * be the same gesture with a speed threshold between them.
+ */
+
+test('a throw is an arc, not a drop', () => {
+  const thrown: Motion = { ...STANDING, x: 100, y: -50, vx: 300, vy: -200 };
+  const first = advanceMotion(thrown, 1 / 60, ROOM);
+
+  assert.ok(first.x > 100, 'he travels sideways');
+  assert.ok(first.y < -50, 'and upwards, at first');
+  assert.ok(first.vy > -200, 'while gravity takes the rise out of him');
+});
+
+test('he bounces off the walls rather than leaving the room', () => {
+  const hurled: Motion = { ...STANDING, x: 380, y: -100, vx: 2000, vy: 0 };
+  const { motion } = until(hurled, (next) => next.vx <= 0, 600, ROOM);
+
+  assert.ok(motion.x <= ROOM.maxX, 'never past the wall');
+  assert.ok(motion.vx < 0, 'and comes back off it');
+  assert.ok(Math.abs(motion.vx) < 2000 * BOUNCE + 1, 'with less speed than it arrived with');
+});
+
+test('a throw at the left wall does the same thing', () => {
+  const hurled: Motion = { ...STANDING, x: 20, y: -100, vx: -1500, vy: 0 };
+  const { motion } = until(hurled, (next) => next.vx >= 0, 600, ROOM);
+
+  assert.ok(motion.x >= 0);
+  assert.ok(motion.vx > 0);
+});
+
+test('every throw ends with him standing still, inside the room', () => {
+  for (const [vx, vy] of [[2400, -2400], [-2400, 0], [900, 1200], [40, -40]]) {
+    let motion: Motion = { ...STANDING, x: 200, y: -80, vx, vy };
+    for (let frame = 0; frame < 1200; frame += 1) motion = advanceMotion(motion, 1 / 60, ROOM);
+
+    assert.equal(motion.vx, 0, `still moving after a throw of ${vx}, ${vy}`);
+    assert.equal(motion.vy, 0);
+    assert.equal(motion.y, 0, 'on the floor');
+    assert.ok(motion.x >= 0 && motion.x <= ROOM.maxX, `left the room: ${motion.x}`);
+  }
+});
+
+test('the ceiling is a wall too', () => {
+  const upwards: Motion = { ...STANDING, x: 200, y: -190, vx: 0, vy: -2000 };
+  const { motion } = until(upwards, (next) => next.vy > 0, 60, ROOM);
+
+  assert.ok(motion.y >= ROOM.ceiling, 'never above the room');
+});
+
+test('a shiver is not a throw', () => {
+  // Below the resting speed he is put down, not thrown: without this he creeps
+  // sideways for a second after every release.
+  const nudged: Motion = { ...STANDING, vx: REST_SPEED - 1 };
+  assert.equal(advanceMotion(nudged, 1 / 60, ROOM).vx, 0);
+});
+
+test('he faces the way he was thrown', () => {
+  assert.equal(advanceMotion({ ...STANDING, x: 200, vx: -600 }, 1 / 60, ROOM).facing, 'left');
+  assert.equal(advanceMotion({ ...STANDING, x: 200, vx: 600 }, 1 / 60, ROOM).facing, 'right');
+});
+
+test('a throw cancels a walk', () => {
+  const interrupted: Motion = { ...STANDING, x: 100, target: 300, vx: -500 };
+  assert.equal(advanceMotion(interrupted, 1 / 60, ROOM).target, null);
 });

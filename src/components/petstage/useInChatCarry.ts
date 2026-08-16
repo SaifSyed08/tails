@@ -32,6 +32,13 @@ export type InChatRelease = {
   x: number;
   y: number;
   /**
+   * How fast the hand was moving when it opened, in pixels per second.
+   *
+   * The difference between putting him down and throwing him. Zero when the
+   * hand had come to rest, so an ordinary careful placement stays one.
+   */
+  velocity: { x: number; y: number };
+  /**
    * Where the pointer is, in the page's own coordinates.
    *
    * Client pixels, deliberately — not `screenX`. Turning a page coordinate into
@@ -54,6 +61,15 @@ export type InChatCarryOptions = {
   onMove: (x: number, y: number, pointer: { x: number; y: number }) => void;
   /** The press became a carry. Fired once, when the threshold is crossed. */
   onStart?: () => void;
+  /**
+   * A button went down on him, before any movement.
+   *
+   * Earlier than `onStart` on purpose: between the press and the threshold he
+   * is still under whatever was moving him, and a pet who was mid-stroll kept
+   * walking for those few frames and then snapped to the hand. Pressing him
+   * should stop him where he is.
+   */
+  onPress?: () => void;
   /** The hand opened. Not called for an interruption — see the note above. */
   onRelease: (release: InChatRelease) => void;
   /**
@@ -77,9 +93,34 @@ type Gesture = {
   grabY: number;
   x: number;
   y: number;
+  /** Smoothed pointer speed in px/ms, and when it was last measured. */
+  vx: number;
+  vy: number;
+  lastX: number;
+  lastY: number;
+  lastAt: number;
   carrying: boolean;
   detach: () => void;
 };
+
+/**
+ * How much of each new speed measurement to take on.
+ *
+ * Raw per-event speed is noisy — the gap between two pointer events can be one
+ * millisecond or twenty — so a throw judged on the last event alone is a
+ * lottery. Weighted towards the newest, because a throw is about where the hand
+ * was going at the end, not on average.
+ */
+const VELOCITY_BLEND = 0.6;
+
+/**
+ * How stale the last movement can be and still count as a throw, in ms.
+ *
+ * A hand that stopped, held, and then let go has thrown nothing. Without this,
+ * the last measured speed — from whenever the hand last moved — would be
+ * applied to a release that was deliberately still.
+ */
+const THROW_WINDOW_MS = 90;
 
 export function useInChatCarry(options: InChatCarryOptions): {
   carrying: boolean;
@@ -126,9 +167,12 @@ export function useInChatCarry(options: InChatCarryOptions): {
       return;
     }
 
+    const fresh = performance.now() - gesture.lastAt < THROW_WINDOW_MS;
     optionsRef.current.onRelease({
       x: gesture.x - gesture.grabX,
       y: gesture.y - gesture.grabY,
+      // px/ms while it is measured, px/s for anyone doing physics with it.
+      velocity: fresh ? { x: gesture.vx * 1000, y: gesture.vy * 1000 } : { x: 0, y: 0 },
       clientX: gesture.x,
       clientY: gesture.y,
     });
@@ -161,6 +205,22 @@ export function useInChatCarry(options: InChatCarryOptions): {
     const track = (move: PointerEvent) => {
       const gesture = gestureRef.current;
       if (!gesture || move.pointerId !== gesture.pointerId) return;
+
+      const now = performance.now();
+      const gap = Math.max(1, now - gesture.lastAt);
+      // Blended rather than taken raw, and only over a plausible frame gap: a
+      // 200ms stall between events would otherwise read as a slow, deliberate
+      // movement when it was in fact no movement at all.
+      if (gap < 120) {
+        gesture.vx += ((move.clientX - gesture.lastX) / gap - gesture.vx) * VELOCITY_BLEND;
+        gesture.vy += ((move.clientY - gesture.lastY) / gap - gesture.vy) * VELOCITY_BLEND;
+      } else {
+        gesture.vx = 0;
+        gesture.vy = 0;
+      }
+      gesture.lastX = move.clientX;
+      gesture.lastY = move.clientY;
+      gesture.lastAt = now;
 
       gesture.x = move.clientX;
       gesture.y = move.clientY;
@@ -205,6 +265,11 @@ export function useInChatCarry(options: InChatCarryOptions): {
       grabY: event.clientY - rect.top,
       x: event.clientX,
       y: event.clientY,
+      vx: 0,
+      vy: 0,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      lastAt: performance.now(),
       carrying: false,
       detach: () => {
         window.removeEventListener('pointermove', track);
@@ -214,6 +279,7 @@ export function useInChatCarry(options: InChatCarryOptions): {
     };
 
     node.setPointerCapture(event.pointerId);
+    optionsRef.current.onPress?.();
   }, [finish]);
 
   const onClickCapture = useCallback((event: React.MouseEvent) => {

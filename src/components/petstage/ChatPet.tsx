@@ -18,6 +18,7 @@ import { useReducedMotion } from '@/shared/ui/Motion';
 
 import {
   activatePet,
+  assignPetToSession,
   readDisplayPet,
   readSessionPet,
   readStage,
@@ -27,7 +28,7 @@ import {
 import { onDesktopPetDetails, placeDesktopPetAt } from './desktop-handoff';
 import { PetDetailsPanel } from './PetDetailsPanel';
 import { PetPill } from './PetPill';
-import { advanceMotion, type Motion } from './pet-motion';
+import { advanceMotion, type Bounds, type Motion } from './pet-motion';
 import { fpsForState } from './sprite-rate';
 import { useChatActivity } from './useChatActivity';
 import { useInChatCarry } from './useInChatCarry';
@@ -66,8 +67,16 @@ import { useInChatCarry } from './useInChatCarry';
  * dropped: the gesture already said where he should be.
  */
 
-/** His designed standing height, in CSS pixels, before the user's own size. */
-const PET_HEIGHT = 72;
+/**
+ * His designed standing height in the chat, in CSS pixels, before the user's
+ * own size.
+ *
+ * Raised from 72 to close the gap with the desktop pet, who stands at 128: the
+ * same animal was noticeably smaller indoors, and the jump between the two
+ * surfaces was the thing that read as wrong rather than either size on its own.
+ * The desktop pet is deliberately unchanged.
+ */
+const PET_HEIGHT = 96;
 
 /**
  * The height the tray's drag layer draws a carried pet at.
@@ -93,6 +102,9 @@ const GREETING_MS = 900;
 
 /** How long a click's jump lasts before he settles again. */
 const REACTION_MS = 1200;
+
+/** The fastest a throw can leave the hand, in px/s. */
+const MAX_THROW = 2400;
 
 /**
  * How much of the margin beside the transcript he strolls in.
@@ -238,6 +250,15 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   ), [pet]);
   const fullWidth = Math.round(fullHeight * widthPerHeight);
 
+  /**
+   * The room, for the frame loop.
+   *
+   * A ref because the loop is started once and must not be restarted when the
+   * window resizes — the last time this was a dependency, the rAF cancelled
+   * itself on every layout pass and he stopped walking mid-stride.
+   */
+  const roomRef = useRef<Bounds>({ maxX: Number.POSITIVE_INFINITY, ceiling: Number.NEGATIVE_INFINITY });
+
   const frameRef = useRef<number | undefined>(undefined);
   const wanderRef = useRef<number | undefined>(undefined);
   const gestureRef = useRef<number | undefined>(undefined);
@@ -377,6 +398,14 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     };
   }, [overlay, pet, fullWidth, fullHeight]);
 
+  // The walls he can be thrown against, put where the frame loop can read them
+  // without being restarted by a resize.
+  useEffect(() => {
+    roomRef.current = geometry
+      ? { maxX: geometry.maxX, ceiling: -geometry.floorTop }
+      : { maxX: Number.POSITIVE_INFINITY, ceiling: Number.NEGATIVE_INFINITY };
+  }, [geometry]);
+
   /** Walks him to a target. */
   const walkTo = useCallback((target: number) => {
     setMotion((current) => (current ? { ...current, target } : current));
@@ -400,6 +429,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     const base = {
       arrival,
       vy: 0,
+      vx: 0,
       target: null,
       facing: 'right' as const,
       gesture: null,
@@ -467,7 +497,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       const elapsed = (now - previous) / 1000;
       previous = now;
 
-      setMotion((current) => (current ? advanceMotion(current, elapsed) : current));
+      setMotion((current) => (current ? advanceMotion(current, elapsed, roomRef.current) : current));
 
       frameRef.current = requestAnimationFrame(step);
     };
@@ -561,6 +591,20 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   }, []);
 
   const { carrying, onPointerDown, onClickCapture } = useInChatCarry({
+    onPress: () => {
+      // Pressed, not yet dragged. Whatever was moving him stops now: he used to
+      // carry on strolling for the few frames before the drag threshold and
+      // then snap to the hand, which is the "teleports elsewhere for a frame".
+      setMotion((current) => (current ? {
+        ...current,
+        target: null,
+        vx: 0,
+        // Grabbed mid-arrival, he is simply here now. The alternative is a
+        // sprite whose size and position are still being interpolated while a
+        // hand is holding it, which is a frame of him somewhere he is not.
+        grow: 1,
+      } : current));
+    },
     onStart: () => {
       // Activated at the first movement, not when he crosses the edge.
       //
@@ -591,15 +635,21 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       if (isOutside !== outsideRef.current) {
         outsideRef.current = isOutside;
         setOutside(isOutside);
-        if (isOutside) takeOutside(pet.definition.id, true);
-        else suppressDesktopPet(true);
+        // Moved before it is shown, so the window never appears for a frame at
+        // wherever it was left last time and then jumps to the hand.
+        if (isOutside) {
+          placeDesktopPetAt(pointer.x, pointer.y, true);
+          takeOutside(pet.definition.id, true);
+        } else {
+          suppressDesktopPet(true);
+        }
       }
 
       if (isOutside) {
         // He is the desktop window now, and it follows the pointer directly.
         // No grab offset and no read-back: every position comes from the hand,
         // so nothing can accumulate — which is what six rounds of drift were.
-        placeDesktopPetAt(pointer.x, pointer.y);
+        placeDesktopPetAt(pointer.x, pointer.y, true);
         return;
       }
 
@@ -626,7 +676,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
       activatedRef.current = null;
       setMotion((current) => (current ? { ...current, carried: false, vy: 0 } : current));
     },
-    onRelease: ({ clientX, clientY }) => {
+    onRelease: ({ clientX, clientY, velocity }) => {
       const wasOutside = outsideRef.current;
       outsideRef.current = false;
       setOutside(false);
@@ -640,15 +690,26 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         return;
       }
 
-      // Let go inside: the hand opens and he falls from there. Clamped
-      // horizontally, because the hand may have been over the edge of the
-      // overlay even though the pet's middle was not.
+      /*
+       * Let go inside: he keeps the hand's speed and gravity does the rest.
+       *
+       * A throw and a handoff are the same gesture ending in two different
+       * places, and they are told apart by *where the hand was*, not by how
+       * fast it was going: crossing the chat's edge while still holding him is
+       * a handoff — it already happened, above, in `onMove` — and opening the
+       * hand inside is a throw, however hard. So he cannot be flung out of the
+       * window; thrown at the sidebar he hits the wall and bounces.
+       */
       setMotion((current) => (current ? {
         ...current,
         carried: false,
-        vy: 0,
+        target: null,
         x: Math.max(0, Math.min(geometry?.maxX ?? current.x, current.x)),
         y: reduced ? 0 : current.y,
+        // Capped: a flick of the wrist can measure thousands of pixels a
+        // second, and past a point the arc is a teleport with extra steps.
+        vx: reduced ? 0 : Math.max(-MAX_THROW, Math.min(MAX_THROW, velocity.x)),
+        vy: reduced ? 0 : Math.max(-MAX_THROW, Math.min(MAX_THROW, velocity.y)),
         squash: reduced,
       } : current));
     },
@@ -708,6 +769,22 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         : readStage(desktopPet)}
       onChange={(next) => changeStage(desktopPet.definition.id, next)}
       onClose={() => setDesktopPet(null)}
+      /*
+       * Only when there is a conversation open to send him to, and only when he
+       * is not already its pet — an action that does nothing is worse than an
+       * action that is missing, because you have to try it to find out.
+       */
+      onSendToChat={sessionId && desktopPet.definition.id !== pet?.definition.id
+        ? () => {
+          const target = sessionId;
+          const petId = desktopPet.definition.id;
+          setDesktopPet(null);
+          setHandedOffArrival(null);
+          void assignPetToSession(target, petId)
+            .then(() => setReloadToken((current) => current + 1))
+            .catch(() => {});
+        }
+        : undefined}
       onHide={() => {
         setDesktopPet(null);
         // The persisted hide, the same one his X uses. He is not unassigned and
@@ -789,7 +866,6 @@ export function ChatPet({ sessionId }: ChatPetProps) {
             touchAction: 'none',
             userSelect: 'none',
           }}
-          title={`${pet.definition.displayName} — right-click for options, or carry him out of the window`}
         >
           <PetSprite
             pet={pet}

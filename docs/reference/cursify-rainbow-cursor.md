@@ -1,0 +1,250 @@
+# Rainbow cursor — cursify reference
+
+Source: <https://cursify.ui-layouts.com/components/rainbow-cursor>, fetched for the
+`creative` preset. Kept verbatim so future trail work does not have to re-fetch
+it, and so the reimplementation below can be checked against the original.
+
+## What it actually does
+
+A 2D canvas, full-viewport, `pointer-events: none`. It keeps `length` particles
+in a chain; each frame every particle eases toward the one in front of it by
+`trailSpeed`, which is what produces the lag and the smooth curve. Then it
+strokes the *same* polyline once per colour, each stroke offset vertically by
+`index * size`, so the six lines stack into a rainbow ribbon. The colour of each
+stroke is interpolated between adjacent palette entries by a slowly advancing
+offset, so the bands cycle through each other over time.
+
+Two details that matter for reproducing the look:
+
+- The vertical offset per colour is what makes it a *ribbon* rather than six
+  coincident lines. It is a stacking trick, not a gradient.
+- `lineCap: 'round'` and `lineJoin: 'round'` are doing most of the softness.
+
+## Verbatim source
+
+```tsx
+// @ts-nocheck
+'use client';
+
+import React, { useEffect, useRef } from 'react';
+
+interface RainbowCursorProps {
+  element?: HTMLElement;
+  length?: number;
+  colors?: string[];
+  size?: number;
+  trailSpeed?: number;
+  colorCycleSpeed?: number;
+  blur?: number;
+  pulseSpeed?: number;
+  pulseMin?: number;
+  pulseMax?: number;
+  zIndex?: number;
+}
+
+const RainbowCursor: React.FC<RainbowCursorProps> = ({
+  element,
+  length = 20,
+  colors = ['#FE0000', '#FD8C00', '#FFE500', '#119F0B', '#0644B3', '#C22EDC'],
+  size = 3,
+  trailSpeed = 0.4,
+  colorCycleSpeed = 0.002,
+  blur = 0,
+  pulseSpeed = 0.01,
+  pulseMin = 0.8,
+  pulseMax = 1.2,
+  zIndex
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const contextRef = useRef<CanvasRenderingContext2D | null>(null);
+  const cursorRef = useRef({ x: 0, y: 0 });
+  const particlesRef = useRef<Array<{ position: { x: number; y: number } }>>([]);
+  const animationFrameRef = useRef<number>(undefined);
+  const cursorsInittedRef = useRef(false);
+  const timeRef = useRef(0);
+
+  class Particle {
+    position: { x: number; y: number };
+    constructor(x: number, y: number) {
+      this.position = { x, y };
+    }
+  }
+
+  const interpolateColors = (color1: string, color2: string, factor: number) => {
+    const r1 = parseInt(color1.substr(1, 2), 16);
+    const g1 = parseInt(color1.substr(3, 2), 16);
+    const b1 = parseInt(color1.substr(5, 2), 16);
+    const r2 = parseInt(color2.substr(1, 2), 16);
+    const g2 = parseInt(color2.substr(3, 2), 16);
+    const b2 = parseInt(color2.substr(5, 2), 16);
+    const r = Math.round(r1 + (r2 - r1) * factor);
+    const g = Math.round(g1 + (g2 - g1) * factor);
+    const b = Math.round(b1 + (b2 - b1) * factor);
+    return `rgb(${r}, ${g}, ${b})`;
+  };
+
+  const getPulseSize = (baseSize: number, time: number) => {
+    const pulse = Math.sin(time * pulseSpeed);
+    const scaleFactor = pulseMin + ((pulse + 1) * (pulseMax - pulseMin)) / 2;
+    return baseSize * scaleFactor;
+  };
+
+  useEffect(() => {
+    const hasWrapperEl = element !== undefined;
+    const targetElement = hasWrapperEl ? element : document.body;
+
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (prefersReducedMotion.matches) {
+      console.log('Reduced motion is enabled - cursor animation disabled');
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { alpha: true });
+    if (!context) return;
+
+    canvasRef.current = canvas;
+    contextRef.current = context;
+
+    canvas.style.top = '0px';
+    canvas.style.left = '0px';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.position = hasWrapperEl ? 'absolute' : 'fixed';
+    canvas.style.zIndex = zIndex ? zIndex.toString() : '';
+
+    if (hasWrapperEl) {
+      element?.appendChild(canvas);
+      canvas.width = element.clientWidth;
+      canvas.height = element.clientHeight;
+    } else {
+      document.body.appendChild(canvas);
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (hasWrapperEl && element) {
+        const boundingRect = element.getBoundingClientRect();
+        cursorRef.current.x = e.clientX - boundingRect.left;
+        cursorRef.current.y = e.clientY - boundingRect.top;
+      } else {
+        cursorRef.current.x = e.clientX;
+        cursorRef.current.y = e.clientY;
+      }
+      if (!cursorsInittedRef.current) {
+        cursorsInittedRef.current = true;
+        for (let i = 0; i < length; i++) {
+          particlesRef.current.push(new Particle(cursorRef.current.x, cursorRef.current.y));
+        }
+      }
+    };
+
+    const onWindowResize = () => {
+      if (hasWrapperEl && element) {
+        canvas.width = element.clientWidth;
+        canvas.height = element.clientHeight;
+      } else {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+    };
+
+    const updateParticles = () => {
+      if (!contextRef.current || !canvasRef.current) return;
+      const ctx = contextRef.current;
+      const canvas = canvasRef.current;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineJoin = 'round';
+
+      if (blur > 0) {
+        ctx.filter = `blur(${blur}px)`;
+      }
+
+      const particleSets: any[] = [];
+      let x = cursorRef.current.x;
+      let y = cursorRef.current.y;
+
+      particlesRef.current.forEach((particle, index) => {
+        const nextParticle = particlesRef.current[index + 1] || particlesRef.current[0];
+        particle.position.x = x;
+        particle.position.y = y;
+        particleSets.push({ x, y });
+        x += (nextParticle.position.x - particle.position.x) * trailSpeed;
+        y += (nextParticle.position.y - particle.position.y) * trailSpeed;
+      });
+
+      timeRef.current += colorCycleSpeed;
+      const colorOffset = timeRef.current % 1;
+      const currentSize = getPulseSize(size, timeRef.current);
+
+      colors.forEach((color, index) => {
+        const nextColor = colors[(index + 1) % colors.length];
+        ctx.beginPath();
+        ctx.strokeStyle = interpolateColors(color, nextColor, (index + colorOffset) / colors.length);
+
+        if (particleSets.length) {
+          ctx.moveTo(particleSets[0].x, particleSets[0].y + index * (currentSize - 1));
+        }
+
+        particleSets.forEach((set, particleIndex) => {
+          if (particleIndex !== 0) {
+            ctx.lineTo(set.x, set.y + index * currentSize);
+          }
+        });
+
+        ctx.lineWidth = currentSize;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      });
+    };
+
+    const loop = () => {
+      updateParticles();
+      animationFrameRef.current = requestAnimationFrame(loop);
+    };
+
+    targetElement.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('resize', onWindowResize);
+    loop();
+
+    return () => {
+      if (canvasRef.current) canvasRef.current.remove();
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      targetElement.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('resize', onWindowResize);
+    };
+  }, [element, length, colors, size, trailSpeed, colorCycleSpeed, blur, pulseSpeed, pulseMin, pulseMax]);
+
+  return null;
+};
+
+export default RainbowCursor;
+```
+
+| prop | default | purpose |
+|---|---|---|
+| `length` | 20 | particles in the chain |
+| `colors` | six-colour rainbow | palette; one stroke per entry |
+| `size` | 3 | stroke width, and the per-colour vertical offset |
+| `trailSpeed` | 0.4 | easing per frame toward the particle in front |
+| `colorCycleSpeed` | 0.002 | how fast the bands rotate through the palette |
+| `blur` | 0 | `ctx.filter` blur |
+| `pulseSpeed` / `pulseMin` / `pulseMax` | 0.01 / 0.8 / 1.2 | width oscillation |
+
+## How ours differs
+
+`src/components/appearance/trailCanvas.ts` reimplements this rather than
+vendoring it, for three reasons:
+
+- **Colours come from theme roles**, not a hard-coded hex array, so the trail
+  re-tints with the theme like every other app-owned paint.
+- **It runs one frame loop for the whole appearance layer**, and stops when the
+  pointer stops, instead of an unconditional `requestAnimationFrame` forever.
+  The original loops at display rate for the life of the page whether or not
+  anything moved.
+- The original never removes particles or exits its loop, and its
+  `updateParticles` mutates the chain while reading it (`particle.position` is
+  written before `nextParticle.position` is read). Ours records the pointer path
+  and eases along it, which produces the same visual and is easier to reason
+  about.
