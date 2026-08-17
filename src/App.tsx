@@ -65,6 +65,27 @@ export default function App() {
     }
   }, []);
 
+  /*
+    The shortcut every desktop app has for this, so the answer to "where are the
+    settings" can be muscle memory rather than a search. Ctrl+, on Windows and
+    Linux, Cmd+, on macOS; it toggles, because a shortcut that only opens leaves
+    you reaching for the mouse to close what you just opened.
+
+    Not registered in the main process like the panic key: this one is ordinary,
+    and a page that has focus in a text field should still get it — `,` with a
+    modifier is not something a composer needs.
+  */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== ',' || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+      event.preventDefault();
+      setSettingsOpen((current) => !current);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const bootstrappedRef = useRef(false);
   useEffect(() => {
     if (bootstrappedRef.current || sessionId) return;
@@ -173,6 +194,7 @@ export default function App() {
               onRenameSession={(title) => void renameSession(title)}
               onChangeCwd={(next) => void changeCwd(next)}
               onToggleTerminal={() => setTerminalOpen((current) => !current)}
+              onOpenSettings={() => setSettingsOpen(true)}
             />
 
             <div className="flex min-h-0 flex-1 flex-col">

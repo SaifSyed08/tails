@@ -1,5 +1,5 @@
-import { Check, Eye, Monitor, Moon, Pencil, Sparkles, Sun, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { Check, Eye, Monitor, Moon, Pencil, Sparkles, Sun, Trash2, Volume2, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
   readColorMode,
@@ -7,9 +7,18 @@ import {
   subscribeColorMode,
   type ColorModePreference,
 } from '@/components/appearance/colorMode';
+import {
+  DEFAULT_VOICE,
+  readDefaultVoice,
+  resolveVoice,
+  saveDefaultVoice,
+  type DefaultVoice,
+} from '@/components/settings/default-voice';
+import { useSpeech } from '@/components/voice/useSpeech';
+import { VoiceSettings } from '@/components/voice/VoiceSettings';
 import { api, type ThemeSummary } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { Reveal, Stagger } from '@/shared/ui/Motion';
+import { Reveal, Stagger, useReducedMotion } from '@/shared/ui/Motion';
 
 type SettingsPanelProps = {
   sessionId: string | null;
@@ -17,6 +26,28 @@ type SettingsPanelProps = {
 };
 
 const INTRO_DISABLED_KEY = 'tails.introDisabled';
+
+/**
+ * Every section, in the order they appear, for the index at the top.
+ *
+ * The list exists because the panel had grown to five headings in one scroll
+ * and the answer to "where do I change the voice" was "scroll and find out".
+ * Declared once and read by both the index and the sections themselves, so a
+ * heading cannot be renamed in one place and left stale in the other —
+ * `settings-sections.test.ts` asserts every id here is on a real section.
+ */
+const SECTIONS = [
+  { id: 'settings-appearance', label: 'Appearance' },
+  { id: 'settings-colour-mode', label: 'Colour mode' },
+  { id: 'settings-instructions', label: 'Instructions' },
+  // The two halves of voice, adjacent and named apart: the voice module's
+  // section is the machine listening, this module's is the machine speaking.
+  // They share a word and nothing else, which is exactly the case an index has
+  // to disambiguate rather than paper over.
+  { id: 'settings-voice-input', label: 'Voice' },
+  { id: 'settings-voice', label: 'Default voice' },
+  { id: 'settings-startup', label: 'Startup' },
+] as const;
 
 /**
  * Approximates a theme's look as three swatches.
@@ -78,7 +109,7 @@ function ColorModeControl() {
   ];
 
   return (
-    <section className="space-y-2 border-t border-border pt-5">
+    <section id="settings-colour-mode" className="space-y-2 border-t border-border pt-5">
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-sm font-semibold">Colour mode</h3>
         {pinnedMode ? (
@@ -203,7 +234,7 @@ function ConversationInstructions() {
   const dirty = draft !== saved;
 
   return (
-    <section className="space-y-2 border-t border-border pt-5">
+    <section id="settings-instructions" className="space-y-2 border-t border-border pt-5">
       <div>
         <h3 className="text-sm font-semibold">Conversation instructions</h3>
         <p className="mt-0.5 text-sm text-muted-foreground">
@@ -283,6 +314,234 @@ function ConversationInstructions() {
           : 'Applies from your next message, in every conversation.'}
       </p>
     </section>
+  );
+}
+
+/** What the preview says. Long enough that pitch and speed are audible in it. */
+const VOICE_PREVIEW_LINE = 'This is how I will sound when nothing else has a voice of its own.';
+
+/**
+ * The voice for everything that has not been given one.
+ *
+ * Per-pet voices already existed; a chat with no pet, or a pet nobody has
+ * chosen a voice for, had nothing underneath them. This is that floor, and the
+ * paragraph under the heading states the whole order rather than leaving the
+ * user to infer it — the interesting case is the one that looks like a bug from
+ * outside, a pet deliberately kept quiet, which this must not override.
+ *
+ * Saved as you change it, unlike the instructions box above. These are three
+ * discrete controls with no half-written state, and a Save button next to a
+ * slider you have just dragged is a step nobody expects to have to take.
+ */
+function DefaultVoiceControl() {
+  const speech = useSpeech();
+  const [voice, setVoice] = useState<DefaultVoice>(DEFAULT_VOICE);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /*
+    A slider fires per step, so one sweep is thirty writes — and the last write
+    to arrive is not necessarily the last one sent, which is how a dragged value
+    ends up stored two steps behind where it was left. Local state stays
+    authoritative and the write is debounced behind it.
+  */
+  const pendingRef = useRef<DefaultVoice | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    readDefaultVoice()
+      .then((stored) => {
+        if (cancelled) return;
+        setVoice(stored);
+        setLoaded(true);
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) return;
+        setError(loadError instanceof Error ? loadError.message : 'Could not load the default voice.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => () => {
+    // Closing the panel must not swallow a change made a moment before. The
+    // pending write is fired rather than cancelled, and its result dropped —
+    // there is no longer a control to report an error on.
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    if (pendingRef.current) void saveDefaultVoice(pendingRef.current).catch(() => {});
+  }, []);
+
+  const commit = (next: DefaultVoice) => {
+    setVoice(next);
+    setError(null);
+    pendingRef.current = next;
+
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      pendingRef.current = null;
+      // The response is not applied back. The controls cannot produce a value
+      // outside the server's clamp, so there is nothing to correct, and
+      // adopting a reply that raced a later drag is the bug this avoids.
+      void saveDefaultVoice(next).catch((saveError: unknown) => {
+        setError(saveError instanceof Error ? saveError.message : 'That voice could not be saved.');
+      });
+    }, 300);
+  };
+
+  // Deliberately resolved with no pet: this is exactly the "a chat with nobody
+  // in it" path, so the preview is the real fallback rather than a
+  // demonstration of one.
+  const preview = () => {
+    if (speech.speaking) {
+      speech.hush();
+      return;
+    }
+    const settings = resolveVoice(null, voice, speech.voices);
+    if (settings) speech.speak(VOICE_PREVIEW_LINE, settings);
+  };
+
+  return (
+    <section id="settings-voice" className="space-y-3 border-t border-border pt-5">
+      <div>
+        <h3 className="text-sm font-semibold">Default voice</h3>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Which voice reads replies aloud, for a chat with no pet and for a pet who has not
+          been given a voice of his own. A pet with his own voice keeps it, and a pet set to
+          stay quiet stays quiet.
+        </p>
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+
+      {!speech.supported ? (
+        <p className="text-xs text-muted-foreground">
+          This machine has no speech synthesiser, so there is no voice to choose.
+        </p>
+      ) : (
+        <>
+          <label className="block space-y-1 text-sm">
+            <span>Speaks with</span>
+            <select
+              value={voice.name ?? ''}
+              disabled={!loaded}
+              onChange={(event) => commit({ ...voice, name: event.target.value || null })}
+              data-tails-part="input"
+              // `focus:ring-*` is inert on a themed part — the contract owns
+              // box-shadow at (0,2,0) — so the focus indicator is an outline.
+              className="w-full px-2 py-1 text-sm outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
+            >
+              {/* The platform's own pick, named as such. Offering the resolved
+                  voice by name here would claim a choice the user never made,
+                  and it is not stable across machines. */}
+              <option value="">Whatever this machine prefers</option>
+              {speech.voices.map((available) => (
+                <option key={available.name} value={available.name}>
+                  {available.name}
+                  {available.lang ? ` (${available.lang})` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block space-y-1 text-sm">
+            <span className="flex items-baseline justify-between">
+              <span>Pitch</span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {voice.pitch.toFixed(1)}
+              </span>
+            </span>
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.1}
+              value={voice.pitch}
+              disabled={!loaded}
+              onChange={(event) => commit({ ...voice, pitch: Number(event.target.value) })}
+              className="w-full accent-primary disabled:opacity-60"
+            />
+          </label>
+
+          <label className="block space-y-1 text-sm">
+            <span className="flex items-baseline justify-between">
+              <span>Speed</span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {voice.rate.toFixed(1)}
+              </span>
+            </span>
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.1}
+              value={voice.rate}
+              disabled={!loaded}
+              onChange={(event) => commit({ ...voice, rate: Number(event.target.value) })}
+              className="w-full accent-primary disabled:opacity-60"
+            />
+          </label>
+
+          {/* Nobody picks a voice from a name, and nobody judges a pitch from a
+              number. The pet panel makes the same call for the same reason. */}
+          <button
+            type="button"
+            onClick={preview}
+            disabled={!loaded || speech.voices.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors duration-quick hover:bg-accent hover:text-foreground disabled:opacity-50"
+          >
+            <Volume2 className="size-3.5" aria-hidden="true" />
+            {speech.speaking ? 'Stop' : 'Hear it'}
+          </button>
+
+          {/* The other half of the split the user tripped over: per-pet voices
+              live on the pet, this lives on the app, and each side has to say
+              where the other one is or the split is just two places to look. */}
+          <p className="text-xs text-muted-foreground">
+            To give one pet a voice of his own, open him from the sidebar carousel or from
+            the chat and use the Voice section of his panel.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
+ * A jump link per section, so the whole panel is legible without scrolling it.
+ *
+ * The complaint this answers was about *finding* a setting, and half of that
+ * problem survives opening the panel: five headings in one scroll means the
+ * ones below the fold do not exist until you go looking. Scrolled rather than
+ * linked by hash, because a `#fragment` in an app with no router is a URL
+ * change that means nothing and does not survive a reload.
+ */
+function SectionIndex() {
+  const reduced = useReducedMotion();
+
+  return (
+    <nav aria-label="Settings sections" className="flex flex-wrap gap-1.5">
+      {SECTIONS.map((section) => (
+        <button
+          key={section.id}
+          type="button"
+          onClick={() => document.getElementById(section.id)?.scrollIntoView({
+            behavior: reduced ? 'auto' : 'smooth',
+            block: 'start',
+          })}
+          className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+        >
+          {section.label}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -387,7 +646,9 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
           </header>
 
           <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-5">
-            <section className="space-y-3">
+            <SectionIndex />
+
+            <section id="settings-appearance" className="space-y-3">
               <div>
                 <h3 className="text-sm font-semibold">Appearance</h3>
                 <p className="mt-0.5 text-sm text-muted-foreground">
@@ -564,7 +825,18 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
 
             <ConversationInstructions />
 
-            <section className="space-y-2 border-t border-border pt-5">
+            {/* The voice module's own section, mounted whole — it owns its
+                fetching, its state and its copy, including licence wording that
+                belongs next to the code that knows why. The wrapper is only
+                here to carry the index's anchor and the divider every other
+                section draws for itself. */}
+            <div id="settings-voice-input" className="border-t border-border pt-5">
+              <VoiceSettings />
+            </div>
+
+            <DefaultVoiceControl />
+
+            <section id="settings-startup" className="space-y-2 border-t border-border pt-5">
               <h3 className="text-sm font-semibold">Startup</h3>
               <label className="flex cursor-pointer items-start gap-3">
                 <input

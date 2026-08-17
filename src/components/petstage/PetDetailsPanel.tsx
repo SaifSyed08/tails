@@ -224,7 +224,7 @@ export function PetDetailsPanel({
                   <span>Speaks with</span>
                   <select
                     data-tails-part="input"
-                    className="w-full px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full px-2 py-1 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
                     value={voice ? (voice.engine === 'none' ? '__none' : voice.name ?? '') : '__unset'}
                     onChange={(event) => {
                       const picked = event.target.value;

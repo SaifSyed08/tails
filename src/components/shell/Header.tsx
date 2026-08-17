@@ -1,4 +1,4 @@
-import { Check, FolderOpen, PanelLeftOpen, SquareTerminal, X } from 'lucide-react';
+import { Check, FolderOpen, PanelLeftOpen, Settings, SquareTerminal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -12,6 +12,7 @@ type HeaderProps = {
   onRenameSession: (title: string) => void;
   onChangeCwd: (cwd: string) => void;
   onToggleTerminal: () => void;
+  onOpenSettings: () => void;
 };
 
 /**
@@ -132,6 +133,7 @@ export function Header({
   onRenameSession,
   onChangeCwd,
   onToggleTerminal,
+  onOpenSettings,
 }: HeaderProps) {
   return (
     <header
@@ -191,6 +193,25 @@ export function Header({
           )}
         >
           {terminalOpen ? <X className="size-4" /> : <SquareTerminal className="size-4" />}
+        </button>
+
+        {/*
+          Settings, in the one row that is always on screen.
+
+          It already existed at the foot of the sidebar, and that was the whole
+          problem: collapse the rail — which is the first thing anyone does for
+          a wider chat — and there was no way to reach it at all. A second
+          entry point rather than a moved one, because the sidebar's labelled
+          row is the more discoverable of the two when it is there.
+        */}
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          aria-label="Settings"
+          title="Settings (Ctrl+,)"
+          className="rounded-md p-1.5 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+        >
+          <Settings className="size-4" />
         </button>
       </div>
 

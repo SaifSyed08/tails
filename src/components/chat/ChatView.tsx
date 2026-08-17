@@ -14,6 +14,8 @@ import { QuestionCard } from '@/components/chat/QuestionCard';
 import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
+import { useArmedWakeWords } from '@/components/voice/useArmedWakeWords';
+import { useSpeech } from '@/components/voice/useSpeech';
 import { useVoiceDictation } from '@/components/voice/useVoiceDictation';
 import { api } from '@/lib/api';
 import type { AttachmentPayload, ChatRow, MessageAttachment } from '@/types/chat';
@@ -192,9 +194,13 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     it because the recogniser seeds its vocabulary from the conversation's
     folder — that is what keeps filenames and identifiers intact.
   */
+  const armedWakeWords = useArmedWakeWords();
+  const speech = useSpeech();
   const voice = useVoiceDictation({
     onText: (text) => composerRef.current?.append(text),
     cwd,
+    armed: armedWakeWords,
+    speech,
   });
   const [petPickerOpen, setPetPickerOpen] = useState(false);
   const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);

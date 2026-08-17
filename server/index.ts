@@ -10,6 +10,7 @@ import { createAppearanceRouter } from '@/modules/appearance/appearance.routes.j
 import { attachChatGateway } from '@/modules/chat/chat-gateway.js';
 import { createChatRouter } from '@/modules/chat/chat.routes.js';
 import { createPetsRouter } from '@/modules/pets/index.js';
+import { createPreferencesRouter } from '@/modules/preferences/preferences.routes.js';
 import { createSessionsRouter } from '@/modules/sessions/sessions.routes.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { attachTerminalGateway } from '@/modules/terminal/terminal-gateway.js';
@@ -55,6 +56,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/chat', createChatRouter());
+app.use('/api/preferences', createPreferencesRouter());
 app.use('/api/sessions', createSessionsRouter());
 app.use('/api/appearance', createAppearanceRouter());
 app.use('/api/pets', createPetsRouter());

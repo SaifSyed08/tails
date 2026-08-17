@@ -171,11 +171,11 @@ export const api = {
     request<{ found: boolean; reason?: string; installUrl?: string }>('/chat/cli'),
 
   getConversationInstructions: () =>
-    request<ConversationInstructions>('/chat/instructions'),
+    request<ConversationInstructions>('/preferences/conversation-instructions'),
 
   /** Resolves to what was stored, which is the trimmed and clamped form. */
   setConversationInstructions: (instructions: string) =>
-    request<ConversationInstructions>('/chat/instructions', {
+    request<ConversationInstructions>('/preferences/conversation-instructions', {
       method: 'PUT',
       body: JSON.stringify({ instructions }),
     }),

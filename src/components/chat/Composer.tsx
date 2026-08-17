@@ -1,14 +1,17 @@
 import {
   ArrowUp,
+  AudioLines,
   Ear,
   ImagePlus,
   Loader2,
   Mic,
+  MicOff,
   Paperclip,
   PawPrint,
   Plus,
   Sparkles,
   Square,
+  Volume2,
   Wand2,
   X,
 } from 'lucide-react';
@@ -23,7 +26,11 @@ import {
 } from 'react';
 
 import { ModelPicker } from '@/components/chat/ModelPicker';
-import { describeVoiceControl, type VoiceDictation } from '@/components/chat/voice-contract';
+import {
+  describeVoiceControl,
+  runVoiceAction,
+  type VoiceModeState,
+} from '@/components/chat/voice-contract';
 import {
   CommandToken,
   readStyledCommand,
@@ -408,7 +415,7 @@ type ComposerProps = {
    * wired: the button renders disabled and explains itself rather than
    * pretending to work.
    */
-  voice?: VoiceDictation;
+  voice?: VoiceModeState;
 };
 
 /**
@@ -806,29 +813,42 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
         {/*
           The microphone, and the only honest indicator that this app is
-          listening. State is carried by shape as well as by colour and motion
-          — the icon changes, the accessible name changes — because an
-          indicator that exists only as a pulse is invisible to anyone who has
-          motion turned off, and this is the one control where "is it on?" must
-          never be a guess.
+          listening.
+
+          `waiting` — armed for a wake word — is the state that matters here.
+          The microphone is open and nothing is being captured, and it must not
+          read as "off": it gets its own icon, its own accessible name that says
+          the microphone is on, its own ring, and a live level meter. A
+          permanently open microphone that looks identical to a closed one is
+          the failure this whole feature exists to avoid.
+
+          State is carried by shape and by name as well as by colour and motion.
+          An indicator that exists only as a pulse is invisible to anyone who
+          has motion turned off, and "is my microphone on?" must never be a
+          guess.
         */}
         <button
           type="button"
-          onClick={() => (voiceControl.pressed ? voice?.stop() : voice?.start())}
+          onClick={() => runVoiceAction(voice, voiceControl.action)}
           disabled={voiceControl.disabled}
           aria-label={voiceControl.label}
           aria-pressed={voiceControl.pressed}
-          aria-busy={voiceControl.status === 'transcribing'}
+          aria-busy={voiceControl.mode === 'transcribing'}
           title={voiceControl.title}
           className={cn(
             'relative rounded-full p-2 transition-colors duration-quick',
-            voiceControl.status === 'listening'
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+            voiceControl.mode === 'listening' && 'bg-primary text-primary-foreground',
+            // Open-but-idle is deliberately not the capture colour: it reads as
+            // armed rather than recording, while still being unmistakably on.
+            voiceControl.mode === 'waiting'
+              && 'text-primary ring-2 ring-inset ring-primary/60',
+            voiceControl.mode === 'speaking' && 'text-primary',
+            !voiceControl.live && voiceControl.mode !== 'listening'
+              && 'text-muted-foreground hover:bg-accent hover:text-foreground',
             voiceControl.disabled && 'opacity-40 hover:bg-transparent hover:text-muted-foreground',
           )}
         >
-          {voiceControl.status === 'listening' && !reduced ? (
+          {voiceControl.mode === 'listening' && !reduced ? (
             // The same ping the thinking indicator uses, so "something is
             // live" reads the same way everywhere in the app.
             <span
@@ -836,8 +856,30 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               aria-hidden="true"
             />
           ) : null}
-          {voiceControl.status === 'transcribing' ? (
-            <Loader2 className={cn('size-4', !reduced && 'animate-spin')} />
+
+          {voiceControl.live ? (
+            /*
+              The level meter. Scaled from the actual input, so it moves when
+              the room is heard and sits still when it is not — which is what
+              makes an open microphone believable rather than merely claimed.
+              Rendered regardless of reduced-motion: it is not decoration, it
+              is the evidence.
+            */
+            <span
+              className="pointer-events-none absolute inset-0 rounded-full bg-primary/25"
+              style={{ transform: `scale(${1 + Math.min(0.6, (voice?.level ?? 0) * 1.6)})` }}
+              aria-hidden="true"
+            />
+          ) : null}
+
+          {voiceControl.glyph === 'working' ? (
+            <Loader2 className={cn('relative size-4', !reduced && 'animate-spin')} />
+          ) : voiceControl.glyph === 'muted' ? (
+            <MicOff className="relative size-4" />
+          ) : voiceControl.glyph === 'armed' ? (
+            <AudioLines className="relative size-4" />
+          ) : voiceControl.glyph === 'speaking' ? (
+            <Volume2 className="relative size-4" />
           ) : (
             <Mic className="relative size-4" />
           )}

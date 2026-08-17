@@ -1,25 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { VoiceDictation, VoiceStatus } from '@/components/chat/voice-contract';
+import type { VoiceMode, VoiceModeState } from '@/components/chat/voice-contract';
 import { CAPTURE_PROCESSOR, captureWorkletUrl, TARGET_SAMPLE_RATE } from '@/components/voice/capture-worklet';
 import { useWakeWord, type WakeWordArm } from '@/components/voice/useWakeWord';
 
 /**
- * The capture path, behind the composer's microphone button.
+ * Voice mode: the microphone, the wake words, and the dictation socket.
  *
- * Owns the whole lifecycle: whether dictation can run at all, the microphone
- * itself, the worklet that resamples it, and the socket that carries audio to
- * the local server. Transcribed text does not come back through the returned
- * state — it goes to `onText`, so it can be appended to a draft the user may
- * have already started typing.
+ * ## One mode, two moments
+ *
+ * The microphone is either open or closed. When it is open the app is either
+ * waiting for a wake word or capturing a sentence. That is the whole state
+ * machine, and it is one machine rather than two features sharing a device.
  *
  * ## The microphone is closed when it is off
  *
  * Not muted — **stopped**. A muted track still holds the device open and still
  * lights the operating system's recording indicator, and a user who sees that
- * indicator while the app claims to be idle has learned that the app lies about
- * the microphone. That is the one thing this feature cannot afford, so `stop`
- * ends every track and closes the audio context rather than pausing anything.
+ * indicator while the app claims to be idle has learned that the app lies
+ * about the microphone. `disable` ends every track and closes the audio
+ * context rather than pausing anything.
+ *
+ * ## Waiting does not stream
+ *
+ * While armed but not capturing, audio goes only to the local wake-word
+ * Worker. The dictation socket is not even open. Nothing is sent anywhere
+ * until the user has either said the wake word or pressed the button.
  */
 
 type Options = {
@@ -31,13 +37,17 @@ type Options = {
    * Wake words to listen for while the microphone is open.
    *
    * Empty — the default — means no Worker is created and none of the 12.9 MB
-   * of WASM is ever fetched. Detection consumes the same PCM the dictation
-   * path already produces rather than opening a second stream: one microphone,
-   * one worklet, two consumers.
+   * of WASM is ever fetched.
    */
   armed?: WakeWordArm[];
-  /** Called with the word's id when one fires. */
-  onWake?: (id: string) => void;
+  /**
+   * Speech output, folded in so the control is one state machine.
+   *
+   * Owned by `useSpeech`; passed in rather than created here because the same
+   * synthesiser serves pets and replies, and voice mode only needs to know
+   * whether it is currently talking.
+   */
+  speech?: { speaking: boolean; hush: () => void };
 };
 
 /** Stable empty default, so callers that never arm do not restart the effect. */
@@ -53,118 +63,159 @@ type StatusResponse = { ready: boolean; reason?: string };
 /**
  * Tells the desktop shell whether the user currently wants the microphone.
  *
- * The main process denies every permission by default, and it has no way to
- * know that a button was pressed in the renderer — so the grant is conditional
- * on this flag rather than standing. It is deliberately narrow: raised
- * immediately before `getUserMedia` and lowered the moment capture ends, so the
- * window in which `media` is grantable is the window in which the user is
- * actually dictating.
- *
- * Optional on purpose. In a browser build there is no shell and no bridge, and
- * the browser's own permission prompt is the right behaviour.
+ * The main process denies every permission by default and has no way to know a
+ * button was pressed, so the grant is conditional on this flag rather than
+ * standing. Optional: in a browser build there is no shell, and the browser's
+ * own prompt is the right behaviour.
  */
 function declareVoiceIntent(wanted: boolean): void {
   const bridge = (window as { tailsDesktop?: { voice?: { setIntent?: (v: boolean) => void } } }).tailsDesktop;
   bridge?.voice?.setIntent?.(wanted);
 }
 
+/** How often the input level is published. ~8/s is enough to read as live. */
+const LEVEL_INTERVAL_MS = 120;
+
 export function useVoiceDictation({
-  onText, cwd, armed = NONE, onWake,
-}: Options): VoiceDictation {
-  const [status, setStatus] = useState<VoiceStatus>('unavailable');
-  const [reason, setReason] = useState<string | undefined>('Checking for the speech model…');
+  onText, cwd, armed = NONE, speech,
+}: Options): VoiceModeState {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [reason, setReason] = useState<string | undefined>(undefined);
+  const [engaged, setEngaged] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [level, setLevel] = useState(0);
 
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const contextRef = useRef<AudioContext | null>(null);
-  // Held in a ref so the socket handler never depends on a changing callback
-  // identity — otherwise every render would want to rebuild the connection,
-  // and an unmount could be left unable to tear the microphone down.
+  const levelSentAt = useRef(0);
+
   const onTextRef = useRef(onText);
   useEffect(() => { onTextRef.current = onText; }, [onText]);
-
-  const onWakeRef = useRef(onWake);
-  useEffect(() => { onWakeRef.current = onWake; }, [onWake]);
+  const cwdRef = useRef(cwd);
+  useEffect(() => { cwdRef.current = cwd; }, [cwd]);
 
   const wake = useWakeWord({
     armed,
-    onDetected: (id) => onWakeRef.current?.(id),
+    // Hearing the wake word is the same event as pressing the button.
+    onDetected: () => captureRef.current(),
   });
-  // Read through a ref inside the audio callback so a re-render cannot leave
-  // the worklet holding a stale `feed`.
   const wakeFeedRef = useRef(wake.feed);
   useEffect(() => { wakeFeedRef.current = wake.feed; }, [wake.feed]);
 
-  /**
-   * Releases the device and everything attached to it.
-   *
-   * Written to be safe to call twice, and from an unmount, because every error
-   * path in `start` funnels through it — a failure between opening the stream
-   * and opening the socket must not leave the microphone live.
-   */
-  const teardown = useCallback(() => {
-    declareVoiceIntent(false);
-    for (const track of streamRef.current?.getTracks() ?? []) track.stop();
-    streamRef.current = null;
-
-    void contextRef.current?.close().catch(() => {});
-    contextRef.current = null;
-
-    socketRef.current?.close();
-    socketRef.current = null;
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
-
-    // The button stays disabled until the server confirms both the engine and
-    // the model are present, which is what makes it impossible for pressing it
-    // to trigger the download implicitly.
     void fetch('/api/voice/status')
       .then((res) => res.json() as Promise<StatusResponse>)
       .then((body) => {
         if (cancelled) return;
-        setStatus(body.ready ? 'idle' : 'unavailable');
+        setAvailable(body.ready);
         setReason(body.ready ? undefined : body.reason);
       })
       .catch(() => {
         if (cancelled) return;
-        setStatus('unavailable');
+        setAvailable(false);
         setReason('Could not reach the local speech service');
       });
-
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => teardown, [teardown]);
+  /** Closes the dictation socket without touching the microphone. */
+  const closeSocket = useCallback(() => {
+    socketRef.current?.close();
+    socketRef.current = null;
+  }, []);
 
-  const stop = useCallback(() => {
-    // Tell the server before dropping the socket: an explicit stop should
-    // transcribe what was said rather than discarding it, and a closed socket
-    // has nowhere to deliver the result.
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ type: 'voice.stop' }));
-      setStatus('transcribing');
-    } else {
-      setStatus('idle');
-    }
-
+  const releaseMicrophone = useCallback(() => {
     declareVoiceIntent(false);
     for (const track of streamRef.current?.getTracks() ?? []) track.stop();
     streamRef.current = null;
     void contextRef.current?.close().catch(() => {});
     contextRef.current = null;
+    setLevel(0);
   }, []);
 
-  const start = useCallback(() => {
-    let stream: MediaStream | null = null;
+  const disable = useCallback(() => {
+    closeSocket();
+    releaseMicrophone();
+    setEngaged(false);
+    setCapturing(false);
+    setTranscribing(false);
+  }, [closeSocket, releaseMicrophone]);
+
+  useEffect(() => disable, [disable]);
+
+  /** Opens the dictation socket and begins sending audio to the recogniser. */
+  const capture = useCallback(() => {
+    if (socketRef.current || !streamRef.current) return;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const socket = new WebSocket(`${protocol}://${window.location.host}/voice`);
+    socket.binaryType = 'arraybuffer';
+    socketRef.current = socket;
+
+    socket.onopen = () => socket.send(JSON.stringify({
+      type: 'voice.start', cwd: cwdRef.current ?? undefined,
+    }));
+
+    socket.onmessage = (event) => {
+      let frame: ServerFrame;
+      try {
+        frame = JSON.parse(event.data as string) as ServerFrame;
+      } catch {
+        return;
+      }
+
+      if (frame.type === 'transcript') {
+        onTextRef.current(frame.text);
+        setTranscribing(false);
+        setCapturing(false);
+        closeSocket();
+        return;
+      }
+      if (frame.type === 'error') {
+        setReason(frame.message);
+        setTranscribing(false);
+        setCapturing(false);
+        closeSocket();
+      }
+      // A `state` frame only refines the label; the button already knows it is
+      // capturing, and letting the server drive that would make the UI lag the
+      // user's own press.
+    };
+
+    socket.onclose = () => { socketRef.current = null; };
+    socket.onerror = () => socket.close();
+
+    setCapturing(true);
+  }, [closeSocket]);
+
+  // Held in a ref so the wake-word callback, created once, always calls the
+  // current version.
+  const captureRef = useRef(capture);
+  useEffect(() => { captureRef.current = capture; }, [capture]);
+
+  const endCapture = useCallback(() => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      // An explicit stop must transcribe what was said rather than discard it,
+      // so the socket stays open until the transcript comes back.
+      socketRef.current.send(JSON.stringify({ type: 'voice.stop' }));
+      setTranscribing(true);
+    } else {
+      closeSocket();
+    }
+    setCapturing(false);
+    wake.reset();
+  }, [closeSocket, wake]);
+
+  const enable = useCallback(() => {
+    if (streamRef.current) return;
 
     void (async () => {
       try {
-        // Raised immediately before the request and lowered by `teardown` on
-        // every path out of here, including failure.
         declareVoiceIntent(true);
-        stream = await navigator.mediaDevices.getUserMedia({
+        const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             channelCount: 1,
             echoCancellation: true,
@@ -178,60 +229,46 @@ export function useVoiceDictation({
         contextRef.current = context;
         await context.audioWorklet.addModule(captureWorkletUrl());
 
-        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const socket = new WebSocket(`${protocol}://${window.location.host}/voice`);
-        socket.binaryType = 'arraybuffer';
-        socketRef.current = socket;
-
-        socket.onopen = () => socket.send(JSON.stringify({ type: 'voice.start', cwd: cwd ?? undefined }));
-
-        socket.onmessage = (event) => {
-          let frame: ServerFrame;
-          try {
-            frame = JSON.parse(event.data as string) as ServerFrame;
-          } catch {
-            return;
-          }
-
-          if (frame.type === 'transcript') {
-            onTextRef.current(frame.text);
-            setStatus('idle');
-            return;
-          }
-          if (frame.type === 'error') {
-            setReason(frame.message);
-            setStatus('unavailable');
-            teardown();
-            return;
-          }
-          // A gate transition only refines the label while capture is live; it
-          // must not drag the state back out of `transcribing`.
-          setStatus((current) => (current === 'listening' || current === 'idle'
-            ? (frame.listening ? 'listening' : current)
-            : current));
-        };
-
-        socket.onclose = () => { socketRef.current = null; };
-        socket.onerror = () => socket.close();
-
         const source = context.createMediaStreamSource(stream);
         const node = new AudioWorkletNode(context, CAPTURE_PROCESSOR, {
           processorOptions: { targetRate: TARGET_SAMPLE_RATE },
         });
+
         node.port.onmessage = (event: MessageEvent<Int16Array>) => {
-          if (socket.readyState === WebSocket.OPEN) socket.send(event.data);
-          // Same chunks, second consumer. The wake worker is a no-op when
-          // nothing is armed, so this costs a function call in that case.
-          wakeFeedRef.current(event.data);
+          const pcm = event.data;
+
+          // Only while capturing. Waiting for a wake word sends nothing.
+          const socket = socketRef.current;
+          if (socket?.readyState === WebSocket.OPEN) socket.send(pcm);
+
+          wakeFeedRef.current(pcm);
+
+          const now = performance.now();
+          if (now - levelSentAt.current >= LEVEL_INTERVAL_MS) {
+            levelSentAt.current = now;
+            let sum = 0;
+            for (let i = 0; i < pcm.length; i += 1) {
+              const v = pcm[i] / 32768;
+              sum += v * v;
+            }
+            // Square-rooted twice, in effect: RMS then a perceptual curve, so
+            // ordinary speech fills the meter instead of nudging it.
+            setLevel(Math.min(1, Math.sqrt(Math.sqrt(sum / pcm.length)) * 1.4));
+          }
         };
+
         source.connect(node);
-        // Not connected to `context.destination` on purpose: routing the
+        // Deliberately not connected to `context.destination`: routing the
         // microphone to the speakers would feed the room back to itself.
 
-        setStatus('listening');
+        setEngaged(true);
+        // With nothing armed, turning voice mode on means "start dictating" —
+        // there is no wake word coming, so waiting would be waiting forever.
+        if (armed.length === 0) captureRef.current();
       } catch (error) {
-        teardown();
-        setStatus('unavailable');
+        releaseMicrophone();
+        setEngaged(false);
+        setAvailable(false);
         setReason(
           error instanceof DOMException && error.name === 'NotAllowedError'
             ? 'Microphone permission was refused'
@@ -239,7 +276,28 @@ export function useVoiceDictation({
         );
       }
     })();
-  }, [cwd, teardown]);
+  }, [armed.length, releaseMicrophone]);
 
-  return { status, reason, start, stop };
+  const hush = useCallback(() => speech?.hush(), [speech]);
+
+  const mode: VoiceMode = available === false ? 'unavailable'
+    : speech?.speaking ? 'speaking'
+      : transcribing ? 'transcribing'
+        : capturing ? 'listening'
+          : engaged ? 'waiting'
+            : 'off';
+
+  return {
+    mode,
+    reason,
+    armed: armed.map((word) => word.id),
+    // Zero unless the microphone is genuinely open, so the meter can never
+    // imply a device that is closed.
+    level: engaged ? level : 0,
+    enable,
+    disable,
+    capture,
+    endCapture,
+    hush,
+  };
 }

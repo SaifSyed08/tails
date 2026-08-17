@@ -1,6 +1,7 @@
 import express from 'express';
 
 import { downloadModel, MODEL_MIB, readStatus } from '@/modules/voice/whisper.js';
+import { bytesNeeded, downloadWakeWord } from '@/modules/voice/wake-download.js';
 import { readWakeWordStatus, resolveWakeModel } from '@/modules/voice/wake-word.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -26,8 +27,42 @@ export function createVoiceRouter(): express.Router {
    * runtime is an optional native package that is normally absent, and its
    * absence must never make dictation look broken.
    */
+  /**
+   * Wake-word state, enriched with what each word would cost to install.
+   *
+   * The size is composed here rather than inside `readWakeWordStatus` because
+   * the downloader imports the definitions, and having the definitions import
+   * the downloader back would be a cycle. The route is the natural place for
+   * the two to meet.
+   */
   router.get('/wake', (_req, res) => {
-    res.json(readWakeWordStatus());
+    const status = readWakeWordStatus();
+    res.json({
+      ...status,
+      words: status.words.map((word) => ({
+        ...word,
+        downloadBytes: bytesNeeded(word.id),
+      })),
+    });
+  });
+
+  /**
+   * Fetches one wake word's models. Explicit, one-time, never on boot.
+   *
+   * The size is in the status payload so the UI can state it *before* this is
+   * called — a download has to be a visible decision, which means the number
+   * is on screen while the user is deciding.
+   */
+  router.post('/wake/:id/download', async (req, res, next) => {
+    try {
+      await downloadWakeWord(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      next(new AppError(
+        error instanceof Error ? error.message : 'Wake-word download failed',
+        { code: 'VOICE_WAKE_DOWNLOAD_FAILED', statusCode: 502 },
+      ));
+    }
   });
 
   /**

@@ -1,4 +1,4 @@
-import { getConnection } from '@/db/connection.js';
+import { preferencesRepository } from '@/db/preferences.repository.js';
 
 /**
  * How much of the user's own prompt is carried.
@@ -78,22 +78,15 @@ export function formatConversationInstructions(text: string): string {
  * the user asked for.
  */
 export function readConversationInstructions(): string {
-  const row = getConnection()
-    .prepare('SELECT value FROM app_preferences WHERE key = ?')
-    .get(PREFERENCE_KEY) as { value: string } | undefined;
-
-  return normalizeConversationInstructions(row?.value);
+  // Normalised on the way out as well as in. The cap can only ever be lowered
+  // by someone who has already thought about the token cost, and when it is,
+  // text stored under the old one must not keep being sent.
+  return normalizeConversationInstructions(preferencesRepository.read(PREFERENCE_KEY));
 }
 
 /** Returns what was actually stored, which is the clamped form of the input. */
 export function writeConversationInstructions(value: unknown): string {
   const instructions = normalizeConversationInstructions(value);
-
-  getConnection().prepare(`
-    INSERT INTO app_preferences (key, value, updated_at)
-    VALUES (?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-  `).run(PREFERENCE_KEY, instructions);
-
+  preferencesRepository.write(PREFERENCE_KEY, instructions);
   return instructions;
 }

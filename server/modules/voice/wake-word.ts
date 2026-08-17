@@ -110,6 +110,8 @@ export type WakeWordStatus = {
   thresholdRange: { min: number; max: number };
   words: Array<{
     id: WakeWordId;
+    /** Model filename. The renderer needs it: detection runs there. */
+    file: string;
     label: string;
     installed: boolean;
     /** True for weights we may not redistribute; the UI must say so. */
@@ -143,6 +145,7 @@ export function readWakeWordStatus(): WakeWordStatus {
     thresholdRange: { min: MIN_THRESHOLD, max: MAX_THRESHOLD },
     words: WAKE_WORDS.map((word) => ({
       id: word.id,
+      file: word.file,
       label: word.label,
       installed: fs.existsSync(path.join(wakeDir(), word.file)),
       nonCommercial: word.source === 'fetched',
