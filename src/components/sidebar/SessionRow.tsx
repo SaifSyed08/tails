@@ -234,40 +234,56 @@ export function SessionRow({
 
         Siblings of the title rather than children: a button cannot be nested in
         a button, and the options control has to be reachable by keyboard in its
-        own right. They share one track so the pet sits where the options button
-        does rather than beside the name — and because the options button fades
-        rather than unmounts, it holds its width and the pet never shifts when
-        the row is hovered.
+        own right.
+
+        The options button *collapses* rather than merely fading. Holding its
+        width kept the pet from shifting on hover, which sounded like the calmer
+        choice and was not: it parked the pet a button's width in from the edge
+        and left a permanent gap at the right of every row — visible on every
+        row all the time, to spare a motion visible on one row while the pointer
+        is on it. So the pet lives at the edge, and hovering opens room beside
+        it. The width is animated, so the shift reads as the button arriving
+        rather than as the pet jumping.
+
+        `focus-within` matters as much as hover here: reached by keyboard, the
+        button has to have somewhere to be before it can show a focus ring.
       */}
-      <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+      <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 items-center">
+        <span
+          className={cn(
+            'flex overflow-hidden transition-[width] duration-quick ease-standard',
+            'w-0 group-hover/row:w-[26px] group-focus-within/row:w-[26px]',
+          )}
+        >
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              onOpenMenu(rect.right, rect.bottom + 4);
+            }}
+            aria-label={`Options for ${session.title}`}
+            title="Options"
+            className={cn(
+              'pointer-events-auto mr-0.5 shrink-0 rounded-sm p-1 text-muted-foreground',
+              'opacity-0 transition-opacity duration-quick hover:bg-accent hover:text-foreground',
+              'focus-visible:opacity-100 group-hover/row:opacity-100',
+            )}
+          >
+            <MoreHorizontal className="size-3.5" aria-hidden="true" />
+          </button>
+        </span>
+
         {pet ? (
           // Clipped for the same reason as the carousel icon: a pet with an
           // un-inferred grid is one very wide cell, and this row is 32px tall
           // and must stay that way. No tooltip, deliberately — the thumbnail
           // names itself to assistive tech, and making this hoverable would
           // put a dead 18px hole in the row's own click target.
-          <span className="flex h-[18px] max-w-[22px] items-center justify-center overflow-hidden">
+          <span className="flex h-[18px] max-w-[22px] shrink-0 items-center justify-center overflow-hidden">
             <PetThumbnail pet={pet} size={18} />
           </span>
         ) : null}
-
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            const rect = event.currentTarget.getBoundingClientRect();
-            onOpenMenu(rect.right, rect.bottom + 4);
-          }}
-          aria-label={`Options for ${session.title}`}
-          title="Options"
-          className={cn(
-            'pointer-events-auto rounded-sm p-1 text-muted-foreground',
-            'opacity-0 transition-opacity duration-quick hover:bg-accent hover:text-foreground',
-            'focus-visible:opacity-100 group-hover/row:opacity-100',
-          )}
-        >
-          <MoreHorizontal className="size-3.5" aria-hidden="true" />
-        </button>
       </div>
     </div>
   );

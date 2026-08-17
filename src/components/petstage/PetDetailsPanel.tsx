@@ -47,6 +47,12 @@ export type PetDetailsPanelProps = {
   /**
    * Gives him to the conversation on screen. Absent when there is no
    * conversation to give him to, or when he is already in it.
+   *
+   * Presented as the panel's headline action rather than a footer link. It used
+   * to sit beside "Put on the desktop" in the footer, at the same weight as the
+   * thing it undoes, below two screens of scrolling facts — so for a pet who is
+   * currently floating over the desktop, the single most likely reason to have
+   * opened this panel was the hardest thing in it to find.
    */
   onSendToChat?: () => void;
   onHide: () => void;
@@ -156,6 +162,28 @@ export function PetDetailsPanel({
 
           {definition.description ? (
             <p className="text-xs text-muted-foreground">{definition.description}</p>
+          ) : null}
+
+          {/*
+            Above the facts, and full width.
+
+            The facts are reference material — you read them once, if ever. This
+            is the action, and for a pet who is out on the desktop it is very
+            likely the only reason this panel is open at all.
+          */}
+          {onSendToChat ? (
+            <button
+              type="button"
+              onClick={onSendToChat}
+              className={cn(
+                'flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5',
+                'bg-primary text-sm font-medium text-primary-foreground',
+                'transition-opacity duration-quick hover:opacity-90',
+              )}
+            >
+              <MessageSquare className="size-4" aria-hidden="true" />
+              Dock to chat interface
+            </button>
           ) : null}
 
           <dl>
@@ -320,21 +348,6 @@ export function PetDetailsPanel({
               </button>
             ) : null}
 
-            {/*
-              The way back in. Carrying him out is a flick of the wrist, and
-              until this existed undoing it meant opening the marketplace and
-              dropping him on the right conversation.
-            */}
-            {onSendToChat ? (
-              <button
-                type="button"
-                onClick={onSendToChat}
-                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
-              >
-                <MessageSquare className="size-3.5" aria-hidden="true" />
-                Send to this chat
-              </button>
-            ) : null}
           </div>
 
           <button

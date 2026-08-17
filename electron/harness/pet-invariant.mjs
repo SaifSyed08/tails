@@ -160,6 +160,15 @@ async function check(label) {
   const failures = [];
   if (!win.isVisible()) failures.push('window not visible');
   if (!win.isMovable()) failures.push('window not movable');
+  /*
+   * Topmost is part of usable, not part of visible.
+   *
+   * A pet behind the app window looks completely fine — he is on the desktop,
+   * he animates, nothing is wrong with him — and every press lands in the app.
+   * That is the same symptom as a page that has stopped reporting the pointer,
+   * which is why it was worth adding here rather than reasoning about.
+   */
+  if (!win.isAlwaysOnTop()) failures.push('window is no longer topmost');
   if (!page.pet) failures.push('page is showing no pet');
   if (page.mask !== page.pet) failures.push(`mask is for "${page.mask}" but the pet is "${page.pet}"`);
   if (page.carry) failures.push('page still believes it is being carried');
@@ -244,6 +253,67 @@ app.whenReady().then(async () => {
   await wait(150);
   pet.setPetSuppressed(false);
   await run('shown after an abandoned carry');
+
+  /*
+   * 9. Navigation, at the speed navigation actually happens.
+   *
+   * Every suppression path above releases with a pause in it, and that pause is
+   * not real. Leaving a chat unmounts the in-chat pet and mounts the next one
+   * in the same React commit, so the shell sees suppress(true) and
+   * suppress(false) — a real `hide()` and a real `showInactive()` — inside one
+   * tick, with no frame between them. That is the case the reported bug
+   * describes and the one none of the paths above covered.
+   */
+  pet.setPetSuppressed(true);
+  pet.setPetSuppressed(false);
+  await run('suppression flapped within one tick, as a navigation does');
+
+  // 10. And the other order a remount produces: released, then immediately
+  //     re-suppressed and released again by the next surface's own effect.
+  pet.setPetSuppressed(false);
+  pet.setPetSuppressed(true);
+  pet.setPetSuppressed(false);
+  await run('released, re-suppressed and released again in one tick');
+
+  /*
+   * 11. His exact sequence: a chat that holds the pet in its interface, left
+   *     for somewhere that has no in-chat pet at all.
+   *
+   * The pet is never carried out, so nothing activates anybody and nothing
+   * places the window — the only thing that happens is that suppression goes on
+   * and comes off. Written out as its own case anyway, because "the steps the
+   * user typed" is the thing worth being able to point at.
+   */
+  pet.setPetSuppressed(true);      // open the chat: the in-chat pet takes over
+  await wait(500);                 // ...and the user reads for a moment
+  pet.setPetSuppressed(false);     // then leaves for the marketplace
+  await run('left a chat whose pet was standing in the interface');
+
+  /*
+   * 12. Knocked out of the topmost band, as another always-on-top window can
+   *     do. The pet must climb back without anybody showing him again.
+   */
+  win.setAlwaysOnTop(false);
+  await run('recovered after losing always-on-top');
+
+  // 13. And marked immovable behind the shell's back, which makes the OS
+  //     ignore the drag region entirely.
+  win.setMovable(false);
+  await run('recovered after being made immovable');
+
+  /*
+   * 14. Un-hidden while suppression is still set.
+   *
+   * The reported case: the pill's X hides him, and afterwards the marketplace's
+   * own switch appears to do nothing. Two flags keep him off screen and the
+   * switch only ever cleared one, so the way back was a differently named
+   * button — which is the tell that the switch was not finishing its job.
+   */
+  pet.setPetSuppressed(true);
+  pet.setPetHidden(true);
+  await wait(200);
+  pet.setPetHidden(false);
+  await run('un-hidden while a stale suppression was still set');
 
   console.log(allPassed ? '\nINVARIANT HOLDS on every path' : '\nINVARIANT BROKEN');
   pet.destroyPetWindow(); server.close(); app.exit(allPassed ? 0 : 1);

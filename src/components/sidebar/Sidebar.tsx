@@ -14,6 +14,7 @@ import {
   type PetDragPayload,
   type PetDropTarget,
 } from '@/components/marketplace';
+import { PetSettingsDialog } from '@/components/petstage/PetSettingsDialog';
 import { onSessionRequested } from '@/components/petstage/session-requests';
 import { FloatingCard } from '@/components/sidebar/FloatingCard';
 import { SessionRow } from '@/components/sidebar/SessionRow';
@@ -90,6 +91,8 @@ export function Sidebar({
   const [showArchived, setShowArchived] = useState(false);
   const [orderMenuOpen, setOrderMenuOpen] = useState(false);
   const [menu, setMenu] = useState<MenuState>(null);
+  /** The pet whose settings panel is open, from the carousel. */
+  const [settingsPet, setSettingsPet] = useState<InstalledPet | null>(null);
 
   /**
    * The pets referenced by these conversations, by id.
@@ -764,7 +767,23 @@ export function Sidebar({
 
       {/* Above Settings, where the hand already is: swapping companions should
           not need a trip to the marketplace. */}
-      <PetCarousel onCarryRelease={handleCarryRelease} onEdit={() => onOpenMarketplace()} />
+      <PetCarousel onCarryRelease={handleCarryRelease} onEdit={setSettingsPet} />
+
+      {/*
+        His settings, opened from the carousel.
+
+        The same panel his own pill opens. It used to open the marketplace
+        instead, which answered a different question — "what pets are there"
+        rather than "what is this one doing" — and lost the pet on the way.
+      */}
+      {settingsPet ? (
+        <PetSettingsDialog
+          pet={settingsPet}
+          sessionId={activeSessionId}
+          onClose={() => setSettingsPet(null)}
+          onChanged={requestReload}
+        />
+      ) : null}
 
       {/* Everything a drag draws — the pet under the cursor and both drop
           affordances — portalled out of here. It lives beside the carousel

@@ -367,6 +367,11 @@ function startWatchdog() {
   watchdogTimer = setInterval(() => {
     if (!isAlive()) return;
 
+    // The window-level half of the invariant, held continuously. See the note
+    // on `assertWindowState`: it is why this poll is no longer only about the
+    // cursor.
+    assertWindowState();
+
     /*
      * A carry that has stopped producing frames has stopped.
      *
@@ -656,12 +661,42 @@ function applyReportedSize() {
 function makeUsable() {
   if (!isAlive()) return;
 
-  petWindow.setMovable(true);
+  assertWindowState();
   interactive = false;
   petWindow.setIgnoreMouseEvents(true, { forward: true });
   startWatchdog();
 
   petWindow.webContents.send('pet:resync', { carrying: carryIsLive() });
+}
+
+/**
+ * The window-level half of usable, re-asserted rather than assumed.
+ *
+ * Two properties, both of which the OS owns and neither of which reliably
+ * survives everything this window goes through:
+ *
+ * - **Movable.** A window marked immovable ignores the drag region outright.
+ * - **Topmost.** This one is easy to miss because it does not look like an
+ *   input bug. A pet who has fallen behind the app window is *visible* — he is
+ *   over the desktop, he animates, nothing about him looks wrong — and every
+ *   press on him lands in the app instead. "He appears but I cannot use him" is
+ *   exactly what that looks like from outside, and it is indistinguishable
+ *   from a page that has stopped reporting the pointer.
+ *
+ * A `focusable: false` window is the one most likely to lose the topmost
+ * flag on Windows, because it is never the foreground window and never gets
+ * re-raised as a side effect of being used.
+ *
+ * Both are cheap native getters, so this runs on every watchdog tick as well as
+ * at show time. That is the point: establishing the invariant once, at the
+ * moment of showing, is what has been done four times, and the reports kept
+ * arriving by routes nobody had thought of. Holding it *continuously* means a
+ * cause nobody has identified costs one tick rather than a restart.
+ */
+function assertWindowState() {
+  if (!isAlive()) return;
+  if (!petWindow.isMovable()) petWindow.setMovable(true);
+  if (!petWindow.isAlwaysOnTop()) petWindow.setAlwaysOnTop(true, 'screen-saver');
 }
 
 /**
@@ -1056,11 +1091,56 @@ export function placePetAt(x, y, holding = false) {
   onCarried(clamped.x, clamped.y, 'app', holding);
 }
 
-/** The user's own hide/show, which survives a restart. */
+/**
+ * The user's own hide/show, which survives a restart.
+ *
+ * ## Un-hiding means "put my pet back", not "clear one flag"
+ *
+ * Three things can keep the pet off screen and only one of them is this one.
+ * Closing him with the pill's X sets `hidden`; a chat that had him in its
+ * interface sets `suppressed`; and a window left on a monitor that has since
+ * been unplugged is neither, but is just as gone. Clearing only `hidden` meant
+ * the marketplace's own switch could be flipped back and forth with no visible
+ * effect at all — which is what "he is permanently hidden" was. The way back
+ * was the Recall button, and needing a *second, differently named* control to
+ * undo the first is the tell that the first one was not finishing its job.
+ *
+ * So un-hiding clears every reason it is entitled to clear. Suppression is a
+ * handoff to an in-chat pet, and there is no in-chat pet on the surface this
+ * switch lives on; if it is still set, it is stale. The position is only
+ * touched when it is genuinely unreachable — a pet somebody has parked in a
+ * particular corner should stay in that corner.
+ *
+ * Hiding stays narrow, and deliberately: it is one decision with one effect.
+ */
 export function setPetHidden(next) {
   hidden = Boolean(next);
+
+  if (!hidden) {
+    suppressed = false;
+    ensureReachable();
+  }
+
   persistPosition();
   applyVisibility();
+}
+
+/**
+ * Moves the window home if it is not on any display we can see.
+ *
+ * Only then. Restoring the corner every time would take a pet the user
+ * deliberately parked somewhere and move him, which is its own bug — the one
+ * `resetPetPosition` exists to be an explicit, opt-in version of.
+ */
+function ensureReachable() {
+  if (!isAlive()) return;
+
+  const size = sizeNow();
+  const at = trackedPosition ?? { x: 0, y: 0 };
+  const clamped = clampToDisplay(at.x, at.y, size.width, size.height);
+  if (clamped.x === at.x && clamped.y === at.y) return;
+
+  moveTo(clamped.x, clamped.y);
 }
 
 export function isPetHidden() {

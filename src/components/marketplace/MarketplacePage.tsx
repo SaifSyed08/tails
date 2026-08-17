@@ -104,15 +104,30 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [desktopHidden, setDesktopHidden] = useState<boolean | null>(null);
 
-  // Only meaningful in the desktop build; in a browser there is no window to
-  // float and the control is not rendered at all.
+  /*
+    Only meaningful in the desktop build; in a browser there is no window to
+    float and the control is not rendered at all.
+
+    Re-read on focus, not only at mount. The pet's own pill can hide him while
+    this page is sitting open behind it, and a toggle showing the opposite of
+    the truth does the opposite of what it says when pressed — press "hide" on
+    an already-hidden pet and nothing happens, which is precisely how "he is
+    permanently hidden" felt.
+  */
   useEffect(() => {
     let cancelled = false;
-    void readDesktopPetState().then((state) => {
-      if (!cancelled) setDesktopHidden(state?.hidden ?? null);
-    });
+
+    const sync = () => {
+      void readDesktopPetState().then((state) => {
+        if (!cancelled) setDesktopHidden(state?.hidden ?? null);
+      });
+    };
+
+    sync();
+    window.addEventListener('focus', sync);
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', sync);
     };
   }, []);
 
@@ -214,8 +229,23 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
     }
   };
 
+  /**
+   * Puts a pet on screen, or takes him off it.
+   *
+   * Activating also clears the desktop window's hide, and that is the fix for a
+   * pet nobody could get back: closing him with the pill's X sets a flag that
+   * survives restarts, and "put this pet on screen" was leaving it set — so the
+   * pet became active, the card said so, and nothing appeared. Asking for a pet
+   * on screen is unambiguous enough to override a hide, and it is the only
+   * reading of the button that matches its own label.
+   */
   const handleSetActive = (pet: InstalledPet) => {
-    void runAction(pet.definition.id, () => petsApi.setActive(pet.definition.id, !pet.active));
+    const activating = !pet.active;
+    if (activating) {
+      hideDesktopPet(false);
+      setDesktopHidden(false);
+    }
+    void runAction(pet.definition.id, () => petsApi.setActive(pet.definition.id, activating));
   };
 
   /**

@@ -36,6 +36,15 @@ export type PetCarouselProps = {
   /** Bumped by the owner when the library changes elsewhere. */
   refreshToken?: number;
   /** Opens this pet in the marketplace. */
+  /**
+   * Opens that pet's settings.
+   *
+   * It used to open the marketplace and drop the pet on the floor — the
+   * argument was there and the caller ignored it, so "Edit" on a specific
+   * animal took you to a page about all of them. The panel this opens is the
+   * same one his own pill opens, which is the point: a pet has one settings
+   * screen, not one per surface that can reach him.
+   */
   onEdit: (pet: InstalledPet) => void;
   /**
    * Where a carried pet was let go — including over nothing at all.
@@ -201,6 +210,21 @@ export function PetCarousel({ refreshToken = 0, onEdit, onCarryRelease, classNam
                 const rect = event.currentTarget.getBoundingClientRect();
                 setMenu({ pet, x: rect.left, y: rect.top - 8 });
               }}
+              /*
+                The same panel, from either button.
+
+                Right-click did nothing here, which is worse than it sounds: the
+                pet's own pill removed right-click deliberately and taught the
+                gesture is not how you reach a pet — so a right-click that opens
+                the operating system's menu over a pet is the app contradicting
+                its own rule. Anchored to the slot rather than the pointer so
+                the menu appears in the same place both ways.
+              */
+              onContextMenu={(event) => {
+                event.preventDefault();
+                const rect = event.currentTarget.getBoundingClientRect();
+                setMenu({ pet, x: rect.left, y: rect.top - 8 });
+              }}
               title={`${pet.definition.displayName}${pet.active ? ' — on screen' : ''}`}
               aria-label={pet.definition.displayName}
               className={cn(
@@ -287,7 +311,7 @@ export function PetCarousel({ refreshToken = 0, onEdit, onCarryRelease, classNam
             }}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors duration-quick hover:bg-accent"
           >
-            <Pencil className="size-3.5" aria-hidden="true" /> Edit
+            <Pencil className="size-3.5" aria-hidden="true" /> Settings
           </button>
         </div>
       ) : null}
