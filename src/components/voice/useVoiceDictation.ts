@@ -251,8 +251,36 @@ export function useVoiceDictation({
       // user's own press.
     };
 
-    socket.onclose = () => { socketRef.current = null; };
-    socket.onerror = () => socket.close();
+    /*
+      A socket that never opens has to say so.
+
+      This used to be `onerror = () => socket.close()` and nothing else, so a
+      handshake that failed left the microphone open, the level meter moving,
+      the button lit, and no text — ever, with no error anywhere. That is how a
+      missing line in the dev proxy turned into "dictation prints nothing"
+      rather than into "dictation could not connect".
+
+      Keyed on whether the socket ever reached OPEN, because a close during
+      capture is normal — it is how every utterance ends.
+    */
+    let opened = false;
+    socket.addEventListener('open', () => { opened = true; });
+
+    const failed = () => {
+      socketRef.current = null;
+      setCapturing(false);
+      setTranscribing(false);
+      setReason('Could not reach the local speech service — the /voice socket did not connect.');
+    };
+
+    socket.onclose = () => {
+      socketRef.current = null;
+      if (!opened) failed();
+    };
+    socket.onerror = () => {
+      if (!opened) failed();
+      socket.close();
+    };
 
     setCapturing(true);
   }, [closeSocket]);

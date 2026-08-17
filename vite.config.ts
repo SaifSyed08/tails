@@ -27,8 +27,25 @@ export default defineConfig({
       // Proxied rather than called cross-origin so the browser and the packaged
       // Electron build see identical same-origin URLs.
       '/api': { target: `http://127.0.0.1:${SERVER_PORT}`, changeOrigin: true },
+      /*
+        Every websocket the renderer opens has to be listed here, and the cost
+        of forgetting one is worse than it sounds.
+
+        `/voice` was missing. In a packaged build the renderer is served by the
+        same Express server that answers the socket, so the path resolves and
+        dictation works; under `npm run dev` the renderer is served by Vite on a
+        different port, the handshake goes nowhere, and dictation produces
+        nothing at all. Meanwhile `/api/voice/status` *is* proxied, so the
+        feature reports itself ready, the button enables, the microphone opens
+        and the level meter moves. Everything says it is working except the
+        text.
+
+        `proxy-paths.test.ts` now reads this file and the renderer's own
+        `new WebSocket(...)` calls and fails if they disagree.
+      */
       '/ws': { target: `ws://127.0.0.1:${SERVER_PORT}`, ws: true },
       '/shell': { target: `ws://127.0.0.1:${SERVER_PORT}`, ws: true },
+      '/voice': { target: `ws://127.0.0.1:${SERVER_PORT}`, ws: true },
     },
   },
   build: {
