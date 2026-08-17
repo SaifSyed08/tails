@@ -43,19 +43,31 @@ export const modelPath = (): string => path.join(TAILS_HOME, 'models', MODEL_FIL
  * Locates the whisper binary.
  *
  * An explicit environment variable first so a developer can point at a local
- * build, then the app's own directory. Deliberately does **not** search `PATH`:
- * silently picking up an unrelated `whisper-cli` would make transcription
- * quality depend on something the app never installed and cannot vouch for.
+ * build, then the copy the installer shipped, then the app's own directory.
+ * Deliberately does **not** search `PATH`: silently picking up an unrelated
+ * `whisper-cli` would make transcription quality depend on something the app
+ * never installed and cannot vouch for. The installed copy is the opposite
+ * case — it is a pinned whisper.cpp release the packaging step verified by
+ * digest — which is why it is a location rather than an exception to the rule.
+ *
+ * `TAILS_RESOURCES_PATH` is Electron's `process.resourcesPath`, handed down by
+ * `ensureServer()` when the app is packaged. The server cannot work it out
+ * itself: it is a separate process that also runs from a source checkout under
+ * `npm run dev`, where there are no resources and nothing should be found here.
  */
 export function enginePath(): string | null {
+  const executable = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
+
   const override = process.env.TAILS_WHISPER_PATH;
   if (override && fs.existsSync(override)) return override;
 
-  const bundled = path.join(
-    TAILS_HOME,
-    'whisper',
-    process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli',
-  );
+  const resources = process.env.TAILS_RESOURCES_PATH;
+  if (resources) {
+    const packaged = path.join(resources, 'whisper', executable);
+    if (fs.existsSync(packaged)) return packaged;
+  }
+
+  const bundled = path.join(TAILS_HOME, 'whisper', executable);
   return fs.existsSync(bundled) ? bundled : null;
 }
 

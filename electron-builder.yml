@@ -1,0 +1,127 @@
+# The Windows installer.
+#
+# Additive by design: nothing here runs unless electron-builder is invoked, and
+# nothing it does reaches outside `release/` and `vendor/`, so
+# `npx electron electron/main.js` and `npm run dev` behave exactly as before.
+# The two things it does that are not just copying files are documented in
+# `scripts/electron-abi.mjs` (native-module ABI) and `scripts/fetch-whisper.mjs`
+# (the bundled speech engine).
+
+appId: com.saifsyed.tails
+# Filesystem-safe, unlike the display name: `productName` becomes the executable
+# name, the install directory and the `%LOCALAPPDATA%` cache folder, and
+# "T.A.I.L.S." ends in a dot, which Windows silently strips from a path
+# component. The dotted name is kept where it is actually read — package.json,
+# so `app.getName()` and therefore `userData` are the same in dev and packaged —
+# and restored for everything the user sees via `nsis.shortcutName` below.
+productName: TAILS
+copyright: Copyright © 2026 Saif Syed
+directories:
+  output: release
+  # `buildResources` is left at its default. Pointing it at `electron/assets`
+  # would be the obvious move for the icon, but electron-builder excludes the
+  # build-resources directory from the packaged app — and `readAppIcon()` reads
+  # `electron/assets/icon.png` at runtime, so the taskbar icon would quietly
+  # revert to Electron's default. `win.icon` names the file directly instead.
+
+# Not asar.
+#
+# The server is ESM and runs in a *separate* process (`ELECTRON_RUN_AS_NODE`),
+# and the Claude Code CLI is resolved out of `node_modules` by
+# `createRequire(...).resolve` and then spawned as a 305 MB executable. Every
+# one of those is a known-awkward case for asar — ESM resolution, `dlopen`, and
+# spawning all need real files on disk, which means most of what would go in the
+# archive would have to come straight back out via `asarUnpack`. The archive
+# would then be buying file count and nothing else, at the cost of a class of
+# bug that only ever appears in the packaged build.
+asar: false
+
+# Left off deliberately. electron-builder's rebuild rewrites the project's own
+# `node_modules` to Electron's ABI, which would break the plain-`node` server
+# that `npm run dev` and `npx electron electron/main.js` rely on. The packaged
+# output gets its Electron-ABI binary from the `afterPack` hook instead, which
+# touches nothing outside `release/`.
+npmRebuild: false
+beforePack: scripts/fetch-whisper.mjs
+afterPack: scripts/electron-abi.mjs
+
+files:
+  # `app.getName()` reads this, so it has to travel with the app even though
+  # nothing imports it.
+  - package.json
+  - LICENSE
+  - dist/**/*
+  - dist-server/**/*
+  - electron/**/*
+  # Dev-only scaffolding for driving throwaway Electron windows; the file says
+  # so itself. Nothing the app ships requires it, and shipping a script whose
+  # whole job is to suppress error dialogs and force-exit the process is a poor
+  # thing to leave lying inside a released app.
+  - '!electron/harness-guard.cjs'
+  - '!electron/harness/**'
+
+  # Named explicitly because this list replaces electron-builder's default
+  # `**/*`. Development dependencies are dropped by electron-builder itself;
+  # what the negations below remove is production dependencies that are only
+  # ever reached from the renderer bundle.
+  - node_modules/**/*
+
+  # The renderer's dependencies are already inside `dist/` — Vite bundled them.
+  # Shipping the packages as well would be 170 MB of duplicate, dead code, and
+  # `onnxruntime-web` alone is 131 MB of it. The server's own imports are
+  # express, cors, ws, zod, css-tree, better-sqlite3, node-pty and the Claude
+  # Agent SDK; everything below is renderer-side and reachable from nothing that
+  # runs in Node.
+  - '!node_modules/onnxruntime-web/**'
+  - '!node_modules/lucide-react/**'
+  - '!node_modules/react/**'
+  - '!node_modules/react-dom/**'
+  - '!node_modules/react-markdown/**'
+  - '!node_modules/remark-gfm/**'
+  - '!node_modules/@xterm/**'
+  - '!node_modules/scheduler/**'
+  - '!node_modules/clsx/**'
+  - '!node_modules/tailwind-merge/**'
+  - '!node_modules/@types/**'
+
+  # Native packages carry their whole build tree. What the app loads is one
+  # `.node` per module; the rest is the amalgamated SQLite source, object files,
+  # and prebuilds for platforms this installer will never run on.
+  - '!node_modules/better-sqlite3/{deps,src,build/Release/obj,build/Release/obj.target,build/deps}/**'
+  - '!node_modules/better-sqlite3/build/*.{vcxproj,filters,sln,gypi,mk,Makefile}'
+  - '!node_modules/node-pty/prebuilds/!(win32-x64)/**'
+  - '!node_modules/node-pty/third_party/**'
+  - '!node_modules/node-pty/src/**'
+
+extraResources:
+  # Lands at `resources/whisper/`, which is where `enginePath()` looks once
+  # `TAILS_RESOURCES_PATH` is set — see the comment there. `whisper-cli.exe`
+  # loads its ggml backend from its own directory, so the DLLs are siblings, not
+  # a detail: split them up and the engine reports no backend at all. LICENSE.txt
+  # is whisper.cpp's MIT notice and ships beside the code it covers.
+  - from: vendor/whisper/win32-x64
+    to: whisper
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: electron/assets/icon.png
+  # A GUI app that spawns a server, a PTY and the Claude Code CLI has no reason
+  # to ask for elevation, and asking for it would be the difference between an
+  # installer the user can run and one that needs an administrator.
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  # The display name, back again — see `productName` above.
+  shortcutName: T.A.I.L.S.
+  artifactName: TAILS-Setup-${version}-${arch}.${ext}
+  # `~/.tails` holds the database, imported pets and any downloaded speech
+  # model. An uninstall removes the app; it is not permission to delete the
+  # user's conversations.
+  deleteAppDataOnUninstall: false

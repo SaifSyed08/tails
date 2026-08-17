@@ -204,18 +204,23 @@ async function ensureServer() {
 
   const entry = path.join(APP_ROOT, 'dist-server', 'server', 'index.js');
 
-  // Deliberately NOT `process.execPath`: inside Electron that is the Electron
-  // binary, so spawning it re-enters Electron and loads better-sqlite3 and
-  // node-pty against Electron's ABI (NODE_MODULE_VERSION), which fails with a
-  // module-version mismatch. The server is a plain Node service and wants a
-  // plain Node runtime. Packaging will need `@electron/rebuild` (or a bundled
-  // Node) instead of relying on one being installed.
-  const nodeBinary = process.env.TAILS_NODE_PATH || 'node';
+  // In development this is deliberately NOT `process.execPath`: that is the
+  // Electron binary, and better-sqlite3 is built against Node's ABI here, so
+  // loading it under Electron's NODE_MODULE_VERSION fails outright. The server
+  // is a plain Node service and gets a plain Node runtime.
+  //
+  // Packaged there is no `node` to rely on, so the same binary is used in Node
+  // mode (`ELECTRON_RUN_AS_NODE` below) — Node 22 with no Chromium attached,
+  // already on disk, which beats shipping a second runtime for the same job.
+  // That is only safe because packaging replaces better-sqlite3 with the
+  // Electron-ABI build; see `scripts/electron-abi.mjs`.
+  const nodeBinary = process.env.TAILS_NODE_PATH || (app.isPackaged ? process.execPath : 'node');
 
-  // Windows needs a shell to resolve a bare `node` off PATH, but a shell also
-  // word-splits arguments — and this project's path contains a space. Quote
-  // the entry explicitly rather than letting the shell tear it in half.
-  const useShell = process.platform === 'win32';
+  // A shell exists only to resolve a bare `node` off PATH. It also word-splits,
+  // and this project's path contains a space, so the entry is quoted — and an
+  // absolute binary skips the shell entirely rather than needing the same
+  // treatment for its own spacey install directory.
+  const useShell = process.platform === 'win32' && !path.isAbsolute(nodeBinary);
   const entryArgument = useShell ? `"${entry}"` : entry;
 
   serverProcess = spawn(nodeBinary, [entryArgument], {
@@ -223,7 +228,17 @@ async function ensureServer() {
     cwd: APP_ROOT,
     // Spread rather than replace: a bare env would strip PATH and the Claude
     // Code subprocess the server spawns would fail to launch.
-    env: { ...process.env, TAILS_SERVER_PORT: String(SERVER_PORT) },
+    env: {
+      ...process.env,
+      TAILS_SERVER_PORT: String(SERVER_PORT),
+      // Packaged only. The first turns this binary into a plain Node
+      // interpreter; the second is how the server finds the bundled whisper
+      // engine, which it cannot work out for itself because the same code also
+      // runs from a source checkout where there are no resources at all.
+      ...(app.isPackaged
+        ? { ELECTRON_RUN_AS_NODE: '1', TAILS_RESOURCES_PATH: process.resourcesPath }
+        : {}),
+    },
     stdio: 'inherit',
   });
 

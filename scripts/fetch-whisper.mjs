@@ -33,7 +33,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -156,7 +156,15 @@ function alreadyVendored() {
   return [...KEEP, 'LICENSE.txt'].every((name) => fs.existsSync(path.join(OUT_DIR, name)));
 }
 
-async function main() {
+/**
+ * Also electron-builder's `beforePack` hook.
+ *
+ * Wired into the config rather than left to the `dist:win` script alone,
+ * because the failure it prevents is the quiet one: a bare `electron-builder`
+ * run with an empty `vendor/` produces an installer that looks fine and has no
+ * speech engine in it. Cached, so the normal case costs a digest comparison.
+ */
+export default async function vendorWhisper() {
   if (alreadyVendored()) {
     console.log(`whisper.cpp ${VERSION} already vendored in vendor/whisper/win32-x64`);
     return;
@@ -199,4 +207,8 @@ async function main() {
   }
 }
 
-await main();
+// Only when run as a script. Imported as a hook, electron-builder calls the
+// export itself and a second run here would fetch everything twice.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  await vendorWhisper();
+}

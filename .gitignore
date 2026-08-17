@@ -2,6 +2,8 @@ node_modules/
 dist/
 dist-server/
 release/
+# Third-party binaries fetched by scripts/, pinned by digest rather than committed.
+vendor/
 *.local
 .env
 .env.*
