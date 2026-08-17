@@ -33,10 +33,22 @@ does not matter at this scale. The contributor's number was almost certainly
 extracting features from the full 2,000-hour ACAV100M *audio*, which this
 pipeline does not do — it downloads those features precomputed.
 
-The second reason was the Linux-only dependencies. **Version 0.2.1 has none.**
-It phonemises with `nltk` + `cmudict` and runs a vendored Piper VITS in pure
-PyTorch, so there is no `espeak-ng`, no `sox`, and no apt at all. The setup
-commands below are kept for reference but are not needed on Windows.
+The second reason was the Linux-only dependencies, and this is **half** right —
+an earlier revision of this correction claimed 0.2.1 needed none, which was
+wrong and is fixed here.
+
+What is true: `sox`, `ffmpeg` and `libsndfile1` are not needed, and the Piper
+VITS is vendored as pure PyTorch, so there is no `piper` binary to install.
+`nltk` + `cmudict` are used, but only to *normalise* phrases — splitting a word
+CMUDict does not know into subwords it does.
+
+What is not: **`espeak-ng` is still required.** `data/piper/synthesis.py`
+phonemises by shelling out to the `espeak-ng` CLI, and without it `generate`
+fails. The mistake came from reading `data/piper/text.py`, seeing CMUDict, and
+generalising to the whole text path without opening the file that does the
+phonemisation.
+
+It does not need a system install. See [espeak-ng on Windows](#espeak-ng-on-windows).
 
 And the machine this was written for has an **RTX 4060**, which the original
 assessment did not account for.
@@ -132,6 +144,38 @@ On Windows, run every command below with `PYTHONUTF8=1`. The CLI prints Unicode
 arrows through `rich`, and on a cp1252 console that is an unhandled
 `UnicodeEncodeError` before it does any work — a crash that looks like a broken
 install and is a console encoding.
+
+### espeak-ng on Windows
+
+Required by `generate`, and available as an MSI that does **not** have to be
+installed: `msiexec /a` performs an administrative extract, which unpacks the
+files without touching the system or needing elevation.
+
+```bash
+curl -sL -o espeak-ng.msi   https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi
+msiexec /a espeak-ng.msi /qn TARGETDIR="$PWD/espeak"
+```
+
+Then point the trainer at it. Both variables are needed and the second is the
+one that is easy to miss:
+
+```bash
+export PATH="$PWD/espeak/eSpeak NG:$PATH"
+export ESPEAK_DATA_PATH="$PWD/espeak/eSpeak NG/espeak-ng-data"
+```
+
+Without `ESPEAK_DATA_PATH` an extracted copy does not fail cleanly — it
+**segfaults** (exit `0xC0000005`) with no message, which through livekit's
+`subprocess.run` surfaces as an empty phonemisation rather than as an error.
+
+Check it: `espeak-ng --ipa -q -v en-us tails` should print `tˈeɪlz`.
+
+**On the licence.** espeak-ng is GPL-3.0 and this is exactly why it can be used
+here: it runs as a separate program at *training* time, on this machine, and
+nothing it produces ships. The model weights that come out are ours. That is
+the same distinction that ruled Kokoro out — there the GPL espeak-ng is
+statically linked into a bundle the app would ship, which is a combined work.
+Training with it is mere aggregation; shipping it is not.
 
 Then download the models and corpora:
 
@@ -301,6 +345,9 @@ Then the same five with `hey_tails.yaml`.
   not the run.
 - **`UnicodeEncodeError` before anything happens** — `PYTHONUTF8=1` was not set.
   See [Setup](#setup).
+- **`espeak-ng not found`, or empty phonemisation** during `generate` — see
+  [espeak-ng on Windows](#espeak-ng-on-windows). Empty output rather than an
+  error almost always means `ESPEAK_DATA_PATH` is unset.
 - **Training on the CPU.** If `torch.__version__` has no `+cu124`, pip resolved
   the CPU wheel. Reinstall from the PyTorch index.
 - **CUDA out of memory** during `generate` — lower `tts_batch_size` from 50 to
