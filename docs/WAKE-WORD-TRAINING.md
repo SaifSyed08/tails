@@ -338,6 +338,62 @@ Then the same five with `hey_tails.yaml`.
 - **eval** — prints AUT, false positives per hour, recall, and an **optimal
   threshold**. Write that number down; see [Bringing it back](#bringing-it-back).
 
+### Two crashes you will hit on Windows, and what they actually mean
+
+Neither is in the documentation upstream, both look like configuration
+problems, and both are exhaustion over time. The tell is the same in each case:
+**hundreds of successes, then failure.** A wrong path or a bad argument fails on
+the first call.
+
+#### `espeak-ng ... returned non-zero exit status 3221225794`
+
+`0xC0000142`, `STATUS_DLL_INIT_FAILED` — Windows can no longer initialise DLLs
+for new processes. `generate` phonemises by launching `espeak-ng.exe` **once per
+clip**, from inside the per-batch comprehension in `synthesis.py`:
+
+```python
+phoneme_ids = [get_phonemes(config, t, voice) for t in batch_texts]
+```
+
+That is 25,000 launches for the positives and thousands more for the
+adversarial negatives, and Windows gives out long before the end.
+
+Caching by phrase is *not* sufficient on its own, which is worth knowing
+because it looks like it is: the positives are 25,000 clips of two distinct
+strings, so a cache makes that stage free and the run gets fifty times further
+— and then dies in the negatives, which are thousands of *distinct* invented
+words with nothing to hit.
+
+The fix is to phonemise the whole adversarial list in **one** launch up front
+and seed the cache. espeak-ng will do that from a file, but only if **each line
+ends in sentence punctuation** — without it every phrase is concatenated onto a
+single output line, and since phrases contain spaces the mapping back is lost.
+Verify the mapping rather than trusting it: a silently misaligned batch trains
+the model on the wrong sounds, and that surfaces months later as a wake word
+that works badly, with nothing pointing at the cause.
+
+`train_cached.py` in the training workspace does this. Measured effect on the
+positives: **22,600 cache hits, 22 phrases in one batch launch, zero individual
+launches** — and 6.5 → 49 clips/s, because the process launch was the
+bottleneck all along rather than the GPU.
+
+#### `CUDA error: out of memory`
+
+Note what it is *not*: PyTorch's `OutOfMemoryError`, which names the allocation
+it could not satisfy. A bare driver-level OOM, with several GB free, at a
+different clip count every time, is not about size. Lowering `tts_batch_size`
+from 50 to 16 dropped the measured peak from 6,437 MiB to 1,793 MiB and the
+crash happened anyway.
+
+What makes it survivable is that **`generate` resumes**. It counts the clips
+already on disk and carries on — verified, a restart picked up at exactly
+11,776 of 25,000. So the answer is to retry the stage, which `run-training.sh`
+does automatically, capped, and only for this error signature. Anything else
+still fails on the first attempt rather than being hidden behind a retry loop.
+
+This is a workaround and not a fix. The leak is in the driver or in livekit's
+synthesis loop; resume makes it cost a process restart instead of the run.
+
 ### What a failed run looks like
 
 - **Out of disk.** 17 GB of download plus generated audio. Check before
