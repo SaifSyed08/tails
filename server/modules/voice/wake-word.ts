@@ -109,11 +109,27 @@ export const MAX_THRESHOLD = 0.99;
  *
  * So it ships with mitigations rather than an argument. Its threshold starts
  * far above the others, and it is the one word whose value most needs
- * replacing with a measured figure: the calibration point available today is
- * that a near-rhyme of the *distinctive* phrase "hey jarvis" still scored 0.29
- * on this machine, so rhymes of a common word will sit much higher. 0.85 is a
- * starting position, not a result — it must be re-derived from a false-accept
- * run against those confusables before this is enabled by default.
+ * replacing with a measured figure. 0.85 is a starting position, not a result.
+ *
+ * ## The calibration point, corrected
+ *
+ * An earlier note here said a near-rhyme of the distinctive phrase "hey jarvis"
+ * ("hey harvest") "still scored 0.29 on this machine", offered as reassurance
+ * that there was comfortable margin. Re-measured across two voices on identical
+ * synthesised audio, it scores **0.190 on one and 0.961 on the other** — the
+ * second is a near-certain false accept against `hey_jarvis`'s own 0.5 default.
+ *
+ * The honest reading, with the caveat stated: synthesised speech is not human
+ * speech, and one voice's rendering of "harvest" may sit unusually close to
+ * "jarvis". These numbers are reliable for *comparing models on identical
+ * audio*, which is what the harness exists for, and should not be read as
+ * absolute false-accept rates.
+ *
+ * What it does establish is that the single figure this threshold was reasoned
+ * from was not representative. A distinctive two-word phrase can be pushed to
+ * 0.96 by a rhyme, so no amount of phoneme-counting says where a common
+ * one-syllable word lands. That has to be measured per phrase, which is why
+ * `hey tails` is trained alongside `tails` rather than as a fallback.
  */
 export const WAKE_WORDS: readonly WakeWordDefinition[] = [
   { id: 'tails', file: 'tails.onnx', label: 'TAILS', source: 'bundled', threshold: 0.85 },

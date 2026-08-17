@@ -91,11 +91,22 @@ actually bite — is the app's own name, said aloud constantly while using it.
 
 `hey tails` is six phonemes and clears the floor.
 
-The measurement available today: on **this** machine, a near-rhyme of the
-distinctive phrase "hey jarvis" ("hey harvest") still scored **0.29** against a
-0.5 threshold. That is a comfortable margin for an invented phrase. A common
-English word's rhymes will sit much closer, and no amount of phoneme-counting
-turns that into a number.
+The measurement available today, and it is worse than this document used to
+claim. A near-rhyme of the *distinctive* phrase "hey jarvis" — "hey harvest" —
+was recorded here as scoring **0.29** against a 0.5 threshold, and offered as
+evidence of comfortable margin. Re-measured across two voices on identical
+synthesised audio it scores **0.190 and 0.961**. The second would fire.
+
+Caveat, stated rather than buried: synthesised speech is not human speech, and
+one voice's "harvest" may land unusually close to "jarvis". These figures are
+sound for comparing models on identical audio — which is what
+`false_accepts.py` is for — and should not be read as absolute rates.
+
+What they do establish is that the single number this threshold was reasoned
+from was not representative. If a rhyme can push a distinctive two-word phrase
+to 0.96, nothing about phoneme counts predicts where a common one-syllable word
+lands. It has to be measured, per phrase, which is the whole reason both are
+trained.
 
 So train both, and let the false-accept measurement decide. The app already
 supports either — the choice is a config value, not a rewrite.
