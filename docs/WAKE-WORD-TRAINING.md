@@ -10,20 +10,43 @@ training the second costs one extra run of the same pipeline. The reason is in
 published reliability floor and the only way to know how much that costs is to
 measure both.
 
-Budget about **75–90 minutes per phrase** on a Colab GPU, most of it unattended.
+**This runs on this machine.** An earlier version of this document sent the job
+to Colab; that advice was wrong and is corrected below.
 
 ---
 
-## Why Colab and not this machine
+## Correction: it does not need Colab
 
-Training locally was priced and rejected on evidence. livekit-wakeword hardcodes
-every ONNX session in its feature pipeline to `CPUExecutionProvider` and extracts
-features single-threaded; their own contributor measured **~14 hours of CPU**
-against 13 minutes on a GPU. Two pull requests fix it and neither is merged.
+This document used to open with "Training locally was priced and rejected on
+evidence", citing a livekit-wakeword contributor's report of **~14 hours of CPU
+feature extraction** against 13 minutes on a GPU. That figure was repeated here
+without being reproduced, and both of the things it rested on turned out not to
+apply.
 
-For comparison, the openWakeWord pipeline *would* have run locally in roughly
-1–2 hours — but we are not using openWakeWord's trainer, for reasons in
-[Why livekit-wakeword](#why-livekit-wakeword).
+**Measured here, feature extraction is 6.5 ms per clip.** The pipeline is two
+frozen ONNX graphs per two-second clip — one melspectrogram call at 0.8 ms and
+one embedding call at 5.8 ms, because a two-second clip is 16 windows and the
+embedding stage already batches 64 at a time. For ~52,000 clips that is about
+**five minutes per phrase**, and about **eleven minutes for both**. The
+`CPUExecutionProvider` hardcoding is real and still present in 0.2.1; it simply
+does not matter at this scale. The contributor's number was almost certainly
+extracting features from the full 2,000-hour ACAV100M *audio*, which this
+pipeline does not do — it downloads those features precomputed.
+
+The second reason was the Linux-only dependencies. **Version 0.2.1 has none.**
+It phonemises with `nltk` + `cmudict` and runs a vendored Piper VITS in pure
+PyTorch, so there is no `espeak-ng`, no `sox`, and no apt at all. The setup
+commands below are kept for reference but are not needed on Windows.
+
+And the machine this was written for has an **RTX 4060**, which the original
+assessment did not account for.
+
+What is left is the download, and it is the only slow part: ~17 GB of
+precomputed negatives, backgrounds and impulse responses. That is a function of
+the connection, not the hardware.
+
+Reproduce the measurement with `docs/reference/wakeword-feature-bench.py`, run
+from the training venv.
 
 ---
 
@@ -79,26 +102,50 @@ supports either — the choice is a config value, not a rewrite.
 
 ---
 
-## Setup on Colab
+## Setup
 
-Create a new notebook, set the runtime to **GPU** (Runtime → Change runtime type
-→ T4 is enough), and run these in cells.
+A virtual environment outside the app repo, so 17 GB of corpora never goes near
+git. CUDA PyTorch first, explicitly, or pip resolves the CPU build and the
+training phase runs on the processor for no reason:
 
 ```bash
-!apt-get -qq install espeak-ng libsndfile1 ffmpeg sox
-!pip -q install "livekit-wakeword[train,eval,export]"
+python -m venv .venv
+./.venv/Scripts/python.exe -m pip install   --index-url https://download.pytorch.org/whl/cu124 "torch>=2.6" torchaudio
+./.venv/Scripts/python.exe -m pip install "livekit-wakeword[train,eval,export]"
 ```
 
-Then download the models and background/noise corpora:
+Check it took: `torch.cuda.is_available()` must be `True`, and `torch.__version__`
+must end in `+cu124` rather than being a bare version.
+
+On Windows, run every command below with `PYTHONUTF8=1`. The CLI prints Unicode
+arrows through `rich`, and on a cp1252 console that is an unhandled
+`UnicodeEncodeError` before it does any work — a crash that looks like a broken
+install and is a console encoding.
+
+Then download the models and corpora:
 
 ```bash
+PYTHONUTF8=1 ./.venv/Scripts/python.exe -m livekit.wakeword setup --config tails.yaml
+```
+
+<details>
+<summary>The old Colab instructions, kept for reference</summary>
+
+```bash
+!apt-get -qq install espeak-ng libsndfile1 ffmpeg sox   # not needed in 0.2.1
+!pip -q install "livekit-wakeword[train,eval,export]"
 !livekit-wakeword setup --config tails.yaml
 ```
+
+</details>
 
 > **This is the long download.** The production configuration pulls roughly
 > **16–17 GB** of precomputed negative features (ACAV100M) plus background audio
 > and room impulse responses. On Colab it comes down inside Google's network,
 > which is the main reason this is not being done locally.
+>
+> It is also the reason this is the slow part now that the compute has been
+> measured. Everything after it is minutes.
 >
 > There is a `--skip-acav` flag. **Do not use it here.** ACAV100M is the corpus
 > the false-positive behaviour is tuned against, and skipping it on a phrase
@@ -238,13 +285,13 @@ Then the same five with `hey_tails.yaml`.
 
 ### What a failed run looks like
 
-- **Out of disk.** Colab's default disk is tight against a 17 GB download plus
-  generated audio. If `setup` dies partway, that is usually why — mount Drive or
-  pick a larger runtime.
-- **Runtime disconnected.** Colab reclaims idle sessions. The stages are
-  resumable: re-run from whichever one died rather than starting over.
-- **`espeak-ng not found`** during `generate` — the `apt-get` cell did not run,
-  or the runtime was recycled after it did.
+- **Out of disk.** 17 GB of download plus generated audio. Check before
+  starting; the stages are resumable, so a failure here costs the download and
+  not the run.
+- **`UnicodeEncodeError` before anything happens** — `PYTHONUTF8=1` was not set.
+  See [Setup](#setup).
+- **Training on the CPU.** If `torch.__version__` has no `+cu124`, pip resolved
+  the CPU wheel. Reinstall from the PyTorch index.
 - **CUDA out of memory** during `generate` — lower `tts_batch_size` from 50 to
   25.
 - **Loss flat from step zero** — almost always a phrase/config typo, so the
