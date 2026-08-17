@@ -55,6 +55,8 @@ const NONE: WakeWordArm[] = [];
 
 type ServerFrame =
   | { type: 'state'; listening: boolean }
+  /** Settled text, sent while the user is still talking. Never a revision. */
+  | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
   | { type: 'error'; message: string };
 
@@ -164,6 +166,14 @@ export function useVoiceDictation({
       try {
         frame = JSON.parse(event.data as string) as ServerFrame;
       } catch {
+        return;
+      }
+
+      if (frame.type === 'partial') {
+        // Appended exactly like a finished transcript, because by the time it
+        // arrives it is finished — the server only sends words that have
+        // stopped changing. Capture keeps running.
+        onTextRef.current(frame.text);
         return;
       }
 

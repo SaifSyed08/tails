@@ -1,7 +1,6 @@
 import {
   ArrowUp,
   AudioLines,
-  Ear,
   ImagePlus,
   Loader2,
   Mic,
@@ -117,6 +116,15 @@ type ComposerMenuProps = {
   onAssignPet: () => void;
   /** The pet this conversation already has, shown so the entry reads as state. */
   petName: string | null;
+  /**
+   * Voice mode, so the entry can report its state and switch it.
+   *
+   * One entry rather than the two this menu used to carry. Dictation and wake
+   * words were never two features — they are one microphone seen at two
+   * moments — and offering them separately made the user answer a question the
+   * app should answer for itself.
+   */
+  voice?: VoiceModeState;
 };
 
 /**
@@ -128,26 +136,20 @@ type ComposerMenuProps = {
  */
 type NotYetEntry = { title: string; detail: string };
 
-const NOT_YET: Record<'generate' | 'dictation' | 'wakeWord', NotYetEntry> = {
+const NOT_YET: Record<'generate' | 'voice', NotYetEntry> = {
   generate: {
     title: 'Generate',
     detail: 'The entry point is here, but nothing is wired behind it yet — no generators have been defined. Ask for one and it lands here.',
   },
-  dictation: {
-    // The old copy blamed the browser's speech API for uploading audio. That
-    // stopped being the reason the day on-device transcription was benchmarked
-    // as workable, and a blocker that no longer exists is just a wrong answer.
-    title: 'Dictation',
-    detail: 'Dictation runs on-device — nothing is uploaded. It needs a one-time 78 MB model download first. The microphone button beside the send arrow is where it lives.',
-  },
-  wakeWord: {
+  voice: {
     /*
-      Not a to-do. Both usable engines are ruled out for reasons that will not
-      change by working harder at them, and an entry reading "soon" would imply
-      otherwise — so this says unavailable, and says why.
+      Shown only when voice mode cannot start yet. It is a setup instruction
+      rather than a refusal: the engine ships with the app and the models are a
+      download away, so the honest answer is where to go, not that it is
+      missing.
     */
-    title: 'Wake word',
-    detail: '"Hey T.A.I.L.S." is not planned. The two usable engines are out: openWakeWord’s pretrained weights are non-commercial, which an MIT app cannot ship, and Porcupine now validates over the network and ended its free tier. A wake name you could choose yourself needs a classifier trained per phrase.',
+    title: 'Voice mode',
+    detail: 'Voice mode runs entirely on this machine — no audio and no transcript leave it. It needs its models downloaded first, which you can do in Settings under Voice. Wake words are optional and off until you turn one on.',
   },
 };
 
@@ -176,7 +178,7 @@ const MENU_CLOSE_DELAY_MS = 200;
  * outside, or when focus leaves.
  */
 function ComposerMenu({
-  onPickFiles, onPickImages, onPersonalize, onAssignPet, petName,
+  onPickFiles, onPickImages, onPersonalize, onAssignPet, petName, voice,
 }: ComposerMenuProps) {
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -355,24 +357,23 @@ function ComposerMenu({
               <button
                 type="button"
                 role="menuitem"
-                onClick={() => setNotYet(NOT_YET.dictation)}
+                onClick={() => {
+                  // Available: this is the switch. Not available: this is the
+                  // explanation of what to do about it.
+                  if (!voice || voice.mode === 'unavailable') { setNotYet(NOT_YET.voice); return; }
+                  if (voice.mode === 'off') { voice.enable(); close(); return; }
+                  voice.disable();
+                  close();
+                }}
                 className={itemClass}
               >
-                <Mic className="size-4 text-muted-foreground" aria-hidden="true" />
-                Dictation
-                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">on-device</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => setNotYet(NOT_YET.wakeWord)}
-                className={itemClass}
-              >
-                <Ear className="size-4 text-muted-foreground" aria-hidden="true" />
-                Wake word
-                {/* Not "soon": this one is not coming, and the label should
-                    not promise otherwise. */}
-                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">unavailable</span>
+                <AudioLines className="size-4 text-muted-foreground" aria-hidden="true" />
+                Voice mode
+                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                  {!voice || voice.mode === 'unavailable'
+                    ? 'set up'
+                    : voice.mode === 'off' ? 'off' : 'on'}
+                </span>
               </button>
             </>
           )}
@@ -740,6 +741,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           onPersonalize={personalize}
           onAssignPet={onAssignPet}
           petName={petName ?? null}
+          voice={voice}
         />
         <input
           ref={fileInputRef}

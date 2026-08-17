@@ -51,6 +51,31 @@ export type WakeWordDefinition = {
   threshold: number;
 };
 
+/**
+ * Our own wake words are trained with **livekit-wakeword**, not openWakeWord.
+ *
+ * The runtime does not change: livekit's exported classifier takes the same
+ * `(1, 16, 96)` embedding stack, from the same frozen melspectrogram and
+ * embedding front end, with the same `/10 + 2` scaling. Swapping the trainer
+ * swaps one file.
+ *
+ * Two reasons for it. Its classifier weights are plain Apache-2.0 with no
+ * carve-out, where openWakeWord's pretrained heads are CC-BY-NC-SA and cannot
+ * be shipped by an MIT app. And its published work targets false accepts,
+ * which is the failure mode that decides whether a one-syllable wake word is
+ * usable at all.
+ *
+ * **Their headline "100× fewer false positives" is unverified here.** No
+ * pinned openWakeWord baseline, no reproducible artifact. It is directional,
+ * and it is written down as directional so nobody later repeats it as a fact
+ * this project measured.
+ *
+ * One correction worth preserving, because an earlier note in this repo got it
+ * wrong: the shared mel and embedding graphs were **never** the non-commercial
+ * problem. Only the per-word classifier heads are. The front end is
+ * Apache-derived in both projects.
+ */
+
 /** Where wake-word models live, beside the speech model. */
 export const wakeDir = (): string => path.join(TAILS_HOME, 'models', 'wake');
 

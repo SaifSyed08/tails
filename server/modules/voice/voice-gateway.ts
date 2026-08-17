@@ -11,6 +11,7 @@ import {
   toFrames,
 } from '@/modules/voice/pcm.js';
 import { cleanTranscript } from '@/modules/voice/cleanup.js';
+import { MIN_PASS_INTERVAL_MS, StableTranscript } from '@/modules/voice/live-transcript.js';
 import { readStatus, transcribe } from '@/modules/voice/whisper.js';
 import { readRecord, readString } from '@/shared/utils.js';
 
@@ -54,6 +55,13 @@ function routeUpgrades(server: Server, wss: WebSocketServer): void {
 type ServerFrame =
   /** The gate opened or closed. Drives the composer's listening indicator. */
   | { type: 'state'; listening: boolean }
+  /**
+   * Text that has settled and will not change.
+   *
+   * Sent while the user is still talking. Never a revision — see
+   * `live-transcript.ts` for why nothing provisional is ever sent.
+   */
+  | { type: 'partial'; text: string }
   | { type: 'transcript'; text: string }
   | { type: 'error'; message: string };
 
@@ -74,6 +82,12 @@ type Capture = {
   /** Leftover samples when a chunk did not divide evenly into gate frames. */
   remainder: Int16Array;
   busy: boolean;
+  /** Decides which words have stopped changing and may be shown. */
+  live: StableTranscript;
+  /** When the last live pass started, so passes cannot overlap. */
+  lastPassAt: number;
+  /** True while a live pass is running; passes are strictly serial. */
+  passing: boolean;
 };
 
 function append(capture: Capture, samples: Int16Array): void {
@@ -107,10 +121,46 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
       used: 0,
       remainder: new Int16Array(0),
       busy: false,
+      live: new StableTranscript(),
+      lastPassAt: 0,
+      passing: false,
     };
 
     const send = (frame: ServerFrame) => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(frame));
+    };
+
+    /**
+     * Transcribes the audio so far and emits whatever has settled.
+     *
+     * Runs while the user is still talking, which is what makes text appear as
+     * they speak rather than after they stop. Strictly serial and rate-limited:
+     * a pass costs roughly 640 ms here and whisper pads every input to a
+     * 30-second window, so overlapping passes would queue behind each other and
+     * add latency without adding resolution.
+     *
+     * Failures are swallowed. A dropped live pass costs one update; the final
+     * transcription on stop is the one that must not fail.
+     */
+    const runLivePass = async () => {
+      if (capture.passing || capture.busy) return;
+      const now = Date.now();
+      if (now - capture.lastPassAt < MIN_PASS_INTERVAL_MS) return;
+      if (!capture.buffer || capture.used < SAMPLE_RATE / 2) return;
+
+      capture.passing = true;
+      capture.lastPassAt = now;
+      // Copied because capture continues writing into the buffer underneath.
+      const snapshot = capture.buffer.slice(0, capture.used);
+
+      try {
+        const settled = capture.live.advance(await transcribe(snapshot, capture.cwd));
+        if (settled) send({ type: 'partial', text: cleanTranscript(settled) });
+      } catch {
+        // See above: a live pass is best-effort.
+      } finally {
+        capture.passing = false;
+      }
     };
 
     const finish = async () => {
@@ -127,12 +177,17 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
 
       capture.busy = true;
       try {
-        const raw = await transcribe(samples, capture.cwd);
-        const text = cleanTranscript(raw);
+        // The last pass sees all the audio and is the most accurate one, but
+        // whatever was already shown cannot be taken back — so `flush` returns
+        // only the part that has not been sent, re-anchored if this pass
+        // disagrees with what the user is already looking at.
+        const tail = capture.live.flush(await transcribe(samples, capture.cwd));
+        const text = cleanTranscript(tail);
         if (text) send({ type: 'transcript', text });
       } catch (error) {
         send({ type: 'error', message: error instanceof Error ? error.message : 'Transcription failed' });
       } finally {
+        capture.live.reset();
         capture.busy = false;
       }
     };
@@ -157,6 +212,10 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
           if (event?.type === 'speech-start') send({ type: 'state', listening: true });
           else if (event?.type === 'speech-end') void finish();
         }
+
+        // Text should arrive while the sentence is still being spoken, not
+        // after it ends. Rate-limiting lives inside the pass itself.
+        if (capture.gate.active) void runLivePass();
         return;
       }
 
@@ -170,6 +229,8 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
           return;
         }
         capture.cwd = readString(message.cwd);
+        capture.live.reset();
+        capture.lastPassAt = 0;
         capture.gate.reset();
         capture.buffer = null;
         capture.used = 0;
