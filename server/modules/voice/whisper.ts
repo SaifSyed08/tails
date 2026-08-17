@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { TAILS_HOME } from '@/db/connection.js';
 import { encodeWav } from '@/modules/voice/pcm.js';
@@ -60,6 +61,27 @@ export const modelPath = (): string => path.join(TAILS_HOME, 'models', MODEL_FIL
  * itself: it is a separate process that also runs from a source checkout under
  * `npm run dev`, where there are no resources and nothing should be found here.
  */
+/**
+ * The repository root, found by walking up to the nearest `package.json`.
+ *
+ * A fixed number of `..` breaks between running from source under `tsx` and
+ * running the compiled output from `dist-server`, which are different depths.
+ */
+function findAppRoot(): string {
+  let directory = path.dirname(fileURLToPath(import.meta.url));
+
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (fs.existsSync(path.join(directory, 'package.json'))) return directory;
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+
+  return process.cwd();
+}
+
+const APP_ROOT = findAppRoot();
+
 export function enginePath(): string | null {
   const executable = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
 
@@ -73,7 +95,24 @@ export function enginePath(): string | null {
   }
 
   const bundled = path.join(TAILS_HOME, 'whisper', executable);
-  return fs.existsSync(bundled) ? bundled : null;
+  if (fs.existsSync(bundled)) return bundled;
+
+  /*
+   * The checkout's own copy, fetched by `npm run vendor:whisper`.
+   *
+   * Packaging pulls the same digest-pinned build into `vendor/` before it
+   * copies it into the installer, so on a development machine the engine is
+   * already on disk and was simply unreachable — dictation reported "not
+   * installed" while the exact binary the installer ships sat two directories
+   * away. That is a worse failure than a missing engine, because everything
+   * says the feature is unavailable and nothing says why.
+   *
+   * Still not a PATH search: this is a specific path inside this repository,
+   * holding a build this project fetched and verified. The rule that a stray
+   * `whisper-cli` must never be adopted is intact.
+   */
+  const vendored = path.join(APP_ROOT, 'vendor', 'whisper', `${process.platform}-${process.arch}`, executable);
+  return fs.existsSync(vendored) ? vendored : null;
 }
 
 export type VoiceStatus = {
