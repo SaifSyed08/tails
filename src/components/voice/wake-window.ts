@@ -65,6 +65,66 @@ export const WARMUP_SAMPLES = Math.ceil(
 ) * CHUNK_SAMPLES;
 
 /**
+ * Re-cuts arriving audio into exactly `CHUNK_SAMPLES` blocks.
+ *
+ * ## Why this exists, which is a bug worth not repeating
+ *
+ * The capture worklet posts ~100 ms blocks, because 100 ms is a sensible unit
+ * for a microphone. The wake-word chain needs 80 ms, because 80 ms is what the
+ * models were trained on. Those two numbers have no reason to agree, and they
+ * did not: the worker began `if (pcm.length !== CHUNK_SAMPLES) return`, so
+ * **every chunk was silently dropped and no wake word could ever fire**. There
+ * was no error, no log and no partial behaviour — the feature simply did
+ * nothing, which is why it survived so long.
+ *
+ * The guard was not wrong to want fixed-size input; it was wrong to make the
+ * producer's block size part of the consumer's contract. This queue is the
+ * seam: audio may arrive in any size, in blocks that vary from call to call,
+ * and what comes out is always the length the graphs require, in order, with
+ * nothing dropped and nothing duplicated.
+ */
+export class ChunkQueue {
+  private held = new Int16Array(0);
+
+  /**
+   * Adds audio and returns every whole chunk now available.
+   *
+   * Usually one, occasionally two, sometimes none — a 100 ms producer feeding
+   * an 80 ms consumer runs a 20 ms surplus that pays for an extra chunk every
+   * fourth call. The remainder is carried, which is the whole point: dropping
+   * it would lose a fifth of the audio and detection would degrade in a way
+   * that looks like a bad model rather than a bad buffer.
+   */
+  push(pcm: Int16Array): Int16Array[] {
+    const joined = new Int16Array(this.held.length + pcm.length);
+    joined.set(this.held, 0);
+    joined.set(pcm, this.held.length);
+
+    const chunks: Int16Array[] = [];
+    let at = 0;
+    while (at + CHUNK_SAMPLES <= joined.length) {
+      // Copied rather than sub-viewed: these are handed to a tensor that
+      // outlives this call, and a view would keep the whole joined buffer
+      // alive behind it.
+      chunks.push(joined.slice(at, at + CHUNK_SAMPLES));
+      at += CHUNK_SAMPLES;
+    }
+
+    this.held = joined.slice(at);
+    return chunks;
+  }
+
+  /** Samples carried over, waiting for the rest of their chunk. */
+  get pending(): number {
+    return this.held.length;
+  }
+
+  reset(): void {
+    this.held = new Int16Array(0);
+  }
+}
+
+/**
  * openWakeWord's mel scaling, applied between the first two graphs.
  *
  * Not cosmetic: the embedding model was trained on this distribution, and

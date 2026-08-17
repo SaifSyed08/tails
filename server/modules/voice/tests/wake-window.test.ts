@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { WORKLET_CHUNK_SAMPLES } from '../../../../src/components/voice/capture-worklet.js';
 import {
   CHUNK_SAMPLES,
+  ChunkQueue,
   DetectionGate,
   EMBEDDING_SIZE,
   EMBEDDING_WINDOW,
@@ -20,6 +22,18 @@ import { clampThreshold, MAX_THRESHOLD, MIN_THRESHOLD, WAKE_WORDS } from '@/modu
 const chunkOfFrames = (n: number, fill = 1) => Float32Array.from(
   { length: n * MEL_BINS },
   (_, i) => fill + i / 10000,
+);
+
+/**
+ * PCM whose value is its own position in the stream.
+ *
+ * Wrapped into Int16 range so the sample at absolute index `i` is always
+ * `(i % 4096) - 2048`. That makes one comparison check three things at once:
+ * that nothing was dropped, that nothing was duplicated, and that order held.
+ */
+const ramp = (length: number, from: number) => Int16Array.from(
+  { length },
+  (_, i) => ((from + i) % 4096) - 2048,
 );
 
 test('mel scaling matches the transform the embedding model was trained on', () => {
@@ -146,4 +160,65 @@ test('the phrase chosen against the reliability floor is flagged as such', () =>
   assert.ok(tails.threshold > jarvis.threshold, 'tails should start stricter');
   assert.equal(tails.source, 'bundled', 'our own model carries no licence limit');
   assert.equal(jarvis.source, 'fetched', 'pretrained weights are non-commercial');
+});
+
+/*
+ * The producer/consumer size mismatch that made the wake word inert.
+ *
+ * The capture worklet posts blocks sized from `TARGET_SAMPLE_RATE`; the models
+ * want `CHUNK_SAMPLES`. Those two numbers were never equal and the worker
+ * required equality, so every chunk was dropped and nothing ever fired. These
+ * tests pin the queue that reconciles them — and, deliberately, read the
+ * worklet's own constant rather than a copy of it, so a change on either side
+ * is caught here instead of turning into silence again.
+ */
+test('the microphone block size does not match what the models want', () => {
+  // Not an assertion about correctness — an assertion that the gap is real, so
+  // nobody removes the queue on the assumption that the sizes agree.
+  assert.notEqual(WORKLET_CHUNK_SAMPLES, CHUNK_SAMPLES);
+});
+
+test('audio posted at the worklet size comes out at the model size', () => {
+  const queue = new ChunkQueue();
+  const chunks = queue.push(ramp(WORKLET_CHUNK_SAMPLES, 0));
+
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].length, CHUNK_SAMPLES);
+  assert.equal(queue.pending, WORKLET_CHUNK_SAMPLES - CHUNK_SAMPLES);
+});
+
+test('no sample is dropped, duplicated or reordered across many blocks', () => {
+  const queue = new ChunkQueue();
+  const out: number[] = [];
+  let written = 0;
+
+  // Twenty blocks, alternating length, because the worklet's own output is not
+  // a constant either — it flushes whatever has accumulated past its threshold.
+  for (let i = 0; i < 20; i += 1) {
+    const size = WORKLET_CHUNK_SAMPLES + (i % 2 === 0 ? 0 : 43);
+    for (const chunk of queue.push(ramp(size, written))) out.push(...chunk);
+    written += size;
+  }
+
+  assert.equal(out.length % CHUNK_SAMPLES, 0);
+  assert.equal(out.length + queue.pending, written);
+  // The ramp is its own index, so this checks order and identity at once.
+  for (let i = 0; i < out.length; i += 1) assert.equal(out[i], (i % 4096) - 2048);
+});
+
+test('a block smaller than one chunk yields nothing and is not lost', () => {
+  const queue = new ChunkQueue();
+  assert.deepEqual(queue.push(ramp(100, 0)), []);
+  assert.equal(queue.pending, 100);
+
+  const chunks = queue.push(ramp(CHUNK_SAMPLES, 100));
+  assert.equal(chunks.length, 1);
+  assert.equal(queue.pending, 100);
+});
+
+test('reset drops the carry, so a re-arm does not splice two sessions together', () => {
+  const queue = new ChunkQueue();
+  queue.push(ramp(500, 0));
+  queue.reset();
+  assert.equal(queue.pending, 0);
 });

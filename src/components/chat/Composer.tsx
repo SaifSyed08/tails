@@ -361,8 +361,11 @@ function ComposerMenu({
                   // Available: this is the switch. Not available: this is the
                   // explanation of what to do about it.
                   if (!voice || voice.mode === 'unavailable') { setNotYet(NOT_YET.voice); return; }
-                  if (voice.mode === 'off') { voice.enable(); close(); return; }
-                  voice.disable();
+                  // Toggles voice mode specifically, not the microphone. If
+                  // dictation happens to be running, this takes it over rather
+                  // than turning it off — the user asked for voice mode.
+                  if (voice.intent === 'voice') voice.disable();
+                  else voice.start('voice');
                   close();
                 }}
                 className={itemClass}
@@ -372,7 +375,7 @@ function ComposerMenu({
                 <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">
                   {!voice || voice.mode === 'unavailable'
                     ? 'set up'
-                    : voice.mode === 'off' ? 'off' : 'on'}
+                    : voice.intent === 'voice' ? 'on' : 'off'}
                 </span>
               </button>
             </>
@@ -389,7 +392,12 @@ type ComposerProps = {
   busy: boolean;
   mode: PermissionMode;
   onModeChange: (mode: PermissionMode) => void;
-  onSend: (content: string, attachments: AttachmentPayload[]) => void;
+  onSend: (
+    content: string,
+    attachments: AttachmentPayload[],
+    /** How the message was composed. `spoken` changes how it is answered. */
+    origin?: { spoken: boolean },
+  ) => void;
   onAbort: () => void;
   /**
    * The agent's guess at the user's next message, if it offered one.
@@ -437,6 +445,15 @@ export type ComposerHandle = {
    * possible response to speaking.
    */
   append: (text: string) => void;
+  /**
+   * Sends what is in the box, as a spoken turn.
+   *
+   * Voice mode's auto-send. Deliberately narrow — there is no general
+   * "send this for me" on this handle, because the only caller that should
+   * ever send without the user pressing anything is the one where the user
+   * already signalled their intent by saying the wake word.
+   */
+  sendSpoken: () => void;
 };
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer({
@@ -445,7 +462,35 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 }, ref) {
   const reduced = useReducedMotion();
   const voiceControl = describeVoiceControl(voice);
-  const [draft, setDraft] = useState('');
+  /*
+    Voice mode wears amber, dictation wears the accent.
+
+    They are one button over one microphone, but they differ in the thing that
+    matters most — one of them sends what you said — so they must not be
+    indistinguishable at a glance. Amber is the same hue the chat stage uses
+    when the wake word fires, so the button and the glow read as one signal
+    rather than two features.
+  */
+  const spokenMode = voiceControl.intent === 'voice';
+  const [draftState, setDraftState] = useState('');
+  /*
+    The draft, readable synchronously.
+
+    Voice mode appends a transcript and sends it in the same tick, and reading
+    `draftState` there would send the value from *before* the append — an empty
+    message, or the previous sentence. React state is not readable until the
+    next render, so the ref is the draft's authoritative value and the state is
+    what renders it. Everything writes through `setDraft` below to keep them
+    from drifting apart.
+  */
+  const draftRef = useRef('');
+  const draft = draftState;
+
+  const setDraft = useCallback((next: string | ((current: string) => string)) => {
+    const value = typeof next === 'function' ? next(draftRef.current) : next;
+    draftRef.current = value;
+    setDraftState(value);
+  }, []);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
@@ -473,6 +518,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     };
   }, [sessionId]);
 
+  /*
+    `submit` is defined below, after the state it reads. The handle is created
+    above it, so it reaches it through a ref — which also keeps the handle
+    itself stable, rather than being rebuilt every time the draft changes.
+  */
+  const submitRef = useRef<(spoken?: boolean) => void>(() => {});
+
   useImperativeHandle(ref, () => ({
     fill: (text: string) => {
       setDraft(text);
@@ -486,7 +538,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       setDraft((current) => (current && !/\s$/.test(current) ? `${current} ${addition}` : `${current}${addition}`));
       textareaRef.current?.focus();
     },
-  }), []);
+    sendSpoken: () => submitRef.current(true),
+  }), [setDraft]);
 
   // The palette opens only for a slash at the very start of the input, so a
   // path like `src/a.ts` mid-sentence never triggers it.
@@ -518,13 +571,22 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     ].slice(0, 8));
   };
 
-  const submit = () => {
-    const content = draft.trim();
+  /**
+   * Sends the draft.
+   *
+   * Reads the ref rather than the rendered value, so a caller that appended
+   * text a moment ago sends that text. `spoken` rides along because a message
+   * that was dictated aloud is answered differently — see `onSend`.
+   */
+  const submit = (spoken = false) => {
+    const content = draftRef.current.trim();
     if ((!content && attachments.length === 0) || busy) return;
     setDraft('');
     setAttachments([]);
-    onSend(content || 'Have a look at this.', attachments);
+    onSend(content || 'Have a look at this.', attachments, { spoken });
   };
+
+  useEffect(() => { submitRef.current = submit; });
 
   /**
    * Starts a `/personalize`.
@@ -839,11 +901,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           title={voiceControl.title}
           className={cn(
             'relative rounded-full p-2 transition-colors duration-quick',
-            voiceControl.mode === 'listening' && 'bg-primary text-primary-foreground',
+            voiceControl.mode === 'listening' && (spokenMode
+              ? 'bg-[hsl(38_94%_50%)] text-black'
+              : 'bg-primary text-primary-foreground'),
             // Open-but-idle is deliberately not the capture colour: it reads as
             // armed rather than recording, while still being unmistakably on.
-            voiceControl.mode === 'waiting'
-              && 'text-primary ring-2 ring-inset ring-primary/60',
+            voiceControl.mode === 'waiting' && (spokenMode
+              ? 'text-[hsl(38_94%_44%)] ring-2 ring-inset ring-[hsl(38_94%_50%/0.65)] dark:text-[hsl(38_94%_62%)]'
+              : 'text-primary ring-2 ring-inset ring-primary/60'),
             voiceControl.mode === 'speaking' && 'text-primary',
             !voiceControl.live && voiceControl.mode !== 'listening'
               && 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -854,7 +919,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             // The same ping the thinking indicator uses, so "something is
             // live" reads the same way everywhere in the app.
             <span
-              className="absolute inset-0 animate-ping rounded-full bg-primary opacity-60"
+              className={cn(
+                'absolute inset-0 animate-ping rounded-full opacity-60',
+                spokenMode ? 'bg-[hsl(38_94%_50%)]' : 'bg-primary',
+              )}
               aria-hidden="true"
             />
           ) : null}
@@ -868,7 +936,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               is the evidence.
             */
             <span
-              className="pointer-events-none absolute inset-0 rounded-full bg-primary/25"
+              className={cn(
+                'pointer-events-none absolute inset-0 rounded-full',
+                spokenMode ? 'bg-[hsl(38_94%_50%/0.25)]' : 'bg-primary/25',
+              )}
               style={{ transform: `scale(${1 + Math.min(0.6, (voice?.level ?? 0) * 1.6)})` }}
               aria-hidden="true"
             />
@@ -899,7 +970,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         ) : (
           <button
             type="button"
-            onClick={submit}
+            // Wrapped rather than passed directly: the click event's first
+            // argument would otherwise arrive as the `spoken` flag and mark
+            // every typed message as dictated.
+            onClick={() => submit()}
             disabled={!draft.trim() && attachments.length === 0}
             aria-label="Send"
             className={cn(

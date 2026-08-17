@@ -18,6 +18,19 @@
  * the animation it is supposed to sit next to.
  */
 
+export const TARGET_SAMPLE_RATE = 16000;
+
+/**
+ * Samples the worklet accumulates before posting — 100 ms.
+ *
+ * Exported, and interpolated into the processor source below rather than
+ * written twice, because this number is *not* the size anything downstream
+ * wants. The wake-word models want 80 ms and the speech gate wants 20 ms;
+ * both re-cut what arrives. It was once treated as a shared contract, and the
+ * wake word silently never fired for as long as that lasted.
+ */
+export const WORKLET_CHUNK_SAMPLES = Math.round(TARGET_SAMPLE_RATE / 10);
+
 /**
  * Downsamples to 16 kHz mono Int16 and posts ~100 ms chunks.
  *
@@ -37,7 +50,7 @@ class TailsCaptureProcessor extends AudioWorkletProcessor {
     this.cursor = 0;
     this.pending = [];
     this.pendingLength = 0;
-    this.chunkSamples = Math.round(this.targetRate / 10);
+    this.chunkSamples = ${WORKLET_CHUNK_SAMPLES};
   }
 
   process(inputs) {
@@ -95,4 +108,3 @@ export function captureWorkletUrl(): string {
 }
 
 export const CAPTURE_PROCESSOR = 'tails-capture';
-export const TARGET_SAMPLE_RATE = 16000;

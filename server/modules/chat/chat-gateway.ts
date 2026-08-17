@@ -49,6 +49,7 @@ function parseClientMessage(raw: string): ClientMessage | null {
         model: readString(message.model) ?? undefined,
         effort: readString(message.effort) ?? undefined,
         attachments,
+        spoken: message.spoken === true,
       };
     }
     case 'chat.abort': {
@@ -260,6 +261,7 @@ async function handleSend(
       cwd: session.cwd,
       permissionMode: mode,
       attachments: message.attachments,
+      spoken: message.spoken === true,
       // The model is checked against the CLI's own catalogue in the runtime,
       // which is the only place that knows what this account may use.
       ...(message.model ? { model: message.model } : {}),

@@ -403,7 +403,7 @@ export function useChatSession(sessionId: string | null) {
 
   const sendMessage = useCallback((
     content: string,
-    options: { cwd?: string; attachments?: AttachmentPayload[] } = {},
+    options: { cwd?: string; attachments?: AttachmentPayload[]; spoken?: boolean } = {},
   ) => {
     const attachments = options.attachments ?? [];
     if (!sessionId || (!content.trim() && attachments.length === 0)) return;
@@ -422,6 +422,8 @@ export function useChatSession(sessionId: string | null) {
       // between renders must not send under the previous one.
       ...turnSettingsRef.current,
       attachments,
+      // Only sent when true, so a typed message carries nothing extra.
+      ...(options.spoken ? { spoken: true } : {}),
     });
   }, [sessionId, send]);
 

@@ -5,7 +5,9 @@ import test from 'node:test';
 // test runner. See the note in answers.test.ts.
 import {
   describeVoiceControl,
+  listPhrases,
   runVoiceAction,
+  type VoiceIntent,
   type VoiceMode,
   type VoiceModeState,
 } from '../../../../src/components/chat/voice-contract.js';
@@ -17,9 +19,14 @@ const ALL_MODES: VoiceMode[] = [
 function state(mode: VoiceMode, extra: Partial<VoiceModeState> = {}): VoiceModeState {
   return {
     mode,
+    // Defaults to whichever intent the mode implies, so a test that only cares
+    // about the moment does not have to state both.
+    intent: (mode === 'off' || mode === 'unavailable' ? 'off' : 'dictation') as VoiceIntent,
     armed: [],
+    armedLabels: [],
     level: 0,
-    enable: () => {},
+    wakeCount: 0,
+    start: () => {},
     disable: () => {},
     capture: () => {},
     endCapture: () => {},
@@ -58,7 +65,13 @@ test('waiting does not look or read like off', () => {
 test('the accessible name for waiting says the microphone is on', () => {
   // Not "ready", not "armed" — someone hearing this read aloud has to learn
   // that the microphone is currently open.
-  assert.match(describeVoiceControl(state('waiting')).label, /microphone on/i);
+  for (const intent of ['dictation', 'voice'] as const) {
+    assert.match(
+      describeVoiceControl(state('waiting', { intent })).label,
+      /microphone (is )?(on|open)/i,
+      `${intent} must say the microphone is open`,
+    );
+  }
 });
 
 test('both open-microphone states report themselves as live', () => {
@@ -113,31 +126,81 @@ test('speaking can always be interrupted', () => {
   assert.equal(described.action, 'hush');
 });
 
-test('with wake words armed, off invites voice mode rather than dictation', () => {
+test('the button always offers dictation, never voice mode', () => {
+  // The regression this replaces: with a wake word armed, the microphone
+  // button silently became a wake-word arm, so pressing it captured nothing
+  // and dictation appeared to be broken. Voice mode is a deliberate choice in
+  // the menu now, because it is the one that sends on its own.
   const plain = describeVoiceControl(state('off'));
-  const armed = describeVoiceControl(state('off', { armed: ['tails'] }));
+  const armed = describeVoiceControl(state('off', { armed: ['tails'], armedLabels: ['TAILS'] }));
 
-  assert.match(plain.label, /dictation/i);
-  assert.match(armed.label, /voice mode/i);
+  assert.equal(plain.action, 'dictate');
+  assert.equal(armed.action, 'dictate', 'an armed wake word must not change what the button does');
+  assert.equal(plain.label, armed.label);
+});
+
+test('while capturing, the label says whether this will send', () => {
+  // The one difference that can cost the user something. Dictation fills the
+  // box; voice mode sends when you stop talking. A control that does not say
+  // which is running will eventually send a half-finished thought.
+  const dictating = describeVoiceControl(state('listening', { intent: 'dictation' }));
+  const spoken = describeVoiceControl(state('listening', { intent: 'voice' }));
+
+  assert.notEqual(dictating.label, spoken.label);
+  assert.match(spoken.label, /send/i);
+  assert.doesNotMatch(dictating.label, /send/i);
+});
+
+test('waiting names the phrase the user is supposed to say', () => {
+  // Voice mode used to give no indication at all that a wake word was
+  // expected, let alone which one.
+  const described = describeVoiceControl(state('waiting', {
+    intent: 'voice',
+    armed: ['hey_jarvis'],
+    armedLabels: ['Hey Jarvis'],
+  }));
+
+  assert.match(described.label, /Hey Jarvis/);
+  assert.match(described.title, /Hey Jarvis/);
+});
+
+test('phrases are listed the way a person would say them', () => {
+  assert.equal(listPhrases([]), '');
+  assert.equal(listPhrases(['Hey Jarvis']), 'Hey Jarvis');
+  assert.equal(listPhrases(['Hey Jarvis', 'Timer']), 'Hey Jarvis or Timer');
+  assert.equal(listPhrases(['Hey Jarvis', 'Timer', 'TAILS']), 'Hey Jarvis, Timer or TAILS');
 });
 
 test('each action reaches exactly its own handler', () => {
   const called: string[] = [];
   const spy = state('off', {
-    enable: () => called.push('enable'),
+    start: (intent) => called.push(`start:${intent}`),
     disable: () => called.push('disable'),
     capture: () => called.push('capture'),
     endCapture: () => called.push('endCapture'),
     hush: () => called.push('hush'),
   });
 
-  for (const action of ['enable', 'disable', 'capture', 'endCapture', 'hush'] as const) {
+  for (const action of ['dictate', 'disable', 'capture', 'endCapture', 'hush'] as const) {
     runVoiceAction(spy, action);
   }
-  assert.deepEqual(called, ['enable', 'disable', 'capture', 'endCapture', 'hush']);
+  assert.deepEqual(called, ['start:dictation', 'disable', 'capture', 'endCapture', 'hush']);
+});
+
+test('the button can never start voice mode by accident', () => {
+  // There is no action that reaches `start('voice')`. Sending without the user
+  // pressing send is a consequence that has to be chosen explicitly, and the
+  // menu is where that choice is made.
+  const started: string[] = [];
+  const spy = state('off', { start: (intent) => started.push(intent) });
+
+  for (const action of ['dictate', 'disable', 'capture', 'endCapture', 'hush', 'none'] as const) {
+    runVoiceAction(spy, action);
+  }
+  assert.deepEqual(started, ['dictation']);
 });
 
 test('a press with no voice module does nothing rather than throwing', () => {
-  assert.doesNotThrow(() => runVoiceAction(undefined, 'enable'));
+  assert.doesNotThrow(() => runVoiceAction(undefined, 'dictate'));
   assert.doesNotThrow(() => runVoiceAction(state('off'), 'none'));
 });

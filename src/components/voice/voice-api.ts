@@ -93,12 +93,36 @@ export function readArmed(): string[] {
   }
 }
 
+/**
+ * Announces that the wake-word preference moved.
+ *
+ * `localStorage` has no same-document change event — `storage` fires in *other*
+ * tabs only — so a settings panel and a chat view in one window have no way to
+ * hear each other. Without this, arming a wake word in Settings did nothing
+ * until the app was restarted, which reads exactly like the wake word being
+ * broken.
+ *
+ * Published from the writers below rather than from the settings panel, so
+ * there is no way to change the preference and forget to say so.
+ */
+const WAKE_CHANGED_EVENT = 'tails:voice-wake-changed';
+
+export function onWakeSettingsChanged(listener: () => void): () => void {
+  window.addEventListener(WAKE_CHANGED_EVENT, listener);
+  return () => window.removeEventListener(WAKE_CHANGED_EVENT, listener);
+}
+
+function announce(): void {
+  window.dispatchEvent(new Event(WAKE_CHANGED_EVENT));
+}
+
 export function writeArmed(ids: string[]): void {
   try {
     localStorage.setItem(ARMED_KEY, JSON.stringify(ids));
   } catch {
     // A full or blocked localStorage costs a preference, not the feature.
   }
+  announce();
 }
 
 export function readSensitivity(): Record<string, number> {
@@ -116,4 +140,5 @@ export function writeSensitivity(values: Record<string, number>): void {
   } catch {
     // As above.
   }
+  announce();
 }

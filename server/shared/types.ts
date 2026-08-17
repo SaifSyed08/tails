@@ -182,6 +182,14 @@ export type ClientMessage =
     effort?: string;
     /** Files and images attached to this message. */
     attachments?: { name: string; mediaType: string; data: string }[];
+    /**
+     * The user spoke this rather than typing it.
+     *
+     * Changes how the model is asked to answer — see `spoken-turn.ts` — and
+     * nothing else. It never reaches the transcript, because the user did not
+     * say the thing it adds.
+     */
+    spoken?: boolean;
   }
   | { type: 'chat.abort'; sessionId: string }
   | { type: 'chat.subscribe'; sessions: { sessionId: string; lastSeq?: number }[] }

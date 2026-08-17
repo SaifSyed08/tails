@@ -15,8 +15,12 @@ import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
 import { useArmedWakeWords } from '@/components/voice/useArmedWakeWords';
+import { chimeArmed, chimeOff, chimeWake } from '@/components/voice/voice-chime';
 import { useSpeech } from '@/components/voice/useSpeech';
+import { useSpokenReply } from '@/components/voice/useSpokenReply';
 import { useVoiceDictation } from '@/components/voice/useVoiceDictation';
+import { VoiceGlow } from '@/components/voice/VoiceGlow';
+import { VoiceModeStrip } from '@/components/voice/VoiceModeStrip';
 import { api } from '@/lib/api';
 import type { AttachmentPayload, ChatRow, MessageAttachment } from '@/types/chat';
 
@@ -196,12 +200,46 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   */
   const armedWakeWords = useArmedWakeWords();
   const speech = useSpeech();
+  /*
+    The reply reader. Armed by sending with your voice rather than by voice
+    mode being on, so a message typed while the wake word happens to be armed
+    is answered on screen and in silence, like every other typed message.
+  */
+  const lastAssistant = [...rows].reverse().find((row) => row.type === 'assistant');
+  const spokenReply = useSpokenReply({
+    reply: lastAssistant?.type === 'assistant' ? lastAssistant.content : '',
+    busy,
+    speak: speech,
+  });
   const voice = useVoiceDictation({
     onText: (text) => composerRef.current?.append(text),
+    // The auto-send, and the one behaviour that separates voice mode from
+    // dictation. `sendSpoken` reads the draft synchronously, so the words that
+    // arrived a moment ago in `onText` are in the message.
+    onSpokenTurn: () => composerRef.current?.sendSpoken(),
+    onWake: () => chimeWake(),
     cwd,
     armed: armedWakeWords,
     speech,
   });
+
+  /*
+    The two chimes that are not the wake word. Driven off the intent rather
+    than fired from the click handlers because voice mode can also end by
+    itself — a failed microphone, or a chat closing — and a mode that ends
+    silently after announcing itself is a mode the user will think is still on.
+  */
+  const voiceOnRef = useRef(false);
+  useEffect(() => {
+    const on = voice.intent === 'voice';
+    if (on === voiceOnRef.current) return;
+    voiceOnRef.current = on;
+    if (on) chimeArmed();
+    else {
+      chimeOff();
+      spokenReply.cancel();
+    }
+  }, [voice.intent, spokenReply]);
   const [petPickerOpen, setPetPickerOpen] = useState(false);
   const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);
   /*
@@ -326,10 +364,18 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     pinnedToBottomRef.current = distanceFromBottom < 80;
   };
 
-  const submit = (content: string, attachments: AttachmentPayload[]) => {
+  const submit = (
+    content: string,
+    attachments: AttachmentPayload[],
+    origin?: { spoken: boolean },
+  ) => {
     pinnedToBottomRef.current = true;
     onFirstMessage?.(content);
-    sendMessage(content, { cwd, attachments });
+    // A spoken turn is answered differently at both ends: the model is asked
+    // for something short and conversational, and the answer is read back as
+    // it arrives.
+    if (origin?.spoken) spokenReply.begin();
+    sendMessage(content, { cwd, attachments, spoken: origin?.spoken });
   };
 
   return (
@@ -395,6 +441,12 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 z-10 overflow-hidden"
         />
+
+        {/* The wake-word reaction. Inside the stage so it frames the
+            conversation and stops at the composer, which is the boundary that
+            makes it read as "the chat is listening" rather than as a window
+            border. */}
+        <VoiceGlow voice={voice} />
       </div>
 
       {/* No rule above the composer: the input already reads as its own surface,
@@ -418,6 +470,8 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
               />
             )
           ))}
+
+          <VoiceModeStrip voice={voice} onSpeakIntro={speech.speak} />
 
           {pendingPermissions.map((permission) => (
             <PermissionBanner

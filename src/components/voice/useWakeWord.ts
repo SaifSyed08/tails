@@ -14,6 +14,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export type WakeWordArm = {
   id: string;
   file: string;
+  /** How the phrase is written for a person — "Hey Jarvis", not `hey_jarvis`. */
+  label: string;
   threshold: number;
 };
 

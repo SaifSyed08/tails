@@ -43,6 +43,15 @@ export type SpeechController = {
   speaking: boolean;
   /** Reads a markdown reply aloud. Replaces anything already being spoken. */
   speak: (markdown: string, settings?: SpeechSettings) => void;
+  /**
+   * Adds to what is being spoken instead of replacing it.
+   *
+   * This is what makes a reply speakable while it is still arriving. `speak`
+   * cancels first — correct for "here is the answer", wrong for "here is the
+   * next three sentences of it", which would cut off the previous three every
+   * time the model produced more.
+   */
+  enqueue: (markdown: string, settings?: SpeechSettings) => void;
   /** Stops immediately. Safe to call when nothing is speaking. */
   hush: () => void;
 };
@@ -97,15 +106,28 @@ export function useSpeech(): SpeechController {
     setSpeaking(false);
   }, [supported]);
 
-  const speak = useCallback((markdown: string, settings?: SpeechSettings) => {
+  /**
+   * The shared body of `speak` and `enqueue`.
+   *
+   * `replace` is the only difference, and it is the whole difference: one
+   * cancels what is playing, the other lets it finish first.
+   */
+  const say = useCallback((
+    markdown: string,
+    settings: SpeechSettings | undefined,
+    replace: boolean,
+  ) => {
     if (!supported) return;
 
     const chunks = toSpeech(markdown);
     if (chunks.length === 0) return;
 
-    // A new reply always supersedes the old one; queueing behind it would mean
+    // A new reply supersedes the old one; queueing behind it would mean
     // hearing an answer to a question two turns ago.
-    window.speechSynthesis.cancel();
+    if (replace) {
+      window.speechSynthesis.cancel();
+      queueRef.current = [];
+    }
 
     const { rate, pitch } = clampVoiceSettings(settings?.rate ?? 1, settings?.pitch ?? 1);
     const chosen = settings?.voiceName
@@ -120,16 +142,36 @@ export function useSpeech(): SpeechController {
       return utterance;
     });
 
-    // Only the last one clears the flag, so the indicator stays lit across the
-    // gaps between sentences rather than flickering once per clause.
-    const last = utterances[utterances.length - 1];
-    last.addEventListener('end', () => setSpeaking(false));
-    last.addEventListener('error', () => setSpeaking(false));
+    /*
+      The flag is cleared by whichever utterance turns out to be last, checked
+      at the moment it ends rather than decided now. With chunks arriving while
+      earlier ones are still playing, "the last one" is not knowable in advance
+      — binding it up front is what would make the indicator go dark in the
+      middle of a reply that is still being read.
+    */
+    for (const utterance of utterances) {
+      const settle = () => {
+        queueRef.current = queueRef.current.filter((entry) => entry !== utterance);
+        if (queueRef.current.length === 0) setSpeaking(false);
+      };
+      utterance.addEventListener('end', settle);
+      utterance.addEventListener('error', settle);
+    }
 
-    queueRef.current = utterances;
+    queueRef.current = [...queueRef.current, ...utterances];
     setSpeaking(true);
     for (const utterance of utterances) window.speechSynthesis.speak(utterance);
   }, [supported]);
 
-  return { supported, voices, speaking, speak, hush };
+  const speak = useCallback(
+    (markdown: string, settings?: SpeechSettings) => say(markdown, settings, true),
+    [say],
+  );
+
+  const enqueue = useCallback(
+    (markdown: string, settings?: SpeechSettings) => say(markdown, settings, false),
+    [say],
+  );
+
+  return { supported, voices, speaking, speak, enqueue, hush };
 }

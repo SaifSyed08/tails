@@ -11,6 +11,7 @@ import { sessionsRepository } from '@/db/sessions.repository.js';
 import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appearance/appearance.tools.js';
 import { resolveClaudeCli } from '@/modules/chat/claude-cli.js';
 import { expandLocalCommand } from '@/modules/chat/commands.service.js';
+import { applySpokenSteer } from '@/modules/chat/spoken-turn.js';
 import {
   formatConversationInstructions,
   readConversationInstructions,
@@ -196,6 +197,8 @@ type RunChatTurnInput = {
   /** Wire id from the composer's picker; omitted runs on the CLI's default. */
   model?: string;
   effort?: EffortLevel;
+  /** Spoken aloud rather than typed. Steers the answer; see `spoken-turn.ts`. */
+  spoken?: boolean;
 };
 
 /**
@@ -319,7 +322,7 @@ export function getSessionPermissionMode(sessionId: string): SelectablePermissio
  * the run terminates with a `complete` no matter how it ends.
  */
 export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
-  const { sessionId, prompt, cwd, permissionMode, attachments = [] } = input;
+  const { sessionId, prompt, cwd, permissionMode, attachments = [], spoken = false } = input;
 
   const session = sessionsRepository.getSession(sessionId);
   if (!session) {
@@ -410,7 +413,13 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   sessionsRepository.touchSession(sessionId);
   publishSessionsChanged(sessionId);
 
-  const modelPrompt = buildPrompt(expandLocalCommand(prompt), attachments);
+  // Two things the transcript never sees: a slash command's expansion, and the
+  // instruction that a spoken turn carries. Both are about how to answer, and
+  // both would be noise in a scrollback of your own words.
+  const modelPrompt = buildPrompt(
+    applySpokenSteer(expandLocalCommand(prompt), spoken),
+    attachments,
+  );
 
   try {
     // Resolved per turn, and checked here rather than left to the SDK. The

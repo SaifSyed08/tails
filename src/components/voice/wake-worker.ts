@@ -10,7 +10,7 @@ import * as ort from 'onnxruntime-web/wasm';
 import wasmUrl from '../../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm?url';
 
 import {
-  CHUNK_SAMPLES,
+  ChunkQueue,
   DetectionGate,
   EMBEDDING_WINDOW,
   EMBEDDING_SIZE,
@@ -71,6 +71,7 @@ const classifiers: Array<{ id: string; session: Session; gate: DetectionGate }> 
 
 const melWindow = new MelWindow();
 const embeddings = new EmbeddingWindow();
+const queue = new ChunkQueue();
 let context = new Float32Array(MEL_CONTEXT_SAMPLES);
 
 /**
@@ -101,8 +102,16 @@ async function init(message: InitMessage): Promise<void> {
   post({ type: 'ready' });
 }
 
-async function feed(pcm: Int16Array): Promise<void> {
-  if (!mel || !embedder || pcm.length !== CHUNK_SAMPLES) return;
+/**
+ * Scores one chunk of exactly `CHUNK_SAMPLES`. True when a word fired.
+ *
+ * The length precondition is real — the mel graph's frame count depends on it —
+ * but it is `ChunkQueue`'s job to satisfy, not the caller's. It used to be an
+ * early return here against whatever the microphone happened to post, which
+ * silently discarded every chunk.
+ */
+async function scoreChunk(pcm: Int16Array): Promise<boolean> {
+  if (!mel || !embedder) return false;
 
   // 480 samples of history per chunk. Without it the STFT loses its edge
   // frames and yields 5 instead of 8, which stretches the warm-up and shifts
@@ -137,9 +146,26 @@ async function feed(pcm: Int16Array): Promise<void> {
         // on its own tail.
         embeddings.reset();
         post({ type: 'detected', id });
-        return;
+        return true;
       }
     }
+  }
+
+  return false;
+}
+
+/**
+ * Accepts audio in whatever size the microphone posts it.
+ *
+ * The queue is what makes that true. Nothing here may assume 80 ms blocks: the
+ * capture worklet posts about 100 ms, and it is free to change.
+ */
+async function feed(pcm: Int16Array): Promise<void> {
+  if (!mel || !embedder) return;
+  for (const chunk of queue.push(pcm)) {
+    // Stops at the first detection so the rest of this block is scored against
+    // a window that has already been cleared, rather than re-firing on it.
+    if (await scoreChunk(chunk)) return;
   }
 }
 
@@ -166,6 +192,7 @@ scope.onmessage = (event: MessageEvent<Incoming>) => {
   if (message.type === 'reset') {
     pending = pending.then(() => {
       embeddings.reset();
+      queue.reset();
       context = new Float32Array(MEL_CONTEXT_SAMPLES);
       for (const { gate } of classifiers) gate.reset();
     });

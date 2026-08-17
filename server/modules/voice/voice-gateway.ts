@@ -163,7 +163,18 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
       }
     };
 
-    const finish = async () => {
+    /**
+     * Ends an utterance and transcribes it.
+     *
+     * `explicit` means the user pressed stop rather than the gate closing. It
+     * changes only one thing, and that one thing is worth the parameter: a
+     * deliberate stop that produced no audio has to say so. Silence here is
+     * indistinguishable from a broken feature — the microphone light is on, the
+     * button was pressed, and nothing appears — and the usual cause is a gate
+     * that never opened because the input level is too low, which is something
+     * the user can actually fix.
+     */
+    const finish = async (explicit = false) => {
       const samples = capture.buffer?.subarray(0, capture.used);
       capture.buffer = null;
       capture.used = 0;
@@ -172,7 +183,15 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
 
       // Below about a fifth of a second there is no word in there, and running
       // the model on it produces confident nonsense rather than nothing.
-      if (!samples || samples.length < SAMPLE_RATE / 5) return;
+      if (!samples || samples.length < SAMPLE_RATE / 5) {
+        if (explicit) {
+          send({
+            type: 'error',
+            message: 'No speech was picked up — check that the right microphone is selected and that its level is up.',
+          });
+        }
+        return;
+      }
       if (capture.busy) return;
 
       capture.busy = true;
@@ -240,7 +259,7 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
 
       // An explicit stop must transcribe whatever has been said so far rather
       // than waiting for the gate — the user has already decided they finished.
-      if (message.type === 'voice.stop') void finish();
+      if (message.type === 'voice.stop') void finish(true);
     });
 
     socket.on('close', () => {

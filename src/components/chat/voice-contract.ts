@@ -1,22 +1,49 @@
 /**
- * The seam between the composer's voice control and the voice module.
+ * The seam between the composer's voice controls and the voice module.
  *
- * The button is the chat module's; everything behind it — permission, capture,
- * wake words, the on-device model, transcription, speaking — belongs to the
- * voice module. This file is the whole of what passes between them, kept
- * import-free so the repo's test runner can execute the parts worth testing.
+ * The buttons are the chat module's; everything behind them — permission,
+ * capture, wake words, the on-device model, transcription, speaking — belongs
+ * to the voice module. This file is the whole of what passes between them,
+ * kept import-free so the repo's test runner can execute the parts worth
+ * testing.
  *
  * Transcribed text does not travel through this type. It arrives by calling
  * `ComposerHandle.append(text)`, which is what lets dictation land in a draft
  * someone has already started typing rather than replacing it.
  *
- * ## One mode, not two buttons
+ * ## One microphone, two intents
  *
- * Dictation and wake-word listening were separate controls and are now one.
- * They are the same capability seen at two moments — the microphone is either
- * open or it is not — and giving them two buttons made the user answer a
- * question the app should answer for itself.
+ * These were merged into a single control on the theory that dictation and
+ * wake-word listening are one capability seen at two moments. The moments part
+ * is right and the merge was wrong, and the bug it produced says why: with a
+ * wake word armed, pressing the microphone silently stopped capturing and
+ * started *waiting*, so dictation appeared to do nothing at all.
+ *
+ * They differ in the thing that matters most — what happens to your words.
+ * Dictation fills the box and stops there; voice mode sends. That is not a
+ * detail of presentation, it is a difference in consequence, and a control
+ * that quietly switches between the two is a control that will eventually
+ * send something you were still editing.
+ *
+ * So: one device, one state machine, two declared intents.
  */
+
+export type VoiceIntent =
+  /** Microphone closed. */
+  | 'off'
+  /**
+   * Dictating. Fills the composer and **never sends** — the user presses send.
+   *
+   * Reached from the microphone button beside the composer.
+   */
+  | 'dictation'
+  /**
+   * Voice mode. Waits for a wake word, then captures, **sends on its own**,
+   * and reads the reply back.
+   *
+   * Reached from the plus panel.
+   */
+  | 'voice';
 
 export type VoiceMode =
   /** No engine, no model, or permission refused. The control is disabled. */
@@ -39,6 +66,8 @@ export type VoiceMode =
   | 'speaking';
 
 export type VoiceModeState = {
+  /** What the user asked for. `mode` is where that intent currently stands. */
+  intent: VoiceIntent;
   mode: VoiceMode;
   /**
    * Why it cannot be used, in words a person can act on.
@@ -49,16 +78,34 @@ export type VoiceModeState = {
    * what to do; "unavailable" does not.
    */
   reason?: string;
+  /**
+   * Why wake-word listening is not running, while voice mode is on.
+   *
+   * Separate from `reason` because it does not stop voice mode — the button
+   * still captures — and because it used to be swallowed entirely: the Worker
+   * could fail to load its models and nothing anywhere said so.
+   */
+  wakeReason?: string;
   /** Wake words currently armed. Empty means voice mode is push-to-talk only. */
   armed: readonly string[];
+  /** The same words as a person says them, for the on-screen prompt. */
+  armedLabels: readonly string[];
   /**
    * Input level, 0–1, for the indicator. **Zero whenever the microphone is
    * closed** — it is what lets an open microphone visibly show it is hearing.
    */
   level: number;
-  /** Enters voice mode: opens the microphone. */
-  enable: () => void;
-  /** Leaves voice mode: closes the microphone. */
+  /**
+   * Increments once per wake-word detection.
+   *
+   * A counter rather than a boolean or a timestamp: the glow is a one-shot
+   * reaction to an event, and a counter is the only one of the three that
+   * cannot miss two detections in a row or need clearing afterwards.
+   */
+  wakeCount: number;
+  /** Opens the microphone with a declared intent. */
+  start: (intent: 'dictation' | 'voice') => void;
+  /** Closes the microphone, whatever it was doing. */
   disable: () => void;
   /** Captures now, without waiting for a wake word. */
   capture: () => void;
@@ -69,13 +116,14 @@ export type VoiceModeState = {
 };
 
 /** What pressing the control should do, resolved from the mode. */
-export type VoiceAction = 'enable' | 'disable' | 'capture' | 'endCapture' | 'hush' | 'none';
+export type VoiceAction = 'dictate' | 'disable' | 'capture' | 'endCapture' | 'hush' | 'none';
 
 /** The icon to draw. Named by meaning so the shape is part of the contract. */
 export type VoiceGlyph = 'muted' | 'mic' | 'armed' | 'capturing' | 'working' | 'speaking';
 
 export type VoiceControl = {
   mode: VoiceMode;
+  intent: VoiceIntent;
   label: string;
   title: string;
   disabled: boolean;
@@ -85,6 +133,13 @@ export type VoiceControl = {
   glyph: VoiceGlyph;
   action: VoiceAction;
 };
+
+/** "Hey Jarvis" · "Hey Jarvis or Timer" · "Hey Jarvis, Timer or Tails". */
+export function listPhrases(labels: readonly string[]): string {
+  if (labels.length === 0) return '';
+  if (labels.length === 1) return labels[0];
+  return `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}`;
+}
 
 /**
  * What the voice control says and does in each state.
@@ -96,21 +151,30 @@ export type VoiceControl = {
  * motion. An indicator that exists only as a pulse is invisible to anyone who
  * has motion turned off, and "is my microphone on" is the one question in this
  * app that must never be a guess.
+ *
+ * The intent is part of every answer now, because the two intents differ in
+ * what they will do with your words. "Recording" is not enough when one of
+ * these sends the result on its own.
  */
 export function describeVoiceControl(voice: VoiceModeState | undefined): VoiceControl {
   const mode = voice?.mode ?? 'unavailable';
-  const armed = voice?.armed ?? [];
+  const intent = voice?.intent ?? 'off';
+  const phrases = listPhrases(voice?.armedLabels ?? []);
+  const spoken = intent === 'voice';
 
   switch (mode) {
     case 'waiting':
       return {
         mode,
+        intent,
         // Names the open microphone explicitly. Someone reading this aloud
         // should learn that the app is listening, not merely that it is ready.
-        label: armed.length > 0
-          ? `Listening for a wake word — microphone on. ${armed.length} armed`
-          : 'Microphone on, waiting',
-        title: 'Microphone is on, waiting for a wake word. Press to turn it off.',
+        label: phrases
+          ? `Voice mode on, listening for ${phrases} — microphone open`
+          : 'Microphone open, waiting',
+        title: phrases
+          ? `Voice mode is on. Say "${phrases}". Press to turn the microphone off.`
+          : 'Microphone is open and waiting. Press to turn it off.',
         disabled: false,
         pressed: true,
         live: true,
@@ -121,8 +185,16 @@ export function describeVoiceControl(voice: VoiceModeState | undefined): VoiceCo
     case 'listening':
       return {
         mode,
-        label: 'Recording — press to stop and transcribe',
-        title: 'Recording. Press to stop.',
+        intent,
+        // The consequence, not the mechanism. One of these sends when you stop
+        // talking and the other does not, and that is what the user needs to
+        // know while the microphone is live.
+        label: spoken
+          ? 'Voice mode heard you — this will send when you stop'
+          : 'Dictating — press to stop and transcribe',
+        title: spoken
+          ? 'Listening. Your message sends when you stop talking.'
+          : 'Dictating into the message box. Press to stop.',
         disabled: false,
         pressed: true,
         live: true,
@@ -133,6 +205,7 @@ export function describeVoiceControl(voice: VoiceModeState | undefined): VoiceCo
     case 'transcribing':
       return {
         mode,
+        intent,
         label: 'Transcribing your speech',
         title: 'Transcribing…',
         disabled: true,
@@ -145,6 +218,7 @@ export function describeVoiceControl(voice: VoiceModeState | undefined): VoiceCo
     case 'speaking':
       return {
         mode,
+        intent,
         label: 'Speaking — press to stop',
         title: 'Reading the reply aloud. Press to stop.',
         disabled: false,
@@ -157,24 +231,26 @@ export function describeVoiceControl(voice: VoiceModeState | undefined): VoiceCo
     case 'off':
       return {
         mode,
-        label: armed.length > 0 ? 'Turn on voice mode' : 'Start dictation',
-        title: armed.length > 0
-          ? 'Turn on voice mode — runs on this machine'
-          : 'Dictate a message — runs on this machine',
+        intent,
+        // Always dictation from the button. Voice mode is a deliberate choice
+        // made in the menu, because it is the one that sends.
+        label: 'Start dictation',
+        title: 'Dictate a message — runs on this machine, and never sends on its own',
         disabled: false,
         pressed: false,
         live: false,
         glyph: 'mic',
-        action: 'enable',
+        action: 'dictate',
       };
 
     default:
       return {
         mode: 'unavailable',
-        label: 'Voice mode unavailable',
+        intent: 'off',
+        label: 'Dictation unavailable',
         // The reason is the whole point of the disabled state: a button that is
         // off and silent about why is indistinguishable from one that is broken.
-        title: voice?.reason ?? 'Voice mode is not available yet',
+        title: voice?.reason ?? 'Dictation is not available yet',
         disabled: true,
         pressed: false,
         live: false,
@@ -187,7 +263,7 @@ export function describeVoiceControl(voice: VoiceModeState | undefined): VoiceCo
 /** Runs the action a press resolves to. Kept here so the component stays dumb. */
 export function runVoiceAction(voice: VoiceModeState | undefined, action: VoiceAction): void {
   if (!voice) return;
-  if (action === 'enable') voice.enable();
+  if (action === 'dictate') voice.start('dictation');
   else if (action === 'disable') voice.disable();
   else if (action === 'capture') voice.capture();
   else if (action === 'endCapture') voice.endCapture();

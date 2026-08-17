@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { VoiceMode, VoiceModeState } from '@/components/chat/voice-contract';
+import type { VoiceIntent, VoiceMode, VoiceModeState } from '@/components/chat/voice-contract';
 import { CAPTURE_PROCESSOR, captureWorkletUrl, TARGET_SAMPLE_RATE } from '@/components/voice/capture-worklet';
 import { useWakeWord, type WakeWordArm } from '@/components/voice/useWakeWord';
 
 /**
- * Voice mode: the microphone, the wake words, and the dictation socket.
+ * The microphone, the wake words, and the dictation socket.
  *
- * ## One mode, two moments
+ * ## One device, two intents
  *
- * The microphone is either open or closed. When it is open the app is either
+ * The microphone is either open or closed. When it is open, the app is either
  * waiting for a wake word or capturing a sentence. That is the whole state
- * machine, and it is one machine rather than two features sharing a device.
+ * machine — but *why* it was opened decides what happens to the words, and
+ * that is carried separately as the intent. See `voice-contract.ts`: dictation
+ * fills the box, voice mode sends.
  *
  * ## The microphone is closed when it is off
  *
@@ -29,15 +31,26 @@ import { useWakeWord, type WakeWordArm } from '@/components/voice/useWakeWord';
  */
 
 type Options = {
-  /** Where a finished transcript goes. Called with cleaned text, never empty. */
+  /** Where transcribed text goes. Called with cleaned text, never empty. */
   onText: (text: string) => void;
+  /**
+   * A spoken turn has finished.
+   *
+   * Only ever called under the `voice` intent — this is the auto-send, and
+   * dictation must never trigger it. Fired after `onText`, so the composer
+   * already holds every word before anything is sent.
+   */
+  onSpokenTurn?: () => void;
+  /** A wake word fired. The caller's cue for the sound and the glow. */
+  onWake?: (id: string) => void;
   /** The conversation's folder, used to seed the recogniser's vocabulary. */
   cwd?: string | null;
   /**
-   * Wake words to listen for while the microphone is open.
+   * Wake words available to voice mode.
    *
-   * Empty — the default — means no Worker is created and none of the 12.9 MB
-   * of WASM is ever fetched.
+   * Only armed while the intent is `voice`: dictation has no use for them, and
+   * an idle Worker holding 12.9 MB of WASM for a mode that is not running is
+   * exactly the kind of thing that turns "off" into a lie.
    */
   armed?: WakeWordArm[];
   /**
@@ -79,32 +92,73 @@ function declareVoiceIntent(wanted: boolean): void {
 const LEVEL_INTERVAL_MS = 120;
 
 export function useVoiceDictation({
-  onText, cwd, armed = NONE, speech,
+  onText, onSpokenTurn, onWake, cwd, armed = NONE, speech,
 }: Options): VoiceModeState {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [reason, setReason] = useState<string | undefined>(undefined);
-  const [engaged, setEngaged] = useState(false);
+  const [intent, setIntent] = useState<VoiceIntent>('off');
   const [capturing, setCapturing] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [level, setLevel] = useState(0);
+  const [wakeCount, setWakeCount] = useState(0);
 
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const contextRef = useRef<AudioContext | null>(null);
   const levelSentAt = useRef(0);
+  /*
+    The intent, readable from callbacks that were created before it changed —
+    the worklet's message handler and the socket's, both of which outlive a
+    render. Every decision about *what to do with the words* reads this, so it
+    is written synchronously in `start` rather than derived from state.
+  */
+  const intentRef = useRef<VoiceIntent>('off');
+  /** True between pressing stop and the socket closing, so the tail is kept. */
+  const stoppingRef = useRef(false);
 
   const onTextRef = useRef(onText);
   useEffect(() => { onTextRef.current = onText; }, [onText]);
+  const onSpokenTurnRef = useRef(onSpokenTurn);
+  useEffect(() => { onSpokenTurnRef.current = onSpokenTurn; }, [onSpokenTurn]);
+  const onWakeRef = useRef(onWake);
+  useEffect(() => { onWakeRef.current = onWake; }, [onWake]);
   const cwdRef = useRef(cwd);
   useEffect(() => { cwdRef.current = cwd; }, [cwd]);
 
+  /*
+    Forward references. `capture`, the worklet handler and the wake-word
+    callback are all created once and then live for the lifetime of the
+    microphone, so anything they call has to be reached through a ref or they
+    would keep calling the first render's version of it.
+  */
+  const captureRef = useRef<() => void>(() => {});
+  const finishRef = useRef<() => void>(() => {});
+  const wakeResetRef = useRef<() => void>(() => {});
+
+  /*
+    Armed only under the `voice` intent. `useWakeWord` compares by value, so
+    handing it the empty array tears the Worker down and hands back the models'
+    memory the moment voice mode ends.
+  */
   const wake = useWakeWord({
-    armed,
-    // Hearing the wake word is the same event as pressing the button.
-    onDetected: () => captureRef.current(),
+    armed: intent === 'voice' ? armed : NONE,
+    onDetected: (id) => {
+      setWakeCount((count) => count + 1);
+      onWakeRef.current?.(id);
+      captureRef.current();
+    },
   });
   const wakeFeedRef = useRef(wake.feed);
   useEffect(() => { wakeFeedRef.current = wake.feed; }, [wake.feed]);
+  useEffect(() => { wakeResetRef.current = wake.reset; }, [wake.reset]);
+  /*
+    Read by the worklet handler to decide whether the wake Worker should see
+    this chunk at all. While an utterance is being captured it should not: the
+    phrase has already fired, and continuing to score the user's own sentence
+    is both wasted work and a way to re-trigger mid-sentence.
+  */
+  const capturingRef = useRef(false);
+  useEffect(() => { capturingRef.current = capturing; }, [capturing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,9 +193,11 @@ export function useVoiceDictation({
   }, []);
 
   const disable = useCallback(() => {
+    intentRef.current = 'off';
+    stoppingRef.current = false;
     closeSocket();
     releaseMicrophone();
-    setEngaged(false);
+    setIntent('off');
     setCapturing(false);
     setTranscribing(false);
   }, [closeSocket, releaseMicrophone]);
@@ -156,6 +212,7 @@ export function useVoiceDictation({
     const socket = new WebSocket(`${protocol}://${window.location.host}/voice`);
     socket.binaryType = 'arraybuffer';
     socketRef.current = socket;
+    stoppingRef.current = false;
 
     socket.onopen = () => socket.send(JSON.stringify({
       type: 'voice.start', cwd: cwdRef.current ?? undefined,
@@ -180,8 +237,7 @@ export function useVoiceDictation({
       if (frame.type === 'transcript') {
         onTextRef.current(frame.text);
         setTranscribing(false);
-        setCapturing(false);
-        closeSocket();
+        finishRef.current();
         return;
       }
       if (frame.type === 'error') {
@@ -201,26 +257,74 @@ export function useVoiceDictation({
     setCapturing(true);
   }, [closeSocket]);
 
-  // Held in a ref so the wake-word callback, created once, always calls the
-  // current version.
-  const captureRef = useRef(capture);
+  /**
+   * What happens after one utterance has been transcribed.
+   *
+   * The three cases are genuinely different, which is why this is not a single
+   * `close and stop`:
+   *
+   * - **Stopping.** The user pressed the button. Everything shuts down.
+   * - **Voice mode.** Send it, then go back to waiting for the wake word.
+   *   The socket closes because the next utterance needs a fresh one.
+   * - **Dictation.** Keep going. Someone dictating a paragraph pauses between
+   *   sentences, and closing the microphone at the first full stop would make
+   *   them press the button again for every one of them. The server has
+   *   already reset its own buffer, so the same socket carries the next
+   *   sentence.
+   */
+  const finishUtterance = useCallback(() => {
+    if (stoppingRef.current) {
+      stoppingRef.current = false;
+      setCapturing(false);
+      closeSocket();
+      releaseMicrophone();
+      intentRef.current = 'off';
+      setIntent('off');
+      return;
+    }
+
+    if (intentRef.current === 'voice') {
+      setCapturing(false);
+      closeSocket();
+      // Clears the embedding window so the wake word is heard afresh rather
+      // than re-fired off the tail of what was just said.
+      wakeResetRef.current();
+      onSpokenTurnRef.current?.();
+      return;
+    }
+
+    // Dictation: the socket stays open and capture continues.
+  }, [closeSocket, releaseMicrophone]);
+
   useEffect(() => { captureRef.current = capture; }, [capture]);
+  useEffect(() => { finishRef.current = finishUtterance; }, [finishUtterance]);
 
   const endCapture = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       // An explicit stop must transcribe what was said rather than discard it,
-      // so the socket stays open until the transcript comes back.
+      // so the socket stays open until the transcript comes back — and
+      // `stoppingRef` is what tells `finishUtterance` that this is the last one.
+      stoppingRef.current = true;
       socketRef.current.send(JSON.stringify({ type: 'voice.stop' }));
       setTranscribing(true);
-    } else {
-      closeSocket();
+      setCapturing(false);
+      return;
     }
-    setCapturing(false);
-    wake.reset();
-  }, [closeSocket, wake]);
+    disable();
+  }, [disable]);
 
-  const enable = useCallback(() => {
-    if (streamRef.current) return;
+  const start = useCallback((next: 'dictation' | 'voice') => {
+    // Already open under a different intent: switch rather than stack a second
+    // microphone on top of the first.
+    if (streamRef.current) {
+      intentRef.current = next;
+      setIntent(next);
+      if (next === 'dictation' && !socketRef.current) captureRef.current();
+      return;
+    }
+
+    intentRef.current = next;
+    setIntent(next);
 
     void (async () => {
       try {
@@ -251,7 +355,8 @@ export function useVoiceDictation({
           const socket = socketRef.current;
           if (socket?.readyState === WebSocket.OPEN) socket.send(pcm);
 
-          wakeFeedRef.current(pcm);
+          // And only while *not* capturing: the phrase has already fired.
+          if (!capturingRef.current) wakeFeedRef.current(pcm);
 
           const now = performance.now();
           if (now - levelSentAt.current >= LEVEL_INTERVAL_MS) {
@@ -271,13 +376,17 @@ export function useVoiceDictation({
         // Deliberately not connected to `context.destination`: routing the
         // microphone to the speakers would feed the room back to itself.
 
-        setEngaged(true);
-        // With nothing armed, turning voice mode on means "start dictating" —
-        // there is no wake word coming, so waiting would be waiting forever.
-        if (armed.length === 0) captureRef.current();
+        /*
+          Dictation captures at once — there is no wake word coming, so waiting
+          would be waiting forever, and that exact case is what made the
+          microphone button appear to do nothing. Voice mode waits, unless
+          nothing is armed, in which case it has nothing to wait for either.
+        */
+        if (next === 'dictation' || armed.length === 0) captureRef.current();
       } catch (error) {
         releaseMicrophone();
-        setEngaged(false);
+        intentRef.current = 'off';
+        setIntent('off');
         setAvailable(false);
         setReason(
           error instanceof DOMException && error.name === 'NotAllowedError'
@@ -294,17 +403,23 @@ export function useVoiceDictation({
     : speech?.speaking ? 'speaking'
       : transcribing ? 'transcribing'
         : capturing ? 'listening'
-          : engaged ? 'waiting'
+          : intent !== 'off' ? 'waiting'
             : 'off';
 
   return {
+    intent,
     mode,
     reason,
+    // Only while voice mode is on: a wake-word failure is not an error to
+    // report at someone who is dictating.
+    wakeReason: intent === 'voice' ? wake.error : undefined,
     armed: armed.map((word) => word.id),
+    armedLabels: armed.map((word) => word.label),
     // Zero unless the microphone is genuinely open, so the meter can never
     // imply a device that is closed.
-    level: engaged ? level : 0,
-    enable,
+    level: intent !== 'off' ? level : 0,
+    wakeCount,
+    start,
     disable,
     capture,
     endCapture,

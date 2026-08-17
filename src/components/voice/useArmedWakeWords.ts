@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { readArmed, readSensitivity, voiceApi } from '@/components/voice/voice-api';
+import { onWakeSettingsChanged, readArmed, readSensitivity, voiceApi } from '@/components/voice/voice-api';
 import type { WakeWordArm } from '@/components/voice/useWakeWord';
 
 /**
@@ -14,8 +14,19 @@ import type { WakeWordArm } from '@/components/voice/useWakeWord';
  *
  * Returns a stable empty array until the server answers, so nothing is armed
  * during the round trip and the Worker is not created speculatively.
+ *
+ * ## It re-reads, and it has to
+ *
+ * This used to run once at mount. Both of its inputs move while the app is
+ * open — the preference changes in Settings, and the model appears on disk
+ * when a download finishes — so a one-shot read meant turning a wake word on
+ * had no effect until the next restart. Nothing said so; the word simply never
+ * fired, which is indistinguishable from the detector not working.
  */
 const NONE: WakeWordArm[] = [];
+
+const signature = (words: readonly WakeWordArm[]): string =>
+  words.map((word) => `${word.id}:${word.threshold}`).join(',');
 
 export function useArmedWakeWords(): WakeWordArm[] {
   const [words, setWords] = useState<WakeWordArm[]>(NONE);
@@ -23,7 +34,7 @@ export function useArmedWakeWords(): WakeWordArm[] {
   useEffect(() => {
     let cancelled = false;
 
-    void (async () => {
+    const refresh = async () => {
       const status = await voiceApi.wake().catch(() => null);
       if (cancelled || !status) return;
 
@@ -35,15 +46,32 @@ export function useArmedWakeWords(): WakeWordArm[] {
         .map((word) => ({
           id: word.id,
           file: word.file,
+          label: word.label,
           threshold: sensitivity[word.id] ?? word.threshold,
         }));
 
-      // Keep the shared empty array when nothing is armed: a fresh `[]` on
-      // every poll would restart the wake Worker and re-fetch its models.
-      setWords(next.length > 0 ? next : NONE);
-    })();
+      // Replaced only when it actually differs. The signature is what
+      // `useWakeWord` keys its effect on, so handing back an equal-but-new
+      // array would tear the Worker down and re-fetch three models for nothing.
+      setWords((current) => (signature(current) === signature(next)
+        ? current
+        : next.length > 0 ? next : NONE));
+    };
 
-    return () => { cancelled = true; };
+    void refresh();
+
+    // The preference is the fast path; focus covers a download that finished
+    // in Settings, since the model appearing on disk is not something the
+    // preference layer can announce.
+    const stopListening = onWakeSettingsChanged(() => { void refresh(); });
+    const onFocus = () => { void refresh(); };
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      stopListening();
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
 
   return words;
