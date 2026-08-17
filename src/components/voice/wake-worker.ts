@@ -139,7 +139,23 @@ async function scoreChunk(pcm: Int16Array): Promise<boolean> {
 
     const tensor = new ort.Tensor('float32', stack, [1, EMBEDDING_WINDOW, EMBEDDING_SIZE]);
     for (const { id, session, gate } of classifiers) {
-      const out = await session.run({ 'x.1': tensor });
+      /*
+        The input name is read from the model, not assumed.
+
+        It used to be the literal `'x.1'`, which is what PyTorch's tracer names
+        an unnamed input and therefore what openWakeWord's pretrained heads
+        carry. Our own models are trained with livekit-wakeword, whose exporter
+        names it `embeddings` — so a model we trained ourselves would have
+        installed, reported as present in Settings, and thrown on every frame.
+
+        That is the same shape of failure as the chunk-size mismatch this file
+        already carries a note about: a wake word that is switched on, looks
+        correct everywhere, and silently never fires. The two shared graphs
+        above keep their literal names because they are frozen and identical
+        in both projects; the classifier is the part that varies by trainer,
+        so it is the part that has to ask.
+      */
+      const out = await session.run({ [session.inputNames[0]]: tensor });
       const score = (out[session.outputNames[0]].data as Float32Array)[0];
       if (gate.accept(score)) {
         // The phrase has been consumed; leaving it in the window would re-fire
