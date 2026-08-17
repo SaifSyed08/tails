@@ -63,6 +63,7 @@ const ADDED_COLUMNS: { name: string; definition: string }[] = [
   { name: 'starred_at', definition: 'DATETIME' },
   { name: 'last_used_at', definition: 'DATETIME' },
   { name: 'stage_json', definition: 'TEXT' },
+  { name: 'voice_json', definition: 'TEXT' },
 ];
 
 /** Applies the pets schema to a connection. Idempotent. */
@@ -159,6 +160,23 @@ export type InstalledPetRecord = {
    * from one menu. A new dial is then a field, not a migration.
    */
   stage: PetStage | null;
+  /**
+   * The voice the *user* chose for this pet, or null to use the manifest's.
+   *
+   * Stored here rather than written into `pet.json` for the same reason the
+   * frame corrections are: most pets live in `~/.codex/pets`, which belongs to
+   * another tool and is not ours to edit. Shaped like `petVoiceSchema`, and
+   * validated against it on the way in.
+   */
+  voice: PetVoiceRecord | null;
+};
+
+/** Mirrors `petVoiceSchema`. Declared here so the repository owes nothing to zod. */
+export type PetVoiceRecord = {
+  engine: 'none' | 'system';
+  name?: string;
+  pitch: number;
+  rate: number;
 };
 
 /** The per-pet display settings the stage menu writes. */
@@ -183,6 +201,7 @@ type InstalledPetRow = {
   starred_at: string | null;
   last_used_at: string | null;
   stage_json: string | null;
+  voice_json: string | null;
 };
 
 /**
@@ -214,10 +233,12 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   starredAt: row.starred_at,
   lastUsedAt: row.last_used_at,
   stage: parseJson<PetStage>(row.stage_json),
+  voice: parseJson<PetVoiceRecord>(row.voice_json),
 });
 
 const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, '
-  + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at, stage_json';
+  + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at, stage_json, '
+  + 'voice_json';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -311,6 +332,21 @@ export const petsRepository = {
       SET stage_json = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(JSON.stringify(stage), id);
+  },
+
+  /**
+   * Stores the voice the user picked, or clears it back to the manifest's.
+   *
+   * Null is a real value here and not an absence of one: it means "whatever the
+   * pet's own file says", which is a different answer from a stored
+   * `engine: 'none'` — a pet the user has deliberately silenced.
+   */
+  saveVoice(id: string, voice: PetVoiceRecord | null): void {
+    db().prepare(`
+      UPDATE installed_pets
+      SET voice_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(voice ? JSON.stringify(voice) : null, id);
   },
 
   /** Stars a pet, or unstars it. Starred pets come first in the carousel. */

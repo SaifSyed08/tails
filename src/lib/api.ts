@@ -1,3 +1,4 @@
+import type { PetLibrary } from '@/components/marketplace';
 import type { ModelChoice, NormalizedMessage } from '@/types/chat';
 
 export type SessionListItem = {
@@ -128,46 +129,27 @@ export const api = {
   /**
    * The installed pets, read straight from the pets module's own endpoint.
    *
-   * Typed to the handful of fields the picker shows rather than mirroring
-   * `InstalledPet` — that shape belongs to the pets module and is still moving.
+   * ## Why this is not a projection any more
+   *
+   * It used to be a hand-written subset — "typed to the handful of fields the
+   * picker shows rather than mirroring `InstalledPet`" — and that reasoning was
+   * sound right up until it cost three bugs, all the same one:
+   *
+   * - `definition.name` where the server sends `displayName`, so every read was
+   *   `undefined` and the thinking indicator silently used no pet at all;
+   * - `thinkingPhrases` declared *inside* `definition` where the server sends it
+   *   as a sibling, so seeded phrases reached nothing;
+   * - `voice` left out entirely, so a pet could not be heard.
+   *
+   * None of them could fail a typecheck, because the type was the thing that
+   * was wrong. The pets module already maintains a client mirror of this exact
+   * payload — the marketplace renders every field of it, so it cannot drift
+   * quietly — and reusing that is strictly cheaper than defending a second
+   * copy. `pets-contract.test.ts` holds the mirror to the server's schema.
+   *
+   * Type-only import: nothing from the component module reaches the bundle.
    */
-  listPets: () => request<{
-    pets: {
-      /**
-       * The pet's own manifest, which is `displayName` rather than `name` —
-       * this type said `name`, so every read of it was `undefined` and the
-       * thinking indicator silently fell back to no pet at all.
-       */
-      definition: {
-        id: string;
-        displayName: string;
-        /**
-         * How this pet sounds, when its own manifest says.
-         *
-         * Optional twice over, and both mean the same thing: a pet with no
-         * block and a pet with `engine: 'none'` do not speak. Declared here
-         * because this projection is the only thing standing between the
-         * server's payload and the chat — the server has always sent it, and a
-         * field left out of this type is a field the app cannot read. That is
-         * exactly how `displayName` and `thinkingPhrases` were lost above.
-         */
-        voice?: { engine: 'none' | 'system'; name?: string; pitch: number; rate: number };
-      };
-      /**
-       * Lines this pet says while the agent is working, mixed into the thinking
-       * indicator's rotation.
-       *
-       * A sibling of `definition`, not a field inside it, and the distinction is
-       * not cosmetic: a Codex pet's manifest lives in a read-only directory, so
-       * anything we author about a pet has to be stored beside what its author
-       * wrote rather than merged into it.
-       */
-      thinkingPhrases?: string[];
-      spriteUrl: string;
-      active: boolean;
-    }[];
-    activePetId: string | null;
-  }>('/pets'),
+  listPets: () => request<PetLibrary>('/pets'),
 
   /**
    * The user's standing conversation instructions, and the cap on them.

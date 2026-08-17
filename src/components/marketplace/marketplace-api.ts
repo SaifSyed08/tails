@@ -114,6 +114,12 @@ export type InstalledPet = {
   removable: boolean;
   /** Hidden pets stay on disk and out of the library until the user brings them back. */
   hidden: boolean;
+  /**
+   * How the user has set this pet up on a stage: his size, and whether he
+   * wanders. Always present — the server fills in the defaults, so no surface
+   * has to know them.
+   */
+  stage: { scale: number; walks: boolean };
   /** Starred pets lead the carousel. */
   starred: boolean;
   /** When the pet was last put on screen; null means nobody has tried it yet. */

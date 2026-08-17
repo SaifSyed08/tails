@@ -163,3 +163,30 @@ export async function readSessionSummary(sessionId: string): Promise<SessionSumm
   const session = await response.json() as { title?: string; petId?: string | null };
   return { title: String(session.title ?? ''), petId: session.petId ?? null };
 }
+
+/** How a pet sounds. Mirrors `petVoiceSchema`, which the server validates against. */
+export type PetVoice = {
+  engine: 'none' | 'system';
+  name?: string;
+  pitch: number;
+  rate: number;
+};
+
+export const DEFAULT_VOICE: PetVoice = { engine: 'system', pitch: 1, rate: 1 };
+
+/**
+ * Saves the voice a user picked for a pet, or hands the question back.
+ *
+ * `null` is not "silent" — it is "no choice stored", which falls back to
+ * whatever the pet's own manifest says. Silent is `engine: 'none'`, and keeping
+ * the two apart is what lets a pet be authored mute without the app treating
+ * that as an empty setting to fill in.
+ */
+export async function savePetVoice(petId: string, voice: PetVoice | null): Promise<void> {
+  const response = await fetch(`/api/pets/${encodeURIComponent(petId)}/voice`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ voice }),
+  });
+  if (!response.ok) throw new Error(`That voice could not be saved (${response.status}).`);
+}

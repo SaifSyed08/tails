@@ -16,6 +16,7 @@ import {
   petFileSchema,
   petIdSchema,
   petStatesSchema,
+  petVoiceSchema,
   spritePathSchema,
   thinkingPhrasesSchema,
   type FrameGrid,
@@ -441,7 +442,15 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     frame: grid,
     states,
     personality: file.data.personality,
-    voice: file.data.voice,
+    /*
+     * The user's pick wins over the author's.
+     *
+     * In the definition rather than beside it, because that is where the frame
+     * and state corrections already go: this object is "the pet as he is now",
+     * with what the user has fixed applied on top of what the author wrote.
+     * `resolvePetVoice` reads exactly one voice block, and this is it.
+     */
+    voice: override?.voice ?? file.data.voice,
   });
 
   if (!definition.success) {
@@ -1203,6 +1212,32 @@ export const petsService = {
       scale: typeof input.scale === 'number' ? input.scale : pet.stage.scale,
       walks: typeof input.walks === 'boolean' ? input.walks : pet.stage.walks,
     }));
+
+    return requirePet(id);
+  },
+
+  /**
+   * Saves the voice the user picked for a pet, or clears it.
+   *
+   * Three states, and they are all different: a voice, a stored
+   * `engine: 'none'` for a pet the user wants silent, and nothing stored at all
+   * — which hands the question back to the pet's own manifest. Sending `null`
+   * is how a caller says the third.
+   */
+  setPetVoice(id: string, body: unknown): InstalledPet {
+    const pet = requirePet(id);
+    const input = readRecord(body);
+    const wanted = input && input.voice !== null && input.voice !== undefined
+      ? petVoiceSchema.safeParse(input.voice)
+      : null;
+
+    if (wanted && !wanted.success) {
+      throw toValidationError('That voice is not valid.', wanted.error.issues);
+    }
+
+    petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
+    petsRepository.saveVoice(pet.definition.id, wanted ? wanted.data : null);
+    publishPetsChanged(pet.definition.id);
 
     return requirePet(id);
   },

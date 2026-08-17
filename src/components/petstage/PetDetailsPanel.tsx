@@ -1,12 +1,20 @@
-import { EyeOff, MessageSquare, Monitor, X } from 'lucide-react';
+import { EyeOff, MessageSquare, Monitor, Volume2, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { PetSprite, type InstalledPet, type PetStateName } from '@/components/marketplace';
 import { describeGrid, formatAdded, SOURCE_LABEL } from '@/components/marketplace/pet-filters';
+import { resolvePetVoice } from '@/components/voice/pet-voice';
+import { useSpeech } from '@/components/voice/useSpeech';
 import { cn } from '@/lib/utils';
 
-import { MAX_PET_SCALE, MIN_PET_SCALE, type PetStage } from './chat-pet-api';
+import {
+  DEFAULT_VOICE,
+  MAX_PET_SCALE,
+  MIN_PET_SCALE,
+  type PetStage,
+  type PetVoice,
+} from './chat-pet-api';
 
 /**
  * The pet's own page, opened from his pill.
@@ -31,6 +39,8 @@ export type PetDetailsPanelProps = {
   pet: InstalledPet;
   stage: PetStage;
   onChange: (stage: PetStage) => void;
+  /** Saves the voice, or `null` to hand the question back to his manifest. */
+  onChangeVoice: (voice: PetVoice | null) => void;
   onClose: () => void;
   /** Puts him on the desktop, out of the chat. Absent when he is already there. */
   onSendToDesktop?: () => void;
@@ -57,6 +67,7 @@ export function PetDetailsPanel({
   pet,
   stage,
   onChange,
+  onChangeVoice,
   onClose,
   onSendToDesktop,
   onSendToChat,
@@ -64,6 +75,24 @@ export function PetDetailsPanel({
 }: PetDetailsPanelProps) {
   const { definition } = pet;
   const [previewState, setPreviewState] = useState<PetStateName>('idle');
+
+  /*
+   * The platform's own synthesiser, read from the voice module rather than
+   * reached for directly: it owns the voice list (which arrives asynchronously
+   * on Chromium and is empty on the first call), the chunking, and the
+   * name-matching that makes a pet authored on another operating system find
+   * the same speaker here. Building a second one of those was the wrong move
+   * available.
+   */
+  const speech = useSpeech();
+  const voice = definition.voice ?? null;
+
+  /** What a chosen voice would say, so it can be judged by ear rather than by name. */
+  const previewLine = pet.thinkingPhrases[0] ?? `Hello, I am ${definition.displayName}.`;
+  const speakPreview = (next: PetVoice) => {
+    const settings = resolvePetVoice(next, speech.voices);
+    if (settings) speech.speak(previewLine, settings);
+  };
 
   // Only the rows this sheet actually has. A pet with nine animations and a pet
   // with eleven are both correct, and offering a button for a row that is not
@@ -173,6 +202,108 @@ export function PetDetailsPanel({
                 className="size-4 accent-primary"
               />
             </label>
+          </section>
+
+          {/*
+            His voice.
+            
+            Three states, and they are deliberately distinct: no choice stored
+            (his manifest decides, which for every pet shipped so far means
+            silence), a chosen voice, and *chosen* silence. The last two look
+            the same from outside and are not the same thing — a pet authored to
+            be quiet is a decision, not an empty field.
+          */}
+          <section className="space-y-3 rounded-lg border border-border p-3">
+            <h3 className="font-display text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Voice
+            </h3>
+
+            {speech.supported ? (
+              <>
+                <label className="block space-y-1 text-sm">
+                  <span>Speaks with</span>
+                  <select
+                    data-tails-part="input"
+                    className="w-full px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    value={voice ? (voice.engine === 'none' ? '__none' : voice.name ?? '') : '__unset'}
+                    onChange={(event) => {
+                      const picked = event.target.value;
+                      if (picked === '__unset') {
+                        onChangeVoice(null);
+                        return;
+                      }
+                      const next: PetVoice = picked === '__none'
+                        ? { ...(voice ?? DEFAULT_VOICE), engine: 'none' }
+                        : { ...(voice ?? DEFAULT_VOICE), engine: 'system', name: picked };
+                      onChangeVoice(next);
+                      if (next.engine === 'system') speakPreview(next);
+                    }}
+                  >
+                    <option value="__unset">Not set — whatever his file says</option>
+                    <option value="__none">No voice — he stays quiet</option>
+                    {speech.voices.map((available) => (
+                      <option key={available.name} value={available.name}>
+                        {available.name}
+                        {available.lang ? ` (${available.lang})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {voice && voice.engine !== 'none' ? (
+                  <>
+                    <label className="block space-y-1 text-sm">
+                      <span className="flex items-baseline justify-between">
+                        <span>Pitch</span>
+                        <span className="text-xs text-muted-foreground">{voice.pitch.toFixed(1)}</span>
+                      </span>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={voice.pitch}
+                        onChange={(event) => onChangeVoice({ ...voice, pitch: Number(event.target.value) })}
+                        className="w-full accent-primary"
+                      />
+                    </label>
+
+                    <label className="block space-y-1 text-sm">
+                      <span className="flex items-baseline justify-between">
+                        <span>Speed</span>
+                        <span className="text-xs text-muted-foreground">{voice.rate.toFixed(1)}</span>
+                      </span>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={voice.rate}
+                        onChange={(event) => onChangeVoice({ ...voice, rate: Number(event.target.value) })}
+                        className="w-full accent-primary"
+                      />
+                    </label>
+
+                    {/*
+                      Nobody can pick a voice from a name, and nobody can judge
+                      a pitch from a number. Both are decided by ear.
+                    */}
+                    <button
+                      type="button"
+                      onClick={() => (speech.speaking ? speech.hush() : speakPreview(voice))}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors duration-quick hover:bg-accent hover:text-foreground"
+                    >
+                      <Volume2 className="size-3.5" aria-hidden="true" />
+                      {speech.speaking ? 'Stop' : 'Hear him'}
+                    </button>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                This machine has no speech synthesiser, so pets cannot be given a voice here.
+              </p>
+            )}
           </section>
         </div>
 

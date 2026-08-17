@@ -117,6 +117,12 @@ export function createPetsRouter(): express.Router {
     req.body,
   )));
 
+  /** How the pet sounds. `{ voice: null }` hands the question back to his manifest. */
+  router.post('/:petId/voice', respond((req) => petsService.setPetVoice(
+    String(req.params.petId),
+    req.body,
+  )));
+
   /** "This pet was chosen" — assignment lives in another module, the tally lives here. */
   router.post('/:petId/used', respond((req) => petsService.markPetUsed(String(req.params.petId))));
 

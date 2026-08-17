@@ -21,10 +21,12 @@ import {
   assignPetToSession,
   clearActivePet,
   readDisplayPet,
+  savePetVoice,
   readSessionPet,
   readStage,
   savePetStage,
   type PetStage,
+  type PetVoice,
 } from './chat-pet-api';
 import { onDesktopPetDetails, placeDesktopPetAt } from './desktop-handoff';
 import { PetDetailsPanel } from './PetDetailsPanel';
@@ -871,6 +873,24 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     return () => window.clearTimeout(timer);
   }, [landed]);
 
+  /**
+   * His voice, saved as it is picked.
+   *
+   * No optimistic copy, unlike the stage settings: the change is a select and
+   * two sliders whose value is read back from the pet, and the reload the save
+   * triggers arrives in a few milliseconds. `null` clears the choice rather
+   * than silencing him — see `savePetVoice`.
+   */
+  const changeVoice = useCallback((petId: string, next: PetVoice | null) => {
+    void savePetVoice(petId, next)
+      .then(() => setReloadToken((current) => current + 1))
+      .then(refreshDesktopPet)
+      .catch(() => {
+        // The pet keeps the voice he had. Nothing about a voice is worth a
+        // dialog over a chat.
+      });
+  }, []);
+
   /** Saved as it is changed, and shown immediately rather than after the round trip. */
   const changeStage = useCallback((petId: string, next: PetStage) => {
     setPendingStage({ petId, stage: next });
@@ -899,6 +919,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         ? pendingStage.stage
         : readStage(desktopPet)}
       onChange={(next) => changeStage(desktopPet.definition.id, next)}
+      onChangeVoice={(next) => changeVoice(desktopPet.definition.id, next)}
       onClose={() => setDesktopPet(null)}
       /*
        * Only when there is a conversation open to send him to, and only when he
@@ -1035,6 +1056,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
           pet={pet}
           stage={stage}
           onChange={(next) => changeStage(pet.definition.id, next)}
+          onChangeVoice={(next) => changeVoice(pet.definition.id, next)}
           onClose={() => setDetailsOpen(false)}
           onSendToDesktop={() => {
             setDetailsOpen(false);
