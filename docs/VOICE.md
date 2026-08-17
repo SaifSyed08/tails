@@ -644,3 +644,93 @@ The second risk is the one this document cannot resolve from the outside:
 dictation that needs correcting is worse than typing, and whether a 3–4% error
 rate on identifiers crosses that line is a judgement about how it feels to use,
 not a number.
+
+---
+
+## What implementation found
+
+Three results that came out of building rather than researching, recorded here
+because each one is a trap the next person would otherwise fall into.
+
+### The wake-word runtime: WASM in the renderer, not a native addon
+
+Both runtimes were measured on this machine, running openWakeWord's three-graph
+chain over 60 seconds of audio, single-threaded:
+
+| | native `onnxruntime-node` | `onnxruntime-web` (WASM) |
+|---|---:|---:|
+| Continuous listening, 1 word | **1.80%** of one core | 5.37% |
+| 3 words | 1.80% | 6.12% |
+| Per 80 ms chunk | 1.44 ms | 4.29 ms |
+| Shipped payload | ~60 MB | **12.86 MB** |
+| Native addon | yes | no |
+| `postinstall` script | **yes — network-capable** | none |
+
+WASM costs three times the CPU and won anyway. 5.4% of one core is 0.34% of
+this 16-thread machine and is paid only by someone who switched the feature on,
+against ~47 MB less shipped, no native addon, no ABI surface — and no
+install-time network call inside a feature whose whole premise is that nothing
+touches the network. The ABI risk that looked like the danger is not one:
+`onnxruntime-node` is N-API (napi-v6), which is version-stable by design and
+genuinely not the `better-sqlite3`/`node-pty` category.
+
+**Two sub-findings worth keeping:**
+
+**Threads make it worse.** Two threads measured **9.17%** against one thread's
+5.37% — coordination overhead dominates on graphs this small. So the feature
+needs no `SharedArrayBuffer`, and therefore no cross-origin isolation headers
+on a page the app serves itself. That constraint evaporated on measurement.
+
+**A Worker is required, but not because 5.4% is large.** The work arrives as a
+**4.29 ms block every 80 ms** against a 16.7 ms frame budget — a quarter of a
+frame, twelve times a second, on the thread that draws the pet. On the main
+thread this would have shipped as "the pet stutters sometimes", a symptom
+nobody would ever have traced back to the wake word.
+
+The 12.86 MB `.wasm` is emitted as its own asset and the worker as its own
+74 KB chunk, neither referenced until a wake word is armed — so the initial
+bundle is unchanged and nothing downloads for a user who leaves this off.
+
+### The measurement that was wrong before it was right
+
+The first idle-CPU figure was **1.15%**, and it was a measurement of a pipeline
+that could not detect anything. It was plausible, in the right range, and
+nothing about it looked broken. It was caught only because a validity check
+scored exactly 0.0000 on a clip of the wake phrase.
+
+Two causes, both now encoded as tested constants in `wake-window.ts`:
+
+- The classifier consumes 16 embeddings over a 76-frame window and cannot
+  produce **any** score until ~2.0 s of audio has arrived. Probe clips were
+  1.6 s. No score and a zero score look identical.
+- Feeding the melspectrogram graph bare 1280-sample chunks yields **5 frames,
+  not 8** — the STFT loses its edge frames with no history. The reference
+  carries 480 samples of overlap. Without it the warm-up stretches to 3.2 s and
+  every frame's timing drifts off what the models were trained on.
+
+Corrected, the figure is 1.80% and the chain scores 0.9979 on the wake phrase.
+**A cheap pipeline that never fires is not cheap, it is broken** — validity
+checks belong next to performance numbers.
+
+### Platform voice names share no substring across platforms
+
+Matching a pet's authored voice to one installed on this machine looks like a
+one-line `includes()`. It is not:
+
+```
+"Microsoft Zira - English (United States)"   // how Chrome names her
+"Microsoft Zira Desktop"                     // how Windows names her
+```
+
+**Neither string contains the other**, so a naive substring match silently
+fails to find the same speaker, falls through to a language fallback, and picks
+a different voice. Nothing throws, nothing fails a typecheck, and the only
+symptom is that a pet sounds wrong on some machines.
+
+The fix in `pet-voice.ts` is to reduce both names to their *distinctive* words —
+dropping `microsoft`, `desktop`, `english`, `united`, `states` and the rest of
+the decoration every platform wraps around the same speaker — and match on what
+is left. Both reduce to `zira`.
+
+This is the shape of bug this project keeps producing: something that looks
+like it works, degrades quietly, and is invisible to every automated gate.

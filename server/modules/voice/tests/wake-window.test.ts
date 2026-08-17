@@ -14,7 +14,8 @@ import {
   MelWindow,
   scaleMel,
   WARMUP_SAMPLES,
-} from '@/modules/voice/wake-window.js';
+} from '../../../../src/components/voice/wake-window.js';
+import { clampThreshold, MAX_THRESHOLD, MIN_THRESHOLD, WAKE_WORDS } from '@/modules/voice/wake-word.js';
 
 const chunkOfFrames = (n: number, fill = 1) => Float32Array.from(
   { length: n * MEL_BINS },
@@ -125,4 +126,24 @@ test('a raised threshold is respected, which is how a common word gets tuned', (
   const strict = new DetectionGate(0.95);
   assert.equal(strict.accept(0.9), false);
   assert.equal(strict.accept(0.96), true);
+});
+
+test('a sensitivity value from settings is clamped into a usable range', () => {
+  // A stored value from an older build, or a slider dragged to an extreme,
+  // must never be able to disable detection or make it fire on silence.
+  assert.equal(clampThreshold(0.85), 0.85);
+  assert.equal(clampThreshold(0), MIN_THRESHOLD);
+  assert.equal(clampThreshold(5), MAX_THRESHOLD);
+  assert.equal(clampThreshold(Number.NaN), 0.5);
+});
+
+test('the phrase chosen against the reliability floor is flagged as such', () => {
+  const tails = WAKE_WORDS.find((word) => word.id === 'tails');
+  const jarvis = WAKE_WORDS.find((word) => word.id === 'hey_jarvis');
+
+  assert.ok(tails && jarvis);
+  // It ships, but it ships stricter than the phrases that clear the floor.
+  assert.ok(tails.threshold > jarvis.threshold, 'tails should start stricter');
+  assert.equal(tails.source, 'bundled', 'our own model carries no licence limit');
+  assert.equal(jarvis.source, 'fetched', 'pretrained weights are non-commercial');
 });

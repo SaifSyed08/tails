@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { VoiceDictation, VoiceStatus } from '@/components/chat/voice-contract';
 import { CAPTURE_PROCESSOR, captureWorkletUrl, TARGET_SAMPLE_RATE } from '@/components/voice/capture-worklet';
+import { useWakeWord, type WakeWordArm } from '@/components/voice/useWakeWord';
 
 /**
  * The capture path, behind the composer's microphone button.
@@ -26,7 +27,21 @@ type Options = {
   onText: (text: string) => void;
   /** The conversation's folder, used to seed the recogniser's vocabulary. */
   cwd?: string | null;
+  /**
+   * Wake words to listen for while the microphone is open.
+   *
+   * Empty — the default — means no Worker is created and none of the 12.9 MB
+   * of WASM is ever fetched. Detection consumes the same PCM the dictation
+   * path already produces rather than opening a second stream: one microphone,
+   * one worklet, two consumers.
+   */
+  armed?: WakeWordArm[];
+  /** Called with the word's id when one fires. */
+  onWake?: (id: string) => void;
 };
+
+/** Stable empty default, so callers that never arm do not restart the effect. */
+const NONE: WakeWordArm[] = [];
 
 type ServerFrame =
   | { type: 'state'; listening: boolean }
@@ -53,7 +68,9 @@ function declareVoiceIntent(wanted: boolean): void {
   bridge?.voice?.setIntent?.(wanted);
 }
 
-export function useVoiceDictation({ onText, cwd }: Options): VoiceDictation {
+export function useVoiceDictation({
+  onText, cwd, armed = NONE, onWake,
+}: Options): VoiceDictation {
   const [status, setStatus] = useState<VoiceStatus>('unavailable');
   const [reason, setReason] = useState<string | undefined>('Checking for the speech model…');
 
@@ -65,6 +82,18 @@ export function useVoiceDictation({ onText, cwd }: Options): VoiceDictation {
   // and an unmount could be left unable to tear the microphone down.
   const onTextRef = useRef(onText);
   useEffect(() => { onTextRef.current = onText; }, [onText]);
+
+  const onWakeRef = useRef(onWake);
+  useEffect(() => { onWakeRef.current = onWake; }, [onWake]);
+
+  const wake = useWakeWord({
+    armed,
+    onDetected: (id) => onWakeRef.current?.(id),
+  });
+  // Read through a ref inside the audio callback so a re-render cannot leave
+  // the worklet holding a stale `feed`.
+  const wakeFeedRef = useRef(wake.feed);
+  useEffect(() => { wakeFeedRef.current = wake.feed; }, [wake.feed]);
 
   /**
    * Releases the device and everything attached to it.
@@ -191,6 +220,9 @@ export function useVoiceDictation({ onText, cwd }: Options): VoiceDictation {
         });
         node.port.onmessage = (event: MessageEvent<Int16Array>) => {
           if (socket.readyState === WebSocket.OPEN) socket.send(event.data);
+          // Same chunks, second consumer. The wake worker is a no-op when
+          // nothing is armed, so this costs a function call in that case.
+          wakeFeedRef.current(event.data);
         };
         source.connect(node);
         // Not connected to `context.destination` on purpose: routing the

@@ -1,7 +1,7 @@
 import express from 'express';
 
 import { downloadModel, MODEL_MIB, readStatus } from '@/modules/voice/whisper.js';
-import { readWakeWordStatus } from '@/modules/voice/wake-word.js';
+import { readWakeWordStatus, resolveWakeModel } from '@/modules/voice/wake-word.js';
 import { AppError } from '@/shared/utils.js';
 
 /**
@@ -26,15 +26,28 @@ export function createVoiceRouter(): express.Router {
    * runtime is an optional native package that is normally absent, and its
    * absence must never make dictation look broken.
    */
-  router.get('/wake', async (_req, res, next) => {
-    try {
-      res.json(await readWakeWordStatus());
-    } catch (error) {
-      next(new AppError(
-        error instanceof Error ? error.message : 'Could not read wake-word status',
-        { code: 'VOICE_WAKE_STATUS_FAILED', statusCode: 500 },
-      ));
+  router.get('/wake', (_req, res) => {
+    res.json(readWakeWordStatus());
+  });
+
+  /**
+   * Serves a wake-word model to the renderer, which is where detection runs.
+   *
+   * Only names on the known list resolve — the renderer asks by filename, and
+   * without an allow-list this route would be a way to read arbitrary files
+   * out of the user's home directory.
+   */
+  router.get('/wake/model/:file', (req, res, next) => {
+    const resolved = resolveWakeModel(req.params.file);
+    if (!resolved) {
+      next(new AppError('Unknown wake-word model', {
+        code: 'VOICE_WAKE_MODEL_UNKNOWN', statusCode: 404,
+      }));
+      return;
     }
+
+    res.type('application/octet-stream');
+    res.sendFile(resolved);
   });
 
   /**
