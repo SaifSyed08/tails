@@ -66,6 +66,17 @@ files:
   # ever reached from the renderer bundle.
   - node_modules/**/*
 
+  # The Claude Code CLI, 305.6 MB — 45% of the installer, and a second copy of
+  # a program most users of a Claude Code wrapper already have installed and
+  # signed in. The SDK resolves it out of this optional platform package and
+  # throws when it is absent, so dropping it only works because
+  # `server/modules/chat/claude-cli.ts` resolves the binary itself and hands the
+  # SDK the answer. A checkout still has the package, and the resolver still
+  # prefers it there, so `npm run dev` and `npx electron electron/main.js` are
+  # unaffected. Globbed across every platform: only one is ever installed, but
+  # naming one is a trap for whoever adds a mac or Linux target.
+  - '!node_modules/@anthropic-ai/claude-agent-sdk-*/**'
+
   # The renderer's dependencies are already inside `dist/` — Vite bundled them.
   # Shipping the packages as well would be 170 MB of duplicate, dead code, and
   # `onnxruntime-web` alone is 131 MB of it. The server's own imports are

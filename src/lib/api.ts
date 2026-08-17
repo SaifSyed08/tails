@@ -159,6 +159,17 @@ export const api = {
    * server's own clamp, sent along so the field cannot offer room the save
    * would take back.
    */
+  /**
+   * Whether the app has a Claude Code CLI to drive.
+   *
+   * Mirrors `ClaudeCliStatus` on the server, which is where the resolution
+   * order and the reasoning live. Only `found`, `reason` and `installUrl` are
+   * declared here — `searched` and `source` exist for a support answer, not for
+   * the UI, and typing them would invite something to start rendering them.
+   */
+  getClaudeCli: () =>
+    request<{ found: boolean; reason?: string; installUrl?: string }>('/chat/cli'),
+
   getConversationInstructions: () =>
     request<ConversationInstructions>('/chat/instructions'),
 

@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 
 import { sessionsRepository } from '@/db/sessions.repository.js';
 import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appearance/appearance.tools.js';
+import { resolveClaudeCli } from '@/modules/chat/claude-cli.js';
 import { expandLocalCommand } from '@/modules/chat/commands.service.js';
 import {
   formatConversationInstructions,
@@ -412,6 +413,21 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   const modelPrompt = buildPrompt(expandLocalCommand(prompt), attachments);
 
   try {
+    // Resolved per turn, and checked here rather than left to the SDK. The
+    // SDK's own message for a missing binary names an npm flag and one of its
+    // option keys — true, and useless to the person holding the app. Per turn
+    // rather than once at boot so that installing Claude Code and sending
+    // another message is enough; nothing has to be restarted.
+    const cli = resolveClaudeCli();
+    if (!cli.found) {
+      send(createMessage('error', sessionId, {
+        errorCode: 'claude_cli_missing',
+        content: cli.reason,
+      }));
+      exitCode = 1;
+      return;
+    }
+
     const options: Options = {
       cwd,
       abortController,
@@ -477,9 +493,11 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       ...(settings.effort ? { effort: settings.effort } : {}),
       canUseTool: createPermissionGate(sessionId),
       ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
-      ...(process.env.TAILS_CLAUDE_PATH
-        ? { pathToClaudeCodeExecutable: process.env.TAILS_CLAUDE_PATH }
-        : {}),
+      // Always supplied, never left to the SDK's own lookup. That lookup only
+      // knows about the optional platform package, which the installer does
+      // not ship — see `claude-cli.ts` for the whole resolution order and why
+      // it ends at `PATH` when `enginePath()` refuses to.
+      pathToClaudeCodeExecutable: cli.path,
     };
 
     const instance = query({ prompt: modelPrompt as never, options });

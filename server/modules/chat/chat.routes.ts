@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { resolveClaudeCli } from '@/modules/chat/claude-cli.js';
 import {
   CONVERSATION_INSTRUCTIONS_MAX_LENGTH,
   readConversationInstructions,
@@ -28,6 +29,22 @@ export function createChatRouter(): express.Router {
   const instructions = (value: string) => ({
     instructions: value,
     maxLength: CONVERSATION_INSTRUCTIONS_MAX_LENGTH,
+  });
+
+  /**
+   * Whether there is a Claude Code CLI to drive.
+   *
+   * Asked at startup rather than discovered on the first message. Without the
+   * CLI this app has no agent at all, and finding that out by typing a sentence
+   * and getting an error back is the difference between "you need to install
+   * one more thing" and "this is broken".
+   *
+   * Cheap enough to be a plain GET: a hit is a cached path plus one `stat`, and
+   * a miss is half a dozen. Re-asking after installing Claude Code therefore
+   * works without restarting anything.
+   */
+  router.get('/cli', (_req, res) => {
+    res.json(resolveClaudeCli());
   });
 
   router.get('/instructions', (_req, res) => {

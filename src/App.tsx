@@ -6,6 +6,7 @@ import { ChatPet } from '@/components/petstage/ChatPet';
 import { Intro } from '@/components/intro/Intro';
 import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
+import { ClaudeCliNotice } from '@/components/shell/ClaudeCliNotice';
 import { Header } from '@/components/shell/Header';
 import { Sidebar } from '@/components/sidebar/Sidebar';
 import { TerminalPanel } from '@/components/terminal/TerminalPanel';
@@ -134,6 +135,11 @@ export default function App() {
       <AppearanceProvider sessionId={sessionId}>
         {showIntro ? <Intro onDone={() => setShowIntro(false)} /> : null}
         <RestylingChip />
+        {/* Renders nothing unless the Claude Code CLI is missing, which is the
+            one condition under which the rest of this UI works and cannot
+            answer. Mounted here rather than in the chat view so it is asked
+            once per launch instead of once per conversation. */}
+        <ClaudeCliNotice />
         {/* Renders nothing until the appearance actually changes, then carries
             the agent's published controls plus save / undo / reset. */}
         <AppearancePanel sessionId={sessionId} />

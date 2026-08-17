@@ -50,6 +50,11 @@ export const modelPath = (): string => path.join(TAILS_HOME, 'models', MODEL_FIL
  * case — it is a pinned whisper.cpp release the packaging step verified by
  * digest — which is why it is a location rather than an exception to the rule.
  *
+ * Note that `claude-cli.ts` reaches the *opposite* conclusion about `PATH` from
+ * the same rule, and the difference is which program it is: whisper is an
+ * implementation detail the user never chose, `claude` is their own install.
+ * That comparison is written out in full there.
+ *
  * `TAILS_RESOURCES_PATH` is Electron's `process.resourcesPath`, handed down by
  * `ensureServer()` when the app is packaged. The server cannot work it out
  * itself: it is a separate process that also runs from a source checkout under
