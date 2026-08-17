@@ -6,7 +6,12 @@ import test from 'node:test';
 import zlib from 'node:zlib';
 
 import { CODEX_SPRITE_CELL, inferFrameGrid, readImageSize } from '@/modules/pets/sprite-metrics.js';
-import { buildDefaultStates, petDefinitionSchema, spritePathSchema } from '@/modules/pets/pet-spec.js';
+import {
+  buildDefaultStates,
+  petDefinitionSchema,
+  petFileSchema,
+  spritePathSchema,
+} from '@/modules/pets/pet-spec.js';
 import {
   CODEX_FPS,
   codexSheetRows,
@@ -643,4 +648,57 @@ test('seeded thinking phrases stay inside what the spinner accepts', () => {
   // A pet nobody has written lines for gets none, rather than someone else's.
   assert.deepEqual(seededThinkingPhrases('trump'), []);
   assert.deepEqual(seededThinkingPhrases('not-installed'), []);
+});
+
+
+/**
+ * A pet's voice, from its manifest to the response.
+ *
+ * `petVoiceSchema` sat in this module for months describing a voice nobody
+ * played, so the whole path had never once executed — and a field that is
+ * declared but never carried looks identical to one that works right up until
+ * something tries to read it. No installed pet declares a voice yet, which is
+ * precisely why this is a test rather than something anyone would notice.
+ *
+ * The two schemas in sequence are the load path: the lenient on-disk one, whose
+ * job is to tolerate the Codex manifests that carry none of this, and the
+ * strict canonical one, which drops any key it does not know about.
+ */
+test('a voice declared in a manifest survives into the pet definition', () => {
+  const file = petFileSchema.parse({
+    id: 'talker',
+    displayName: 'Talker',
+    spritesheetPath: 'spritesheet.webp',
+    // Only the parts an author would bother to write. The rest is defaulted,
+    // and the defaults are part of the contract the speech side reads.
+    voice: { name: 'Microsoft Zira Desktop', pitch: 1.2 },
+  });
+
+  assert.deepEqual(file.voice, {
+    engine: 'system', name: 'Microsoft Zira Desktop', pitch: 1.2, rate: 1,
+  });
+
+  const definition = petDefinitionSchema.parse({
+    id: 'talker',
+    displayName: 'Talker',
+    description: '',
+    spritesheetPath: 'spritesheet.webp',
+    frame: { width: 192, height: 208, columns: 8, rows: 9, fps: 4 },
+    states: { idle: { start: 0, end: 5 } },
+    voice: file.voice,
+  });
+
+  assert.deepEqual(definition.voice, file.voice, 'the canonical definition carries it too');
+});
+
+test('a pet with no voice says so by having none', () => {
+  // The absence is the answer, and it has to stay an absence: inventing a
+  // default voice here would make every silent pet start talking.
+  const file = petFileSchema.parse({ id: 'quiet', displayName: 'Quiet' });
+  assert.equal(file.voice, undefined);
+
+  const silent = petFileSchema.parse({
+    id: 'quiet', displayName: 'Quiet', voice: { engine: 'none' },
+  });
+  assert.deepEqual(silent.voice, { engine: 'none', pitch: 1, rate: 1 });
 });

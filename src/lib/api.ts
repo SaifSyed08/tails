@@ -141,6 +141,17 @@ export const api = {
       definition: {
         id: string;
         displayName: string;
+        /**
+         * How this pet sounds, when its own manifest says.
+         *
+         * Optional twice over, and both mean the same thing: a pet with no
+         * block and a pet with `engine: 'none'` do not speak. Declared here
+         * because this projection is the only thing standing between the
+         * server's payload and the chat — the server has always sent it, and a
+         * field left out of this type is a field the app cannot read. That is
+         * exactly how `displayName` and `thinkingPhrases` were lost above.
+         */
+        voice?: { engine: 'none' | 'system'; name?: string; pitch: number; rate: number };
       };
       /**
        * Lines this pet says while the agent is working, mixed into the thinking
