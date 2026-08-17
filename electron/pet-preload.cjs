@@ -49,11 +49,15 @@ contextBridge.exposeInMainWorld('petBridge', {
   /**
    * The window has just been shown again after being hidden.
    *
-   * While hidden the page receives no mouse moves, so anything it believes
-   * about the pointer is out of date — and a stale belief here is a pet that
-   * cannot be picked up. The shell says when to forget it.
+   * Sent whenever the shell shows him, and whenever it takes click-through
+   * back on its own. Anything the page believes about the pointer is out of
+   * date by then, and a stale belief here is a pet that cannot be picked up.
+   *
+   * Carries `{ carrying }`, because whether a carry is still live is the
+   * shell's to know: the page agrees with it rather than the shell skipping the
+   * message to protect a carry that may have ended long ago.
    */
-  onResync: (handler) => ipcRenderer.on('pet:resync', () => handler()),
+  onResync: (handler) => ipcRenderer.on('pet:resync', (_event, state) => handler(state)),
 
   /**
    * The shell asking where the pointer is, because the page cannot always know.

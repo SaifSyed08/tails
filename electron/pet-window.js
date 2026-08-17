@@ -365,7 +365,24 @@ function setInteractive(next) {
 function startWatchdog() {
   if (watchdogTimer) return;
   watchdogTimer = setInterval(() => {
-    if (!isAlive() || carryIsLive()) return;
+    if (!isAlive()) return;
+
+    /*
+     * A carry that has stopped producing frames has stopped.
+     *
+     * `carryIsLive` is the recency rule, and it was only ever being *consulted*
+     * — so between a carry going stale and its 2s safety timer firing, the
+     * shell knew the hand had let go while the page was still told to ignore
+     * every mouse move. That is a pet who cannot be picked up for a second and
+     * a half, which is long enough to try, fail, and conclude he is broken.
+     * Ending it here is what keeps the two sides from ever disagreeing by more
+     * than one tick of this poll.
+     */
+    if (carrying && !carryIsLive()) {
+      endCarry();
+      return;
+    }
+    if (carryIsLive()) return;
 
     /*
      * The OS's own rectangle, not our record of it.
@@ -532,45 +549,13 @@ function endCarry() {
  * `setIgnoreMouseEvents` is re-applied for the same reason: it is the one piece
  * of this that lives in the OS, and re-applying it costs a call.
  */
-function resyncAfterShow() {
-  if (!isAlive()) return;
-
-  /*
-   * Unless the app is holding him right now.
-   *
-   * The handoff shows this window *because* a carry has started, so resetting
-   * "he is being carried" here would immediately contradict the thing that
-   * caused the show: the page would drop to idle and then be told to run again
-   * on the next placement — a single frame of standing still in the middle of a
-   * run, which is exactly what was reported.
-   */
-  // Fresh, not merely flagged. A stale "he is being carried" here would skip
-  // the reset and leave the window exactly as unusable as the flag claims it is
-  // busy — which is the state this whole function exists to prevent.
-  const held = carryIsLive() && carrySource === 'app';
-  if (!held) {
-    if (settleTimer) {
-      clearTimeout(settleTimer);
-      settleTimer = null;
-    }
-    carrying = false;
-    carrySource = null;
-    carryFacing = null;
-    petWindow.webContents.send('pet:resync');
-  }
-
-  interactive = false;
-  petWindow.setIgnoreMouseEvents(true, { forward: true });
-  petWindow.setMovable(true);
-}
-
 /**
  * Sizes the window for the pet, on the display he is actually on.
  *
  * Split out of the resize message because it has three callers now: the page
  * asking, the pet being put down somewhere else, and the desktop itself being
- * rearranged. All three are the same question — how many DIPs is this sprite
- * here — and the answer moved the day multi-monitor came up.
+ * rearranged. All three are the same question â€” how many DIPs is this sprite
+ * here â€” and the answer moved the day multi-monitor came up.
  */
 function applyReportedSize() {
   if (!isAlive() || !reportedSize) return;
@@ -588,8 +573,8 @@ function applyReportedSize() {
   );
 
   // The pet is one sprite in a small box. A request several times that size is
-  // not a resize, it is a symptom — the zoom bug produced exactly that for four
-  // sessions — so it is refused rather than applied.
+  // not a resize, it is a symptom â€” the zoom bug produced exactly that for four
+  // sessions â€” so it is refused rather than applied.
   if (width > MAX_WINDOW.width || height > MAX_WINDOW.height) return;
 
   // Zoom is asserted here as well as on load and on the wheel gesture, because
@@ -604,13 +589,13 @@ function applyReportedSize() {
     && Math.abs(was.height - height) <= POSITION_TOLERANCE;
   // An OS drag must not be resized underneath: that is the path that produced
   // the cut sprite and, before it, the drift. A flight we are driving ourselves
-  // is fine — we place him again on the next frame anyway.
+  // is fine â€” we place him again on the next frame anyway.
   if (settled || (carrying && carrySource !== 'app')) return;
 
   petWindow.setContentSize(width, height);
 
   // Verified, like the position is. A content size that does not come back as
-  // the one we asked for means something is scaling this window underneath us —
+  // the one we asked for means something is scaling this window underneath us â€”
   // the fault that was mistaken for drift twice. One retry, because the usual
   // cause is a zoom that has just been reset.
   const applied = sizeNow();
@@ -635,19 +620,71 @@ function applyReportedSize() {
   moveTo(clamped.x, clamped.y);
 }
 
+/**
+ * Puts the window into a state where a press can reach him.
+ *
+ * ## Why this is one function and not a checklist at each call site
+ *
+ * "The window is visible" and "the window is usable" were separate states that
+ * nothing forced to agree, and they came apart four times, by four unrelated
+ * routes: a drag band placed against a stale rectangle, a show that skipped the
+ * page's reset, a carry flag that could never clear, and a suppression release
+ * that showed a pet nobody had prepared. Every one of those fixes was correct
+ * and every one of them was a repair to a *path*.
+ *
+ * So this is the invariant instead: everything a press needs is established
+ * here, unconditionally, and `showPetWindow` is the only way the window is ever
+ * shown. Adding a new reason to show him costs nothing and cannot reintroduce
+ * the state, because there is no way to show him without coming through here.
+ *
+ * What a press needs, all of it:
+ *
+ * - the window movable, or the OS ignores the drag region entirely;
+ * - click-through re-asserted, because it is the one piece of this that lives
+ *   in the OS and does not survive everything a window can go through;
+ * - the pointer poll running, which is the shell's own route in when the page
+ *   is receiving no mouse events;
+ * - and the page re-deriving its input state — see the resync handler there,
+ *   which also rebuilds its alpha mask when the mask belongs to a pet other
+ *   than the one on screen.
+ *
+ * The carry is *sent* rather than used to skip all this: the shell is the
+ * authority on whether a carry is live, so it says so and the page agrees with
+ * it. Skipping the reset to protect a live carry is what left the page carrying
+ * a pet that had been put down minutes ago.
+ */
+function makeUsable() {
+  if (!isAlive()) return;
+
+  petWindow.setMovable(true);
+  interactive = false;
+  petWindow.setIgnoreMouseEvents(true, { forward: true });
+  startWatchdog();
+
+  petWindow.webContents.send('pet:resync', { carrying: carryIsLive() });
+}
+
+/**
+ * The only place this window is ever shown.
+ *
+ * `showInactive` rather than `show`: a companion that steals focus while the
+ * user is typing is a companion they will uninstall.
+ */
+function showPetWindow() {
+  if (!isAlive()) return;
+  if (!petWindow.isVisible()) petWindow.showInactive();
+  makeUsable();
+}
+
 function applyVisibility() {
   if (!isAlive()) return;
 
   if (shouldShow()) {
-    // `showInactive` rather than `show`: a companion that steals focus while
-    // the user is typing is a companion they will uninstall.
-    if (!petWindow.isVisible()) {
-      petWindow.showInactive();
-      resyncAfterShow();
-    }
-    // Asks where the pointer is for as long as he is on screen, not only once
-    // he has been noticed — being noticed is the thing it exists to arrange.
-    startWatchdog();
+    // Every time, not only on the transition from hidden. `applyVisibility` is
+    // called for every reason the pet might need to be on screen, and making
+    // him usable is cheap; making him usable *sometimes* is what this cost four
+    // rounds to learn.
+    showPetWindow();
     return;
   }
 

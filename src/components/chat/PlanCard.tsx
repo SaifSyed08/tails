@@ -48,7 +48,7 @@ export function PlanCard({ requestId, plan, onAnswer }: PlanCardProps) {
               placeholder="What should it do differently?"
               aria-label="Feedback on the plan"
               data-tails-part="input"
-              className="w-full resize-y p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+              className="w-full resize-y p-2 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
             />
             <div className="flex gap-2">
               <button

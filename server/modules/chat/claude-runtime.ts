@@ -11,6 +11,10 @@ import { sessionsRepository } from '@/db/sessions.repository.js';
 import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appearance/appearance.tools.js';
 import { expandLocalCommand } from '@/modules/chat/commands.service.js';
 import {
+  formatConversationInstructions,
+  readConversationInstructions,
+} from '@/modules/chat/conversation-instructions.js';
+import {
   formatAttachedFileHeading,
   normalizeSdkMessage,
   toMessageAttachment,
@@ -416,19 +420,34 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       // and the subprocess would fail to spawn.
       env: { ...process.env } as Record<string, string>,
       systemPrompt: {
+        // Always the preset, extended. The preset *is* Claude Code — the
+        // tooling, the file editing, the agent — so everything this app or its
+        // user wants to say has to arrive as `append`. Switching this to a
+        // bare string, or dropping `preset`, leaves an app where every feature
+        // still runs and all of them are quietly worse.
         type: 'preset',
         preset: 'claude_code',
-        // The agent has to be told this capability exists, and — the part that
-        // was missing — told that the whole of it exists. Naming only list,
-        // preview and apply here is what made the freeform layer dead code:
-        // theme_css was implemented and reachable, and nothing ever mentioned
-        // it, so the model's entire mental model of "restyling" stopped at the
-        // declarative spec.
         append: [
-          'You can restyle the T.A.I.L.S. interface you are running inside, and you have real room to work: mcp__tails-appearance__theme_preview and __theme_apply compile a declarative spec, __theme_css layers arbitrary hand-written CSS over it for anything the spec cannot express, and __theme_controls publishes live sliders and toggles for the look you just made so the user can tune it without asking you.',
-          'mcp__tails-appearance__theme_list is for reading how the shipped presets are built. It is not a menu: answering a request for a mood with "the closest preset is X" is a failure, not an answer. Compose the look the user asked for, and if a primitive is genuinely missing, say which one.',
-          `The current conversation id is ${sessionId}; pass it as sessionId and prefer scope "conversation" unless the user explicitly asks to change their default.`,
-        ].join(' '),
+          // The agent has to be told this capability exists, and — the part
+          // that was missing — told that the whole of it exists. Naming only
+          // list, preview and apply here is what made the freeform layer dead
+          // code: theme_css was implemented and reachable, and nothing ever
+          // mentioned it, so the model's entire mental model of "restyling"
+          // stopped at the declarative spec.
+          [
+            'You can restyle the T.A.I.L.S. interface you are running inside, and you have real room to work: mcp__tails-appearance__theme_preview and __theme_apply compile a declarative spec, __theme_css layers arbitrary hand-written CSS over it for anything the spec cannot express, and __theme_controls publishes live sliders and toggles for the look you just made so the user can tune it without asking you.',
+            'mcp__tails-appearance__theme_list is for reading how the shipped presets are built. It is not a menu: answering a request for a mood with "the closest preset is X" is a failure, not an answer. Compose the look the user asked for, and if a primitive is genuinely missing, say which one.',
+            `The current conversation id is ${sessionId}; pass it as sessionId and prefer scope "conversation" unless the user explicitly asks to change their default.`,
+          ].join(' '),
+          // Whatever the user wrote in Settings, read per turn so a change made
+          // between messages is in force on the next one. Empty when they have
+          // written nothing, and dropped by the filter rather than joined in as
+          // a blank paragraph — so an unset preference produces byte for byte
+          // the append this app has always sent. It stays last; see
+          // `formatConversationInstructions` for why that position is what
+          // makes carrying the text unescaped safe.
+          formatConversationInstructions(readConversationInstructions()),
+        ].filter(Boolean).join('\n\n'),
       },
       tools: { type: 'preset', preset: 'claude_code' },
       // 'project' is required for CLAUDE.md files to load.

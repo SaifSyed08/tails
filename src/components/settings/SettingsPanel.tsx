@@ -137,6 +137,156 @@ function ColorModeControl() {
 }
 
 /**
+ * Standing instructions for how T.A.I.L.S. talks.
+ *
+ * Global, and deliberately not a fourth chip on the composer. The per-turn
+ * knobs down there — permission mode, model, effort — are decisions about the
+ * message you are about to send; this is a decision about the person sending
+ * it, and something you would have to retype in every new chat is not a
+ * preference. So it is stored once, server-side, and every conversation in
+ * every window reads the same answer.
+ *
+ * Saved on a button rather than as you type. This is prose: a debounced
+ * autosave would store half-written sentences, and a turn that started
+ * mid-thought would be shaped by one.
+ */
+function ConversationInstructions() {
+  // Null until the server answers. The cap is the server's to state — writing
+  // the number here as well is how a field comes to offer room that the save
+  // then quietly takes back.
+  const [limit, setLimit] = useState<number | null>(null);
+  const [saved, setSaved] = useState('');
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.getConversationInstructions()
+      .then((result) => {
+        if (cancelled) return;
+        setSaved(result.instructions);
+        setDraft(result.instructions);
+        setLimit(result.maxLength);
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) return;
+        setError(loadError instanceof Error ? loadError.message : 'Could not load your instructions.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+
+    try {
+      const result = await api.setConversationInstructions(draft);
+      setSaved(result.instructions);
+      // The stored text, not the typed text: a paste the server clamped should
+      // leave the box showing what will actually reach the model.
+      setDraft(result.instructions);
+      setLimit(result.maxLength);
+      setConfirmed(true);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save that.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dirty = draft !== saved;
+
+  return (
+    <section className="space-y-2 border-t border-border pt-5">
+      <div>
+        <h3 className="text-sm font-semibold">Conversation instructions</h3>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Standing notes on how T.A.I.L.S. should talk to you — tone, length, house style.
+          Added to what it already knows rather than replacing it, so it keeps every ability
+          it has and only changes how it speaks. Leave this empty and nothing is added at all.
+        </p>
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+
+      <textarea
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setConfirmed(false);
+        }}
+        rows={4}
+        disabled={limit === null}
+        maxLength={limit ?? undefined}
+        aria-label="Conversation instructions"
+        aria-describedby="conversation-instructions-hint"
+        placeholder={'Keep answers short and skip the preamble.\nUse British spelling.\nWhen you explain code, cover the tricky part rather than every line.'}
+        data-tails-part="input"
+        // A `focus:ring-*` would be inert here: the theme owns `box-shadow` on
+        // a tagged part at (0,2,0), so the utility silently never renders and
+        // the field ends up with no focus indicator at all. An outline is not
+        // in the contract's hands.
+        className="w-full resize-y p-2.5 text-sm outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={!dirty || busy}
+          className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground transition-transform duration-instant ease-emphasis active:scale-95 disabled:opacity-50"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+
+        {dirty ? (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(saved);
+              setConfirmed(false);
+            }}
+            className="rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors duration-quick hover:bg-accent"
+          >
+            Discard
+          </button>
+        ) : null}
+
+        {limit === null ? null : (
+          <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+            {draft.length} / {limit}
+          </span>
+        )}
+      </div>
+
+      {/* Announced, because the only other evidence a save landed is a button
+          going grey. The wording follows the model picker: a fresh CLI is
+          spawned per turn, so the next message is genuinely the earliest this
+          can take effect, and neither control should imply otherwise. */}
+      <p
+        id="conversation-instructions-hint"
+        aria-live="polite"
+        className="text-xs text-muted-foreground"
+      >
+        {confirmed
+          ? `${saved ? 'Saved' : 'Cleared'}. Applies from your next message, in every conversation.`
+          : 'Applies from your next message, in every conversation.'}
+      </p>
+    </section>
+  );
+}
+
+/**
  * Appearance settings.
  *
  * The manual half of generative theming: everything the agent can do through
@@ -281,7 +431,7 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
                               autoFocus
                               aria-label="Preset name"
                               data-tails-part="input"
-                              className="min-w-0 flex-1 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
+                              className="min-w-0 flex-1 px-2 py-1 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
                             />
                             <button
                               type="button"
@@ -411,6 +561,8 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
             </section>
 
             <ColorModeControl />
+
+            <ConversationInstructions />
 
             <section className="space-y-2 border-t border-border pt-5">
               <h3 className="text-sm font-semibold">Startup</h3>

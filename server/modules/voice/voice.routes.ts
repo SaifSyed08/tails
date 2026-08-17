@@ -1,6 +1,7 @@
 import express from 'express';
 
 import { downloadModel, MODEL_MIB, readStatus } from '@/modules/voice/whisper.js';
+import { readWakeWordStatus } from '@/modules/voice/wake-word.js';
 import { AppError } from '@/shared/utils.js';
 
 /**
@@ -16,6 +17,24 @@ export function createVoiceRouter(): express.Router {
 
   router.get('/status', (_req, res) => {
     res.json(readStatus());
+  });
+
+  /**
+   * Whether wake-word listening can run, and which words are installed.
+   *
+   * Separate from `/status` because the two fail independently: the wake-word
+   * runtime is an optional native package that is normally absent, and its
+   * absence must never make dictation look broken.
+   */
+  router.get('/wake', async (_req, res, next) => {
+    try {
+      res.json(await readWakeWordStatus());
+    } catch (error) {
+      next(new AppError(
+        error instanceof Error ? error.message : 'Could not read wake-word status',
+        { code: 'VOICE_WAKE_STATUS_FAILED', statusCode: 500 },
+      ));
+    }
   });
 
   /**

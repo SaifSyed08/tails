@@ -287,7 +287,7 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
                   }}
                   placeholder="Name this look"
                   data-tails-part="input"
-                  className="min-w-0 flex-1 rounded border border-border px-2 py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="min-w-0 flex-1 rounded border border-border px-2 py-1 outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
                 />
                 <button
                   type="button"

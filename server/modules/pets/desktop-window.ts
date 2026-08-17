@@ -346,6 +346,29 @@ const bridge = window.petBridge ?? {
   onAlert() {}, openAlert() {}, dismissAlert() {},
 };
 
+/**
+ * Everything this page believes, written onto the sprite as data attributes.
+ *
+ * Not for styling — for looking at. The page's state lives in module scope
+ * where nothing outside can reach it, and "the window is visible but not
+ * usable" has now been reached from four different directions, each time
+ * needing a guess about which of these was wrong. Written down, they can be
+ * asserted from a harness in one read, and the invariant they add up to can be
+ * tested per entry path rather than per bug.
+ *
+ * The pet and the mask are stamped separately on purpose: the mask is what
+ * decides where he
+ * can be grabbed, and a mask built for a *different* pet is a grab region over
+ * the wrong shape. Nothing used to compare them.
+ */
+function publishState() {
+  pet.dataset.pet = current ? current.definition.id : '';
+  pet.dataset.mask = mask ? maskFor : '';
+  pet.dataset.carry = dragging ? '1' : '';
+  pet.dataset.over = pointerOver ? '1' : '';
+  pet.dataset.handle = handle.style.display === 'block' ? '1' : '';
+}
+
 const stage = document.getElementById('stage');
 const pet = document.getElementById('pet');
 const handle = document.getElementById('handle');
@@ -365,6 +388,7 @@ const PILL_OPEN_W = 56;
 let current = null;      // the pet payload currently rendered
 let box = null;          // its cell geometry
 let mask = null;         // union alpha mask of the played frames, at cell resolution
+let maskFor = '';        // the pet that mask was built for, which must be the one on screen
 let dragging = false;
 let pointerOver = false;
 let playing = null;      // the state name currently animating
@@ -543,9 +567,11 @@ async function render(next) {
     current = null;
     playing = null;
     mask = null;
+    maskFor = '';
     petRect = null;
     pet.style.display = 'none';
     bridge.reportVisibility(false);
+    publishState();
     return;
   }
 
@@ -588,17 +614,33 @@ async function render(next) {
   }
 
   petRect = null;
+  await rebuildMask(next);
+}
 
-  // The mask is what makes the window clickable in the right places, so a
-  // failure here is not cosmetic: fall back to the sprite's whole box rather
-  // than leaving the pet ungrabbable.
+/**
+ * Builds the alpha map that decides where he can be grabbed.
+ *
+ * Separate from rendering because it is also what a resync asks for: the sheet
+ * loads asynchronously, so a pet swapped mid-load can leave this page holding a
+ * grab region shaped like the previous animal, and the fix for that is to be
+ * able to say "build one for *this* pet" from outside the render.
+ *
+ * A failure here is not cosmetic — it is a pet with no grab region — so it
+ * falls back to no mask at all, which the hit test reads as "his whole box",
+ * rather than to a wrong one.
+ */
+async function rebuildMask(subject) {
   try {
-    const image = await loadImage(next.spriteUrl);
-    mask = buildHitMask(image, grid, idle);
+    const image = await loadImage(subject.spriteUrl);
+    mask = buildHitMask(image, subject.definition.frame, subject.definition.states.idle);
+    // Stamped with whose mask it is, so the mismatch above is detectable at all.
+    maskFor = subject.definition.id;
     placeFurniture();
   } catch {
     mask = null;
+    maskFor = '';
   }
+  publishState();
 }
 
 /**
@@ -629,6 +671,7 @@ function reportSize() {
 function placeFurniture() {
   if (!mask || !box) {
     handle.style.display = 'none';
+    publishState();
     pill.style.display = 'none';
     // The bubble still goes up. A pet whose mask failed to build is a pet with
     // no grab region and no pill, which is bad enough — silently swallowing the
@@ -694,6 +737,7 @@ function placeHandle(rect, stageRect, minX, maxX, minY, maxY) {
   handle.style.top = top + 'px';
   handle.style.width = width + 'px';
   handle.style.height = height + 'px';
+  publishState();
 }
 
 /**
@@ -776,6 +820,7 @@ let carryFloor = null;
 
 bridge.onCarry((isCarrying) => {
   dragging = isCarrying;
+  publishState();
 
   /*
    * A carry that is never called off.
@@ -880,6 +925,7 @@ function setPointerOver(next) {
 
   pill.classList.toggle('open', next && !dragging);
   placeFurniture();
+  publishState();
 
   // Noticed. He stops hopping while you are pointing at him, and picks it up
   // again if you wander off without reading the chat.
@@ -1049,15 +1095,37 @@ bridge.onProbe((point) => {
  * window clickable, and a stale "he is being carried" means this page stops
  * tracking the pointer at all. Either one is a pet nobody can pick up.
  */
-bridge.onResync(() => {
-  dragging = false;
+bridge.onResync((state) => {
+  /*
+   * Re-derive everything about input from what is actually true now.
+   *
+   * The shell sends this whenever it shows him and whenever it takes
+   * click-through back by itself, and it says whether a carry is live — that is
+   * its fact, not this page's. Believing it, rather than the shell skipping the
+   * message to protect a carry, is what stops this page going on believing it
+   * is being carried long after the hand let go. A page that believes that
+   * ignores every mouse move, which is half of an unusable pet.
+   */
+  dragging = Boolean(state && state.carrying);
   pointerOver = false;
   petRect = null;
-  pet.classList.remove('dragging');
+  pet.classList.toggle('dragging', dragging);
   pill.classList.remove('open');
   bridge.reportPointerOverPet(false);
-  if (mask) placeFurniture();
-  playState('idle');
+
+  /*
+   * And re-derive the geometry if it belongs to somebody else.
+   *
+   * The mask decides where he can be grabbed, and it is built from an image
+   * that loads asynchronously — so a pet swapped while the previous sheet was
+   * still loading can leave this page holding a grab region shaped like the
+   * wrong animal. Nothing used to check that; now every show does.
+   */
+  if (current && (!mask || maskFor !== current.definition.id)) void rebuildMask(current);
+  else placeFurniture();
+
+  if (!dragging) playState('idle');
+  publishState();
 });
 
 

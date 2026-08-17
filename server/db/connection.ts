@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS generated_themes (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- App-wide preferences that belong to the user rather than to a conversation.
+-- Key/value rather than a column per setting: these are read one at a time by
+-- the module that owns them, and a table that grows a column per preference
+-- makes every one of them a schema migration in a file nobody else should have
+-- to touch.
+CREATE TABLE IF NOT EXISTS app_preferences (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS theme_bindings (
   scope TEXT NOT NULL CHECK (scope IN ('global', 'project', 'session')),
   scope_key TEXT NOT NULL DEFAULT '',

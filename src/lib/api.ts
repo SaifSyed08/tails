@@ -158,6 +158,24 @@ export const api = {
     activePetId: string | null;
   }>('/pets'),
 
+  /**
+   * The user's standing conversation instructions, and the cap on them.
+   *
+   * Global, with no session in the path: this is how the user wants to be
+   * talked to everywhere, not a setting for one chat. `maxLength` is the
+   * server's own clamp, sent along so the field cannot offer room the save
+   * would take back.
+   */
+  getConversationInstructions: () =>
+    request<ConversationInstructions>('/chat/instructions'),
+
+  /** Resolves to what was stored, which is the trimmed and clamped form. */
+  setConversationInstructions: (instructions: string) =>
+    request<ConversationInstructions>('/chat/instructions', {
+      method: 'PUT',
+      body: JSON.stringify({ instructions }),
+    }),
+
   listThemes: () => request<ThemeSummary[]>('/appearance/themes'),
 
   /** Shows a look without saving or binding it. Reverted by re-resolving. */
@@ -187,6 +205,12 @@ export const api = {
 
   deleteTheme: (themeId: string) =>
     request<{ id: string }>(`/appearance/themes/${encodeURIComponent(themeId)}`, { method: 'DELETE' }),
+};
+
+export type ConversationInstructions = {
+  /** Empty means the system prompt is left exactly as it ships. */
+  instructions: string;
+  maxLength: number;
 };
 
 export type SlashCommand = {
