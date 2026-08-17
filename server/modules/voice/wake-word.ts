@@ -133,6 +133,20 @@ export const MAX_THRESHOLD = 0.99;
  */
 export const WAKE_WORDS: readonly WakeWordDefinition[] = [
   { id: 'tails', file: 'tails.onnx', label: 'TAILS', source: 'bundled', threshold: 0.85 },
+  /*
+    The two-word form, offered alongside rather than instead.
+
+    Six phonemes against four, which clears the reliability floor the bare word
+    sits under — but that is an argument, and the point of training both is to
+    replace the argument with a number. Listed here so that when the measurement
+    comes back the answer is a toggle rather than a release: whichever wins, the
+    user can already pick it.
+
+    Its threshold starts at the shared default because a phrase that clears the
+    floor does not need the bare word's handicap. Like `tails`, it is a starting
+    position until the false-accept run replaces it.
+  */
+  { id: 'hey_tails', file: 'hey_tails.onnx', label: 'Hey TAILS', source: 'bundled', threshold: 0.5 },
   { id: 'hey_jarvis', file: 'hey_jarvis_v0.1.onnx', label: 'Hey Jarvis', source: 'fetched', threshold: 0.5 },
   { id: 'timer', file: 'timer_v0.1.onnx', label: 'Timer', source: 'fetched', threshold: 0.5 },
 ];

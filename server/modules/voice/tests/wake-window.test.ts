@@ -17,6 +17,7 @@ import {
   scaleMel,
   WARMUP_SAMPLES,
 } from '../../../../src/components/voice/wake-window.js';
+import { bytesNeeded } from '@/modules/voice/wake-download.js';
 import { clampThreshold, MAX_THRESHOLD, MIN_THRESHOLD, WAKE_WORDS } from '@/modules/voice/wake-word.js';
 
 const chunkOfFrames = (n: number, fill = 1) => Float32Array.from(
@@ -221,4 +222,36 @@ test('reset drops the carry, so a re-arm does not splice two sessions together',
   queue.push(ramp(500, 0));
   queue.reset();
   assert.equal(queue.pending, 0);
+});
+
+test('our own phrases are bundled, and never offered as a download', () => {
+  /*
+    `tails` and `hey_tails` are trained here, so their weights carry no licence
+    restriction and there is nowhere to fetch them from. openWakeWord's are the
+    opposite on both counts. Conflating them would either offer a download that
+    404s, or present CC-BY-NC-SA weights as though they were ours.
+  */
+  const ours = WAKE_WORDS.filter((word) => word.source === 'bundled');
+  assert.deepEqual(ours.map((word) => word.id).sort(), ['hey_tails', 'tails']);
+
+  for (const word of ours) {
+    assert.equal(bytesNeeded(word.id), 0, `${word.id} must not be downloadable`);
+  }
+
+  // And the fetched ones must still declare themselves non-commercial, which is
+  // what the settings panel renders the warning from.
+  for (const word of WAKE_WORDS.filter((entry) => entry.source === 'fetched')) {
+    assert.notEqual(bytesNeeded(word.id), undefined);
+  }
+});
+
+test('the two-word form does not inherit the bare word handicap', () => {
+  const bare = WAKE_WORDS.find((word) => word.id === 'tails');
+  const two = WAKE_WORDS.find((word) => word.id === 'hey_tails');
+  assert.ok(bare && two);
+
+  // Six phonemes against four. It starts at the ordinary default because it
+  // clears the floor the bare word sits under — both are placeholders until
+  // the false-accept run, but they are not the *same* placeholder.
+  assert.ok(two.threshold < bare.threshold);
 });
