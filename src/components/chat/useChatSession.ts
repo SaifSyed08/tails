@@ -383,7 +383,32 @@ export function useChatSession(sessionId: string | null) {
           return;
 
         default:
-          setRealtime((current) => [...current, message]);
+          /*
+            Appended once, however many times it arrives.
+
+            `chat.subscribe` replays the run buffer from `lastSeq` — that is
+            the whole point of it, and what makes a mid-stream refresh or a
+            reconnect recover instead of losing the turn. But the consumer was
+            append-only, so every replay added a second copy of messages it
+            already had. Verified against the live gateway: two subscribes with
+            the same `lastSeq` deliver the identical message twice, same `id`
+            and same `seq`.
+
+            React's StrictMode makes it routine rather than rare in
+            development — the subscribe effect has no cleanup, so it fires
+            twice on mount — but the bug is not StrictMode's. A protocol that
+            can re-deliver requires a consumer that can absorb it, and this one
+            could not.
+
+            Keyed on `id` rather than on content: two identical messages are
+            two messages, and `mergeTranscript` already handles that case as a
+            multiset. This is about the *same* message arriving twice.
+          */
+          setRealtime((current) => (
+            current.some((existing) => existing.id === message.id)
+              ? current
+              : [...current, message]
+          ));
       }
     });
   }, [sessionId, subscribe, loadHistory, resetStream]);
