@@ -434,6 +434,47 @@ the models as missing.
 Restart the app, open **Settings → Voice**, and the wake word will show as
 installed with a toggle instead of a download button.
 
+## Results
+
+Both phrases trained and measured. Eval, against livekit's own 35,584
+general-audio negatives:
+
+| | AUT | FPPH | recall | eval threshold |
+|---|---|---|---|---|
+| `tails` | 0.0000 | 0.00 | 99.4% | 0.50 |
+| `hey_tails` | 0.0002 | 0.00 | 97.8% | 0.50 |
+
+**Both look perfect and both numbers are useless on their own**, which is the
+most important thing this exercise established. General audio contains almost
+no rhymes of "tails", so that eval measures the wake word against *noise*.
+Scored against the confusables instead — identical synthesised audio through
+this app's own mel/embedding chain, `wakeword-false-accepts.py`:
+
+| | wake phrase | worst negative | workable threshold |
+|---|---:|---:|---|
+| `tails` | 0.963 | **0.982** (`tails off`) | **none exists** |
+| `hey_tails` | 0.938–0.944 | **0.926** (`details`) | ~0.93, window 0.012 wide |
+
+`tails` is unusable at any threshold: seven negatives reach or beat the wake
+word, including `tails app` at 0.979 and `tails off` at 0.982 — the app's own
+name in ordinary use, scoring *higher* than the word itself.
+
+`hey_tails` separates, and only just. 0.93 accepts the phrase and rejects
+`details`, with 0.012 between them. That is not a margin; a hundredth in either
+direction misses the wake or fires on "more details", which is a phrase you say
+constantly in a coding tool. For comparison `hey_jarvis` clears its worst
+confusable by 0.036 on the same harness.
+
+Caveat kept with the numbers: two synthesised voices, not human speech. They
+are sound for comparing models on identical audio, which is what they are for,
+and should not be read as absolute false-accept rates.
+
+**A prediction that failed, recorded because it was wrong in an instructive
+way.** Phoneme counting said the two-word form would need a *lower* threshold
+than the bare word. It needs a higher one — 0.93 against 0.85. Counting
+phonemes says nothing about which confusables a trained model finds hard, and
+that is only discoverable by running it.
+
 ### Then tell me the eval numbers
 
 Paste the `eval` output for both phrases — specifically **false positives per

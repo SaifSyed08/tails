@@ -176,7 +176,7 @@ export const WAKE_WORDS: readonly WakeWordDefinition[] = [
     floor does not need the bare word's handicap. Like `tails`, it is a starting
     position until the false-accept run replaces it.
   */
-  { id: 'hey_tails', file: 'hey_tails.onnx', label: 'Hey TAILS', source: 'bundled', threshold: 0.5 },
+  { id: 'hey_tails', file: 'hey_tails.onnx', label: 'Hey TAILS', source: 'bundled', threshold: 0.93 },
   { id: 'hey_jarvis', file: 'hey_jarvis_v0.1.onnx', label: 'Hey Jarvis', source: 'fetched', threshold: 0.5 },
   { id: 'timer', file: 'timer_v0.1.onnx', label: 'Timer', source: 'fetched', threshold: 0.5 },
 ];

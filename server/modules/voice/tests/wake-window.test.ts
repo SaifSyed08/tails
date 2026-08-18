@@ -245,13 +245,28 @@ test('our own phrases are bundled, and never offered as a download', () => {
   }
 });
 
-test('the two-word form does not inherit the bare word handicap', () => {
-  const bare = WAKE_WORDS.find((word) => word.id === 'tails');
-  const two = WAKE_WORDS.find((word) => word.id === 'hey_tails');
-  assert.ok(bare && two);
+test('the two-word threshold is the measured one, not a guess', () => {
+  /*
+    This test used to assert the opposite, and the measurement is why it does
+    not any more.
 
-  // Six phonemes against four. It starts at the ordinary default because it
-  // clears the floor the bare word sits under — both are placeholders until
-  // the false-accept run, but they are not the *same* placeholder.
-  assert.ok(two.threshold < bare.threshold);
+    The reasoning was that six phonemes clear the reliability floor four do
+    not, so the two-word form should need *less* handicap than the bare word —
+    and it shipped as an assertion, which made an untested inference look like
+    a checked fact. Scored on identical audio, "hey tails" lands at 0.938-0.944
+    against "details" at 0.926, so the only workable threshold is about 0.93 —
+    *higher* than the 0.85 the bare word carries, and the bare word's 0.85 does
+    not work at any value anyway.
+
+    Phoneme count predicted the ordering and got it backwards. What it could
+    not know is which confusables the trained model would find hard, and that
+    is not derivable from the phrase — only from running it.
+  */
+  const two = WAKE_WORDS.find((word) => word.id === 'hey_tails');
+  assert.ok(two);
+  assert.equal(two.threshold, 0.93, 'the measured window is 0.926 to 0.938');
+
+  // And it must stay inside what the sensitivity slider can express, or the
+  // shipped default is a value the user cannot return to after moving it.
+  assert.ok(two.threshold <= MAX_THRESHOLD && two.threshold >= MIN_THRESHOLD);
 });
