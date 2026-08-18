@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { PetSprite, type InstalledPet, type PetStateName } from '@/components/marketplace';
+import { PetPersonalityEditor } from '@/components/marketplace/PetPersonalityEditor';
 import { describeGrid, formatAdded, SOURCE_LABEL } from '@/components/marketplace/pet-filters';
 import { resolvePetVoice } from '@/components/voice/pet-voice';
 import { useSpeech } from '@/components/voice/useSpeech';
@@ -56,6 +57,8 @@ export type PetDetailsPanelProps = {
    */
   onSendToChat?: () => void;
   onHide: () => void;
+  /** Something about the pet was saved; the opener should re-read it. */
+  onPetChanged?: () => void;
 };
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
@@ -78,6 +81,7 @@ export function PetDetailsPanel({
   onSendToDesktop,
   onSendToChat,
   onHide,
+  onPetChanged,
 }: PetDetailsPanelProps) {
   const { definition } = pet;
   const [previewState, setPreviewState] = useState<PetStateName>('idle');
@@ -231,6 +235,18 @@ export function PetDetailsPanel({
               />
             </label>
           </section>
+
+          {/*
+            The look he brings and the lines he says.
+
+            Reused from the marketplace rather than rebuilt here. Both fields
+            were already stored, validated and persisted — and both were only
+            reachable from a dialog most people never opened, which is why
+            choosing a theme for a pet appeared to do nothing. The editor is the
+            same component in both places so the two cannot drift into
+            disagreeing about what a pet is allowed to carry.
+          */}
+          <PetPersonalityEditor pet={pet} onSaved={() => onPetChanged?.()} />
 
           {/*
             His voice.

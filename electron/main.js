@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, Menu, ipcMain, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, clipboard, Menu, ipcMain, nativeImage, shell } from 'electron';
 
 import {
   createPetWindow,
@@ -410,6 +410,9 @@ function createMainWindow() {
   });
 
   installPermissionHandlers(mainWindow.webContents.session);
+  // Right-click on text. Only the app window: the pet has no text and its own
+  // right-click is deliberately suppressed, since the pill is the way in there.
+  installContextMenu(mainWindow.webContents);
 
   // Belt and braces around the grant: whatever the renderer believes, a window
   // that is not in front of the user is not one they are dictating into.
@@ -643,6 +646,72 @@ function readAppIcon() {
  * appearance reset gets an accelerator, since the OS menu is chrome a theme can
  * never restyle.
  */
+/**
+ * The right-click menu for text.
+ *
+ * ## Why the app needs one at all
+ *
+ * Electron ships no context menu. In a browser the platform provides
+ * copy/paste on right-click for free; in a `BrowserWindow` right-clicking
+ * selected text does nothing, and Ctrl+C is the only way to copy — which
+ * nobody discovers by trying, because every other application on the machine
+ * has taught them otherwise. The absence reads as the app swallowing a
+ * standard gesture.
+ *
+ * ## Why it is built per event rather than once
+ *
+ * `params.editFlags` describes what is possible *at the click*: whether
+ * anything is selected, whether the target accepts input, whether the
+ * clipboard has anything worth pasting. A menu built once and reused would
+ * offer Cut over read-only text and Paste with an empty clipboard, and a menu
+ * whose items do nothing is worse than no menu — it teaches that the app's
+ * controls are decorative.
+ *
+ * Roles rather than hand-written handlers, so the operating system's own
+ * clipboard behaviour applies, including the shortcut labels it draws beside
+ * each item.
+ *
+ * Deliberately says nothing about the *page*: no Reload, no Inspect Element,
+ * no Back. Those are a browser's menu, and this window is an application that
+ * happens to be rendered with web technology — offering Reload invites someone
+ * to lose a turn in progress.
+ */
+function installContextMenu(contents) {
+  contents.on('context-menu', (_event, params) => {
+    const { editFlags } = params;
+    const hasSelection = params.selectionText.trim().length > 0;
+    const items = [];
+
+    if (params.isEditable || hasSelection) {
+      if (params.isEditable && editFlags.canCut) items.push({ role: 'cut' });
+      if (editFlags.canCopy && hasSelection) items.push({ role: 'copy' });
+      if (params.isEditable && editFlags.canPaste) items.push({ role: 'paste' });
+    }
+
+    /*
+     * Link and image targets, which are the other two things a right-click is
+     * reliably *for*. A chat transcript is full of both.
+     */
+    if (params.linkURL) {
+      if (items.length > 0) items.push({ type: 'separator' });
+      items.push({
+        label: 'Copy link address',
+        click: () => clipboard.writeText(params.linkURL),
+      });
+    }
+
+    if (items.length > 0 && (editFlags.canSelectAll ?? true)) {
+      items.push({ type: 'separator' }, { role: 'selectAll' });
+    }
+
+    // Nothing worth offering. Showing an empty menu, or one holding only
+    // "Select All" over a blank area, is noise.
+    if (items.length === 0) return;
+
+    Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(contents) ?? undefined });
+  });
+}
+
 function installApplicationMenu() {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null);

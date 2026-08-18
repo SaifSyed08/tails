@@ -283,6 +283,29 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
             const library = await api.listPets();
             const match = library.pets.find((entry) => entry.definition.id === session.petId);
             if (match) {
+              /*
+                A pet that carries a look brings it with him.
+
+                `assignedTheme` has been stored, validated and persisted by the
+                pets module all along, and nothing on this side ever read it —
+                so choosing a theme for a pet did exactly nothing, which is the
+                same "written but never consumed" shape this project keeps
+                finding. Bound to the *session* rather than globally: the pet
+                belongs to this conversation, so his look should leave with it
+                rather than following the user into chats he is not in.
+
+                Failure is silent by design. A stored id whose preset no longer
+                exists is documented as meaning "no theme", never an error —
+                see `assignedThemeSchema`.
+              */
+              if (match.assignedTheme) {
+                void api.applyTheme({
+                  themeId: match.assignedTheme,
+                  scope: 'session',
+                  sessionId,
+                }).catch(() => {});
+              }
+
               resolved = {
                 id: match.definition.id,
                 // Both of these live where the pets module actually puts them,

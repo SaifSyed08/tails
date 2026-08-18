@@ -112,6 +112,7 @@ export function PetSettingsDialog({ pet, sessionId, inChat = false, onClose, onC
       onSendToDesktop={pet.active ? undefined : sendToDesktop}
       onSendToChat={sessionId && !inChat ? sendToChat : undefined}
       onHide={hide}
+      onPetChanged={() => onChanged?.()}
     />
   );
 }
