@@ -26,33 +26,43 @@ type PetPillProps = {
   open: boolean;
   /** Width of the pet above it, so the pill reads as his shadow rather than a tooltip. */
   width: number;
-  /**
-   * No room below him — put the open pill over his head instead.
-   *
-   * Standing on the floor, there is *never* room: the floor is the bottom edge
-   * of the chat stage and the overlay clips there, so the grown pill was cut
-   * clean off at exactly the moment it was most likely to be used. He spends
-   * most of his time on the ground, which made this the normal case rather than
-   * an edge one.
-   *
-   * Only the grown pill flips. Collapsed it is five pixels tall with a negative
-   * offset, so it overlaps his feet and reads as his shadow — moving *that*
-   * above his head would turn a shadow into a hat.
-   */
-  flip?: boolean;
   onOpenDetails: () => void;
   onHide: () => void;
   className?: string;
 };
 
-/** Height of the grown pill, and the clearance it needs below his feet. */
+/** Height of the grown pill. */
 export const PILL_OPEN_HEIGHT = 22;
 
 const BUTTON_CLASS = 'grid h-full flex-1 place-items-center rounded-full transition-opacity duration-quick';
 
-export function PetPill({ open, width, flip = false, onOpenDetails, onHide, className }: PetPillProps) {
-  const above = open && flip;
-
+/**
+ * Where the pill sits, and why the two states anchor differently.
+ *
+ * Collapsed it hangs just below his feet — `top: 100%` with a negative offset
+ * so it overlaps them and reads as his shadow.
+ *
+ * Open it anchors to `bottom: 0` instead, growing *upward* from that same
+ * shadow rather than downward away from it. That one change fixes two separate
+ * bugs, which is why it beats the alternatives:
+ *
+ *   - **It stopped being clipped.** He stands on the floor, the floor is the
+ *     bottom edge of the chat stage, and the stage clips there — so a pill
+ *     hanging below his feet was cut off in his most common position, which is
+ *     to say almost always.
+ *
+ *   - **It stopped vanishing when you reached for it.** Below his feet the
+ *     open pill sat outside the wrapper's box with a 2px gap in between, and
+ *     crossing that gap put the pointer over neither the pet nor the pill.
+ *     `pointerleave` fired, `open` went false, and the thing being aimed at
+ *     disappeared from under the cursor. Anchored inside the box there is no
+ *     gap and no boundary to cross, so hovering it is simply hovering him.
+ *
+ * An earlier fix flipped the open pill above his head to escape the clip. It
+ * solved the clipping and not the vanishing, and it moved a control that
+ * belongs at his feet.
+ */
+export function PetPill({ open, width, onOpenDetails, onHide, className }: PetPillProps) {
   return (
     <div
       className={cn(
@@ -66,9 +76,9 @@ export function PetPill({ open, width, flip = false, onOpenDetails, onHide, clas
         // as wide as the two controls it holds.
         width: open ? 56 : Math.max(18, width * 0.45),
         height: open ? PILL_OPEN_HEIGHT : 5,
-        ...(above
-          ? { bottom: '100%', marginBottom: 2 }
-          : { top: '100%', marginTop: open ? 2 : -2 }),
+        ...(open
+          ? { bottom: 0 }
+          : { top: '100%', marginTop: -2 }),
       }}
     >
       <button

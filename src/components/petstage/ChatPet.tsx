@@ -30,7 +30,7 @@ import {
 } from './chat-pet-api';
 import { onDesktopPetDetails, placeDesktopPetAt } from './desktop-handoff';
 import { PetDetailsPanel } from './PetDetailsPanel';
-import { PetPill, PILL_OPEN_HEIGHT } from './PetPill';
+import { PetPill } from './PetPill';
 import { advanceMotion, type Bounds, type Motion } from './pet-motion';
 import { fpsForState } from './sprite-rate';
 import { useChatActivity } from './useChatActivity';
@@ -1037,12 +1037,6 @@ export function ChatPet({ sessionId }: ChatPetProps) {
           <PetPill
             open={hovered && !carrying}
             width={width}
-            /*
-              `here.y` is his height above the floor, and the floor is where the
-              overlay stops clipping — so the room below his feet *is* `-here.y`.
-              Standing, that is zero, which is why the pill was always cut off.
-            */
-            flip={-here.y < PILL_OPEN_HEIGHT + 6}
             onOpenDetails={() => setDetailsOpen(true)}
             onHide={() => {
               // Away for now, not unassigned. He belongs to this conversation

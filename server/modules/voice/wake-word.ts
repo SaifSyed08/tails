@@ -111,6 +111,36 @@ export const MAX_THRESHOLD = 0.99;
  * far above the others, and it is the one word whose value most needs
  * replacing with a measured figure. 0.85 is a starting position, not a result.
  *
+ * ## Measured, and the answer is that no threshold works
+ *
+ * The model is trained and installed. Scored through this app's own chain
+ * against synthesised confusables, `tails` peaks at **0.963** — and seven
+ * negatives reach or beat it:
+ *
+ *     tails off   0.982      bales        0.968      tell tales  0.966
+ *     tails app   0.979      tail         0.967      tales       0.963
+ *                            fails        0.958
+ *
+ * The ranges do not overlap at the edges; the negatives are *on top*. There is
+ * no value of this threshold — not 0.85, not the 0.99 ceiling — that hears the
+ * word and not its rhymes, and the two worst offenders are the app's own name
+ * in ordinary use.
+ *
+ * Its own trainer disagrees, and the disagreement is instructive rather than a
+ * contradiction: livekit's eval reported **FPPH 0.00, recall 99.4%, optimal
+ * threshold 0.50** against 35,584 general-audio negatives. Both numbers are
+ * honest. General audio contains almost no rhymes of "tails", so that eval
+ * measures the wake word against *noise* and this measures it against
+ * *English*. Shipping on the eval alone would have produced a wake word that
+ * fires when you say the name of the app.
+ *
+ * Caveat kept with the number: two synthesised voices, not human speech. That
+ * sizes a margin, and there is no margin here to size.
+ *
+ * It stays installed and selectable because the product owner asked for it
+ * knowing this. 0.85 is retained as the least-bad position rather than a
+ * defensible one — it rejects the quieter half of the list and nothing else.
+ *
  * ## The calibration point, corrected
  *
  * An earlier note here said a near-rhyme of the distinctive phrase "hey jarvis"
