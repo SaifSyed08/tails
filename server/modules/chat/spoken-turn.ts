@@ -23,27 +23,27 @@
  *
  * ## The limit is a target, not a rule
  *
- * Deliberately expressed as "a few sentences" rather than a character count. A
- * hard cap produces answers that stop mid-thought when the honest answer needed
- * one more clause, and the model has no way to know in advance which questions
- * those are. The one hard instruction is about *formatting*, because that one
- * has no legitimate exception when nobody is looking at a screen.
+ * "A few sentences" rather than a character count. A hard cap produces answers
+ * that stop mid-thought when the honest one needed a clause more, and nothing
+ * knows in advance which questions those are.
  */
-export const SPOKEN_TURN_STEER = [
-  'The user spoke this message aloud and will hear your reply read back by a',
-  'speech synthesiser rather than read it on screen. Answer the way you would',
-  'if they had asked you out loud: plain conversational sentences, a few of',
-  'them, no more than is useful.',
-  '',
-  'No markdown at all — no headings, no bullet or numbered lists, no bold, no',
-  'tables, no code fences. None of those exist out loud; they are either read',
-  'as punctuation or skipped.',
-  '',
-  'If the honest answer needs code, a long path or a list of more than about',
-  'three things, say so in a sentence and tell them it is on screen rather',
-  'than reciting it. If the question genuinely cannot be answered briefly, ask',
-  'a short clarifying question instead of delivering a monologue.',
-].join(' ').replace(/\s+/g, ' ');
+/**
+ * One sentence, and it used to be a paragraph.
+ *
+ * The long version listed everything spoken output cannot do — headings,
+ * bullets, tables, code fences — plus what to do instead, plus when to ask a
+ * clarifying question. Three problems with that. It was longer than most of
+ * the messages it was attached to, so it dominated the prompt it was meant to
+ * qualify. Every token of it is paid on every spoken turn. And when a bug
+ * leaked the expanded prompt into the transcript, a paragraph of stage
+ * directions is what the user saw.
+ *
+ * Naming the register is enough — "conversational" already implies no
+ * headings, because nobody speaks in headings. The instruction the model
+ * cannot infer is the one about *length*, so that is the half that stays.
+ */
+export const SPOKEN_TURN_STEER =
+  'Answer in a few conversational sentences with no markdown formatting, since this will be read aloud.';
 
 /**
  * Attaches the steer to a prompt bound for the model.

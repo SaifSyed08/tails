@@ -472,25 +472,56 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     rather than two features.
   */
   const spokenMode = voiceControl.intent === 'voice';
-  const [draftState, setDraftState] = useState('');
   /*
     The draft, readable synchronously.
 
     Voice mode appends a transcript and sends it in the same tick, and reading
-    `draftState` there would send the value from *before* the append — an empty
-    message, or the previous sentence. React state is not readable until the
-    next render, so the ref is the draft's authoritative value and the state is
-    what renders it. Everything writes through `setDraft` below to keep them
-    from drifting apart.
+    the rendered value there would send what was in the box *before* the append
+    — an empty message, or the previous sentence. React state is not readable
+    until the next render, so this ref is the authoritative value and the state
+    below is what renders it. Everything writes through `setDraft` to keep the
+    two from drifting apart.
   */
   const draftRef = useRef('');
-  const draft = draftState;
+
+  /*
+    Drafts belong to conversations, not to the composer.
+
+    `ChatView` is not keyed on the session, so switching chats never remounts
+    this component and the draft simply stayed — anything typed or dictated and
+    not sent followed you into every other conversation. Dictation made it
+    worse by *appending*, so unsent sentences from several chats accumulated
+    into one and appeared in whichever chat you opened next. That reads as the
+    app leaking other conversations into this one.
+
+    Keying the state by conversation removes the bug rather than patching it:
+    there is no switch to handle, because the draft on screen is *defined* as
+    this conversation's draft. Clearing on change would also have fixed the
+    leak, by throwing away work; this keeps what you left behind.
+  */
+  const draftKey = sessionId ?? '__unsaved';
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draft = drafts[draftKey] ?? '';
 
   const setDraft = useCallback((next: string | ((current: string) => string)) => {
-    const value = typeof next === 'function' ? next(draftRef.current) : next;
-    draftRef.current = value;
-    setDraftState(value);
-  }, []);
+    setDrafts((all) => {
+      const current = all[draftKey] ?? '';
+      const value = typeof next === 'function' ? next(current) : next;
+      draftRef.current = value;
+      return { ...all, [draftKey]: value };
+    });
+  }, [draftKey]);
+
+  /*
+    The ref follows the conversation too.
+
+    `submit` reads it synchronously so voice mode can append a transcript and
+    send it in the same tick. Without this it would still hold the previous
+    chat's text for as long as nobody typed, which is the same leak by a
+    narrower route — and the one that would actually *send* the wrong thing.
+  */
+  useEffect(() => { draftRef.current = drafts[draftKey] ?? ''; }, [draftKey, drafts]);
+
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);

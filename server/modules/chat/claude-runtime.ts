@@ -533,6 +533,28 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       }
 
       for (const normalized of normalizeSdkMessage(message, sessionId)) {
+        /*
+          Drop the SDK's echo of the prompt we just handed it.
+
+          Every turn was rendering the user's message twice: once from the echo
+          this function sends itself, and once from the SDK repeating back what
+          it received. Identical text, so it read as a display glitch — until
+          voice mode started appending an instruction the transcript is not
+          supposed to show, and the second copy printed it.
+
+          Only *text* from a `user` event is dropped. Tool results arrive under
+          the same event type and are genuinely new, so they still go through.
+
+          Filtered here rather than in the normaliser because the normaliser is
+          shared with history replay, where the user's messages are the whole
+          point — teaching it to discard them would empty every transcript that
+          is read back from disk.
+        */
+        const isPromptEcho = event?.type === 'user'
+          && normalized.kind === 'text'
+          && normalized.role === 'user';
+        if (isPromptEcho) continue;
+
         send(normalized);
       }
 
