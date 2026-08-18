@@ -174,6 +174,14 @@ export function useChatSession(sessionId: string | null) {
   const streamBufferRef = useRef('');
   const flushTimerRef = useRef<number | undefined>(undefined);
   const lastSeqRef = useRef(0);
+  /**
+   * Ids already handled for this conversation.
+   *
+   * Reset with the rest of the per-conversation state below: ids are unique,
+   * so this only ever grows within one transcript, and carrying it across
+   * conversations would keep a set alive for every chat ever opened.
+   */
+  const seenRef = useRef(new Set<string>());
   const modeRef = useRef<PermissionMode>('default');
   // The server's mode is authoritative only until the user picks one: a
   // reconnect mid-conversation must not undo a selection they just made.
@@ -224,6 +232,7 @@ export function useChatSession(sessionId: string | null) {
 
   useEffect(() => {
     lastSeqRef.current = 0;
+    seenRef.current = new Set();
     setHistory([]);
     setRealtime([]);
     resetStream();
@@ -255,6 +264,29 @@ export function useChatSession(sessionId: string | null) {
 
     return subscribe((message) => {
       if (message.sessionId !== sessionId) return;
+
+      /*
+        Every message is handled at most once, whatever kind it is.
+
+        `chat.subscribe` replays the run buffer from `lastSeq`, which is what
+        makes a refresh or a reconnect recover a turn in progress — and the
+        buffer holds *stream deltas* as well as finished messages. Deltas are
+        accumulated with `+=` into a ref, so a replay did not merely re-render
+        them, it appended the reply to itself: verified against the running
+        gateway, a second subscribe re-fed all five deltas of a 198-character
+        answer and the streamed text came out twice.
+
+        The first attempt at this guarded `setRealtime` alone, which fixed the
+        duplicated *message* and left the duplicated *stream* untouched,
+        because deltas never reach that branch. One check at the door covers
+        every kind, including the ones added later — which is the property the
+        per-branch version could not have.
+      */
+      if (message.id) {
+        if (seenRef.current.has(message.id)) return;
+        seenRef.current.add(message.id);
+      }
+
       if (typeof message.seq === 'number') lastSeqRef.current = message.seq;
 
       // Whatever the last turn predicted, this turn has overtaken it.
@@ -273,9 +305,32 @@ export function useChatSession(sessionId: string | null) {
         }
 
         case 'stream_end':
-          // The finished text arrives as a normal `text` event straight after,
-          // so the partial is dropped rather than committed twice.
+          // A backstop rather than the main path — see the `text` case below,
+          // which is what actually retires the partial. This still matters for
+          // a stream that ends without producing a message at all: an aborted
+          // turn would otherwise leave its half-sentence on screen forever.
           resetStream();
+          return;
+
+        case 'text':
+          /*
+            The finished message supersedes the partial, whichever order they
+            arrive in.
+
+            This used to be left to `stream_end`, on the stated assumption that
+            the completed text came *after* it. Observed against the live
+            gateway, it does not: the order is `stream_delta`, then
+            `text/assistant`, then `stream_end`. So between the message landing
+            and the stream closing, the reply was on screen twice — once as the
+            committed row and once as the partial still being rendered
+            underneath it. A short answer flashed; a long one sat doubled for
+            the whole gap, which is what "double output from Claude" was.
+
+            Clearing here makes it order-independent: whichever of the two
+            arrives first retires the partial, and the other is a no-op.
+          */
+          if (message.role === 'assistant') resetStream();
+          setRealtime((current) => [...current, message]);
           return;
 
         case 'chat_subscribed': {
@@ -404,11 +459,7 @@ export function useChatSession(sessionId: string | null) {
             two messages, and `mergeTranscript` already handles that case as a
             multiset. This is about the *same* message arriving twice.
           */
-          setRealtime((current) => (
-            current.some((existing) => existing.id === message.id)
-              ? current
-              : [...current, message]
-          ));
+          setRealtime((current) => [...current, message]);
       }
     });
   }, [sessionId, subscribe, loadHistory, resetStream]);

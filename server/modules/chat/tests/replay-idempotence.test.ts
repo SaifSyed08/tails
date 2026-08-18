@@ -31,31 +31,40 @@ const source = (): string => fs.readFileSync(SESSION, 'utf8')
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/\/\/.*/g, '');
 
-test('realtime messages are added at most once', () => {
+test('every message is handled at most once, whatever kind it is', () => {
+  /*
+    The guard has to be at the door, not per branch.
+
+    The first attempt keyed `setRealtime` on the message id. That fixed the
+    duplicated *message* and left the duplicated *stream* completely untouched,
+    because `stream_delta` returns early and accumulates into a ref with `+=`
+    — it never reaches that branch. A replay therefore appended the reply to
+    itself: measured, a second subscribe re-fed all five deltas of a
+    198-character answer.
+
+    Matching on the early return means a kind added later is covered by
+    existing, which is the property a per-branch check cannot have.
+  */
   assert.match(
     source(),
-    /setRealtime\(\(current\) => \(?\s*current\.some\(\(existing\) => existing\.id === message\.id\)/,
-    'realtime delivery must be keyed on message id; chat.subscribe replays the '
-    + 'run buffer and an append-only consumer shows every replayed message twice',
+    /seenRef\.current\.has\(message\.id\)\)\s*return;/,
+    'the handler must drop already-seen ids before dispatching on kind',
   );
+  assert.match(source(), /seenRef\.current\.add\(message\.id\)/);
 });
 
-test('the naive append is gone', () => {
-  assert.doesNotMatch(
-    source(),
-    /setRealtime\(\(current\) => \[\s*\.\.\.current,\s*message\s*\]\)/,
-    'this is the append that duplicated every replayed message',
-  );
+test('the seen set is dropped with the rest of the conversation state', () => {
+  // Ids are unique, so this only grows within one transcript. Carrying it
+  // between conversations would keep a set alive for every chat ever opened.
+  assert.match(source(), /seenRef\.current = new Set\(\)/);
 });
 
-test('deduping is by identity, not by content', () => {
-  // Two identical messages are two messages — someone who says "ok" twice sent
-  // two. `mergeTranscript` already treats that as a multiset. This layer is
-  // only about the *same* message arriving more than once, so it must key on
-  // the id and nothing else.
-  assert.doesNotMatch(
+test('the stream accumulator is still additive, which is why the guard matters', () => {
+  // If this ever stops being `+=`, the reasoning above changes and the comment
+  // at the guard should be revisited rather than silently left wrong.
+  assert.match(
     source(),
-    /setRealtime[\s\S]{0,220}existing\.content === message\.content/,
-    'content matching would collapse two genuinely repeated messages into one',
+    /streamBufferRef\.current \+= message\.content/,
+    'deltas accumulate; a replayed delta is appended, not re-rendered',
   );
 });
