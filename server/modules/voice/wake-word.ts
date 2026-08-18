@@ -138,8 +138,16 @@ export const MAX_THRESHOLD = 0.99;
  * sizes a margin, and there is no margin here to size.
  *
  * It stays installed and selectable because the product owner asked for it
- * knowing this. 0.85 is retained as the least-bad position rather than a
- * defensible one — it rejects the quieter half of the list and nothing else.
+ * knowing this, to judge in real use rather than on a table.
+ *
+ * 0.95 is the least-bad value, and it is measurably less bad than the 0.85 it
+ * replaces. The word itself scores 0.963, so 0.95 still detects it — while
+ * cutting out everything between: `sales` (0.889), `gales` (0.903), `details`
+ * (0.881), `whales`, `trails`, `for sale` and `using tails` all stop firing.
+ * What survives is the group at or above the wake word — `tales`, `bales`,
+ * `tail`, `tell tales`, `tails app`, `tails off` — which no threshold can
+ * separate because they are not below it. Going higher than 0.963 would stop
+ * the wake word firing at all.
  *
  * ## The calibration point, corrected
  *
@@ -162,7 +170,7 @@ export const MAX_THRESHOLD = 0.99;
  * `hey tails` is trained alongside `tails` rather than as a fallback.
  */
 export const WAKE_WORDS: readonly WakeWordDefinition[] = [
-  { id: 'tails', file: 'tails.onnx', label: 'TAILS', source: 'bundled', threshold: 0.85 },
+  { id: 'tails', file: 'tails.onnx', label: 'TAILS', source: 'bundled', threshold: 0.95 },
   /*
     The two-word form, offered alongside rather than instead.
 

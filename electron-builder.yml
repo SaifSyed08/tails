@@ -112,6 +112,15 @@ extraResources:
   # is whisper.cpp's MIT notice and ships beside the code it covers.
   - from: vendor/whisper/win32-x64
     to: whisper
+  # Lands at `resources/piper/`, where `enginePath()` in `piper.ts` looks once
+  # `TAILS_RESOURCES_PATH` is set. The whole directory, not a file list:
+  # `piper.exe` loads its ONNX runtime and phonemiser from its own folder, and
+  # `espeak-ng-data` is not padding — without it espeak cannot phonemise and
+  # the failure is *silence* rather than an error. THIRD-PARTY-NOTICES.txt
+  # carries espeak-ng's GPL licence and the offer of source, and ships beside
+  # the binary it covers for the same reason whisper's LICENSE.txt does.
+  - from: vendor/piper/win32-x64
+    to: piper
 
 win:
   target:

@@ -1,4 +1,4 @@
-import { AlertTriangle, Download, Loader2, Mic } from 'lucide-react';
+import { AlertTriangle, Download, Loader2, Mic, Volume2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -13,6 +13,11 @@ import {
   type WakeStatus,
   type WakeWordEntry,
 } from '@/components/voice/voice-api';
+import {
+  downloadPiperVoice,
+  readPiperStatus,
+  type PiperStatus,
+} from '@/components/voice/piper-client';
 
 /**
  * Everything about voice that belongs in Settings.
@@ -146,16 +151,19 @@ export function VoiceSettings() {
   const [wake, setWake] = useState<WakeStatus | null>(null);
   const [armed, setArmed] = useState<string[]>(() => readArmed());
   const [sensitivity, setSensitivity] = useState<Record<string, number>>(() => readSensitivity());
+  const [speech, setSpeech] = useState<PiperStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [status, wakeStatus] = await Promise.all([
+    const [status, wakeStatus, speechStatus] = await Promise.all([
       voiceApi.status().catch(() => null),
       voiceApi.wake().catch(() => null),
+      readPiperStatus(),
     ]);
     setDictation(status);
     setWake(wakeStatus);
+    setSpeech(speechStatus);
   }, []);
 
   useEffect(() => {
@@ -163,13 +171,15 @@ export function VoiceSettings() {
     // otherwise set state on a component that is gone.
     let cancelled = false;
     void (async () => {
-      const [status, wakeStatus] = await Promise.all([
+      const [status, wakeStatus, speechStatus] = await Promise.all([
         voiceApi.status().catch(() => null),
         voiceApi.wake().catch(() => null),
+        readPiperStatus(),
       ]);
       if (cancelled) return;
       setDictation(status);
       setWake(wakeStatus);
+      setSpeech(speechStatus);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -257,6 +267,58 @@ export function VoiceSettings() {
         ))}
 
         {!wake ? <p className="py-2 text-xs text-muted-foreground">Checking…</p> : null}
+      </div>
+
+      {/*
+        Speech out.
+
+        Its own box rather than a row inside dictation, because the two fail
+        independently: a machine can hear without a voice installed and the
+        reverse, and folding them together would make one missing download read
+        as the whole feature being broken.
+      */}
+      <div className="rounded-lg border border-border p-3">
+        <div className="pb-1">
+          <div className="text-sm">Spoken replies</div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {speech?.enginePresent
+              ? 'Answers are read back in one of these voices. Synthesis runs on this machine — no text is sent anywhere. Until a voice is downloaded the app falls back to the system voice, which works but sounds dated.'
+              : 'The speech engine is not installed. Replies fall back to the system voice.'}
+          </p>
+        </div>
+
+        {speech?.voices.map((voice) => (
+          <Row
+            key={voice.id}
+            title={voice.label}
+            detail={voice.id === speech.defaultVoice
+              ? 'Used when a chat has no pet of its own.'
+              : undefined}
+          >
+            {voice.installed ? (
+              <span className="text-xs text-muted-foreground">Installed</span>
+            ) : (
+              <ActionButton
+                busy={busy === voice.id}
+                onClick={() => void run(voice.id, () => downloadPiperVoice(voice.id))}
+              >
+                {busy === voice.id
+                  ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                  : <Download className="size-3.5" aria-hidden="true" />}
+                {`${voice.downloadMiB} MB`}
+              </ActionButton>
+            )}
+          </Row>
+        ))}
+
+        {speech && speech.voices.every((voice) => !voice.installed) ? (
+          <p className="flex items-start gap-1.5 pt-1 text-xs text-muted-foreground">
+            <Volume2 className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+            Nothing is downloaded yet, so replies use the system voice.
+          </p>
+        ) : null}
+
+        {!speech ? <p className="py-2 text-xs text-muted-foreground">Checking…</p> : null}
       </div>
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
