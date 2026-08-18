@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { clampVoiceSettings, toSpeech } from '@/components/voice/speech-text';
+import { PiperSpeaker, readPiperStatus, type PiperStatus } from '@/components/voice/piper-client';
 
 /**
  * Voice output, on the platform's own synthesiser.
@@ -16,9 +17,21 @@ import { clampVoiceSettings, toSpeech } from '@/components/voice/speech-text';
  *
  * The platform synthesiser is local, ships with the operating system, costs
  * zero bytes and zero licence exposure, and starts speaking in tens of
- * milliseconds. It sounds worse. That is a real trade and the right way round
- * for a first implementation — and `petVoiceSchema` already describes exactly
- * this: `engine: 'none' | 'system'` with a voice name, pitch and rate.
+ * milliseconds. It sounds worse.
+ *
+ * ## Two engines, and which one answers
+ *
+ * Piper now sits in front of it when installed. The note above was written
+ * when the licence question looked closed and it was not — the GPL problem was
+ * always espeak-ng being *linked into a bundle*, which is Kokoro's JS
+ * distribution and is not Piper, where it is a separate executable this app
+ * merely spawns. See `server/modules/voice/piper.ts`.
+ *
+ * The platform synthesiser stays as the fallback rather than being removed,
+ * and it earns that: it is the only engine that works before anything has been
+ * downloaded, and "speech is unavailable until you fetch 60 MB" is a worse
+ * first run than a voice that sounds dated. Callers do not choose — they ask
+ * for speech and get the best engine present.
  */
 
 export type SpeechVoice = {
@@ -33,6 +46,16 @@ export type SpeechSettings = {
   voiceName?: string | null;
   rate?: number;
   pitch?: number;
+  /**
+   * Force the platform synthesiser even when Piper is installed.
+   *
+   * Exists for pets: a pet authored with `engine: 'system'` and a named
+   * platform voice has *chosen* that voice, and silently upgrading it to Piper
+   * would take the choice away.
+   */
+  engine?: 'system' | 'auto';
+  /** Which Piper voice. Omit for the default, which is norman. */
+  piperVoice?: string;
 };
 
 export type SpeechController = {
@@ -78,6 +101,32 @@ export function useSpeech(): SpeechController {
   const [speaking, setSpeaking] = useState(false);
 
   /*
+    Piper's availability, read once. Null until the answer arrives, and null
+    forever in a browser build with no server behind it — both mean "use the
+    platform synthesiser", which is why this is not three states.
+  */
+  const [piper, setPiper] = useState<PiperStatus | null>(null);
+  /*
+    Constructed once, lazily.
+
+    `useState` with an initialiser rather than a ref assigned during render:
+    the object owns an audio element and a queue, so building a second one per
+    render would leak players and lose the queue the previous one was holding.
+  */
+  const [speaker] = useState<PiperSpeaker | null>(
+    () => (typeof window === 'undefined' ? null : new PiperSpeaker(setSpeaking)),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void readPiperStatus().then((status) => {
+      if (!cancelled) setPiper(status);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+
+  /*
     Utterances are held here for the lifetime of the queue. Chromium garbage-
     collects a `SpeechSynthesisUtterance` that nothing references even while it
     is still being spoken, which truncates playback partway through with no
@@ -100,11 +149,14 @@ export function useSpeech(): SpeechController {
   }, [supported]);
 
   const hush = useCallback(() => {
+    // Both engines, unconditionally. Whichever one is talking, "stop" has to
+    // mean stop — and after a fallback the wrong one could be mid-sentence.
+    speaker?.stop();
     if (!supported) return;
     queueRef.current = [];
     window.speechSynthesis.cancel();
     setSpeaking(false);
-  }, [supported]);
+  }, [supported, speaker]);
 
   /**
    * The shared body of `speak` and `enqueue`.
@@ -117,10 +169,28 @@ export function useSpeech(): SpeechController {
     settings: SpeechSettings | undefined,
     replace: boolean,
   ) => {
-    if (!supported) return;
-
     const chunks = toSpeech(markdown);
     if (chunks.length === 0) return;
+
+    /*
+      Piper, when it is there and the caller has not asked for the platform
+      voice by name.
+
+      The whole chunk goes over as *one* request. Each one spawns a process
+      that loads a 63 MB voice, so a request per sentence would pay that four
+      times for one paragraph and turn 1.7x realtime into slower than speech.
+      The chunking that matters already happened in `stream-speech.ts`.
+    */
+    if (piper?.ready && speaker && settings?.engine !== 'system') {
+      if (replace) speaker.stop();
+      void speaker.enqueue(chunks.join(' '), settings?.piperVoice).catch(() => {
+        // A failed chunk is one silent piece of a reply, not a reason to tear
+        // the queue down — the pieces after it are already on their way.
+      });
+      return;
+    }
+
+    if (!supported) return;
 
     // A new reply supersedes the old one; queueing behind it would mean
     // hearing an answer to a question two turns ago.
@@ -161,7 +231,7 @@ export function useSpeech(): SpeechController {
     queueRef.current = [...queueRef.current, ...utterances];
     setSpeaking(true);
     for (const utterance of utterances) window.speechSynthesis.speak(utterance);
-  }, [supported]);
+  }, [supported, piper?.ready, speaker]);
 
   const speak = useCallback(
     (markdown: string, settings?: SpeechSettings) => say(markdown, settings, true),
@@ -173,5 +243,15 @@ export function useSpeech(): SpeechController {
     [say],
   );
 
-  return { supported, voices, speaking, speak, enqueue, hush };
+  return {
+    // True when *either* engine can talk. A machine with no platform
+    // synthesiser but a downloaded Piper voice can speak, and reporting
+    // otherwise would hide a working feature.
+    supported: supported || Boolean(piper?.ready),
+    voices,
+    speaking,
+    speak,
+    enqueue,
+    hush,
+  };
 }
