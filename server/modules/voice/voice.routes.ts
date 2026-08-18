@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { downloadVoice, readSpeechStatus, synthesise } from '@/modules/voice/piper.js';
 import { downloadModel, MODEL_MIB, readStatus } from '@/modules/voice/whisper.js';
 import { bytesNeeded, downloadWakeWord } from '@/modules/voice/wake-download.js';
 import { readWakeWordStatus, resolveWakeModel } from '@/modules/voice/wake-word.js';
@@ -106,6 +107,60 @@ export function createVoiceRouter(): express.Router {
       next(new AppError(
         error instanceof Error ? error.message : 'Model download failed',
         { code: 'VOICE_MODEL_DOWNLOAD_FAILED', statusCode: 502 },
+      ));
+    }
+  });
+
+  /**
+   * Whether replies can be spoken, and in whose voice.
+   *
+   * Separate from `/status`, which is about *hearing*. The two fail
+   * independently — a machine can transcribe without a voice installed and the
+   * reverse — and collapsing them would make one missing download look like
+   * the whole voice feature being broken.
+   */
+  router.get('/speech', (_req, res) => {
+    res.json(readSpeechStatus());
+  });
+
+  /** Fetches one voice. Explicit, one-time, never on boot. */
+  router.post('/speech/voice/:id/download', async (req, res, next) => {
+    try {
+      await downloadVoice(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      next(new AppError(
+        error instanceof Error ? error.message : 'Voice download failed',
+        { code: 'VOICE_TTS_DOWNLOAD_FAILED', statusCode: 502 },
+      ));
+    }
+  });
+
+  /**
+   * Turns text into audio.
+   *
+   * A POST returning `audio/wav` rather than a URL to a stored file: the audio
+   * is worth exactly one playback and keeping it would mean deciding when to
+   * delete somebody's synthesised speech. It never touches disk beyond the
+   * length of the subprocess call — the same rule dictation follows for the
+   * microphone.
+   */
+  router.post('/speech/say', async (req, res, next) => {
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    const voice = typeof req.body?.voice === 'string' ? req.body.voice : undefined;
+
+    if (!text.trim()) {
+      next(new AppError('Nothing to say', { code: 'VOICE_TTS_EMPTY', statusCode: 400 }));
+      return;
+    }
+
+    try {
+      const wav = await synthesise(text, voice);
+      res.type('audio/wav').send(wav);
+    } catch (error) {
+      next(new AppError(
+        error instanceof Error ? error.message : 'Speech synthesis failed',
+        { code: 'VOICE_TTS_FAILED', statusCode: 500 },
       ));
     }
   });

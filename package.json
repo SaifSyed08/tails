@@ -17,6 +17,7 @@
     "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json",
     "start": "node dist-server/server/index.js",
     "vendor:whisper": "node scripts/fetch-whisper.mjs",
+    "vendor:piper": "node scripts/fetch-piper.mjs",
     "dist:win": "npm run build && electron-builder --win --config electron-builder.yml",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "lint": "eslint src server electron",

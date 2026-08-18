@@ -80,7 +80,14 @@ function findAppRoot(): string {
   return process.cwd();
 }
 
-const APP_ROOT = findAppRoot();
+/**
+ * Exported because `piper.ts` needs the same answer.
+ *
+ * Both engines are vendored into the same checkout and resolved the same way,
+ * and two copies of a directory walk is two chances for them to disagree about
+ * where the repository root is.
+ */
+export const APP_ROOT = findAppRoot();
 
 export function enginePath(): string | null {
   const executable = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
