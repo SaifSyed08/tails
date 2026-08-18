@@ -12,6 +12,7 @@ import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appeara
 import { resolveClaudeCli } from '@/modules/chat/claude-cli.js';
 import { expandLocalCommand } from '@/modules/chat/commands.service.js';
 import { applySpokenSteer } from '@/modules/chat/spoken-turn.js';
+import { PREVIEW_ALLOWED_TOOLS, previewMcpServer } from '@/modules/preview/preview.tools.js';
 import {
   formatConversationInstructions,
   readConversationInstructions,
@@ -487,13 +488,16 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       promptSuggestions: true,
       // In-process, so the handlers reach the theme service directly instead of
       // authenticating back into our own HTTP API.
-      mcpServers: { 'tails-appearance': appearanceMcpServer },
+      mcpServers: {
+        'tails-appearance': appearanceMcpServer,
+        'tails-preview': previewMcpServer,
+      },
       // Every appearance tool runs unprompted; see the comment on the constant
       // for why the two that used to be gated no longer are. What guards the
       // user is that the freeform layer is never persisted and the panic key is
       // handled in the main process — not a modal in the middle of a design
       // conversation the user started.
-      allowedTools: APPEARANCE_ALLOWED_TOOLS,
+      allowedTools: [...APPEARANCE_ALLOWED_TOOLS, ...PREVIEW_ALLOWED_TOOLS],
       // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
       // each turn, so any live mode change would be discarded anyway. The same
       // goes for the model and the effort level below.

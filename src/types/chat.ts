@@ -25,6 +25,8 @@ export type MessageKind =
   | 'sessions_changed'
   | 'pets_changed'
   | 'appearance_changed'
+  /** The preview pane should show a URL, or close. JSON payload in `content`. */
+  | 'preview_changed'
   | 'protocol_error';
 
 /**

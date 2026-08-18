@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppearancePanel } from '@/components/appearance/AppearancePanel';
 import { ChatView } from '@/components/chat/ChatView';
 import { ChatPet } from '@/components/petstage/ChatPet';
+import { PreviewPane } from '@/components/preview/PreviewPane';
 import { Intro } from '@/components/intro/Intro';
 import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
@@ -194,10 +195,10 @@ export default function App() {
               onRenameSession={(title) => void renameSession(title)}
               onChangeCwd={(next) => void changeCwd(next)}
               onToggleTerminal={() => setTerminalOpen((current) => !current)}
-              onOpenSettings={() => setSettingsOpen(true)}
             />
 
-            <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1 flex-row">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               {view === 'marketplace' ? (
                 <MarketplacePage />
               ) : (
@@ -213,9 +214,21 @@ export default function App() {
                   and the chat view only publishes the boxes it needs. */}
               <ChatPet sessionId={view === 'chat' ? sessionId : null} />
 
-              {terminalOpen ? (
-                <TerminalPanel cwd={cwd} onClose={() => setTerminalOpen(false)} />
-              ) : null}
+                {terminalOpen ? (
+                  <TerminalPanel cwd={cwd} onClose={() => setTerminalOpen(false)} />
+                ) : null}
+              </div>
+
+              {/*
+                The preview, beside the conversation rather than over it.
+
+                A sibling of the chat column so the two share the width instead
+                of one covering the other — the whole point is seeing the thing
+                and the conversation that produced it at the same time. It
+                renders nothing until a tool opens it, so it costs no layout
+                when unused.
+              */}
+              <PreviewPane />
             </div>
           </main>
         </div>
