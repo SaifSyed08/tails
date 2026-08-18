@@ -57,6 +57,8 @@ const DELIBERATELY_UNCONSUMED: Record<string, string> = {
     'A 0-or-1 presence flag, for the same reason as --t-texture-opacity. The strength is baked into --t-overlay-image.',
   '--t-trail-mode':
     'Selects which renderer draws the trail: element-placed segments, or one of the app-owned canvas effects. There is no CSS property that means "run this frame loop", so this one genuinely cannot have a consumer in index.css — it is read by trailCanvas.ts. Distinct from the tokens that shape the trail, all of which are consumed: this decides which code runs, not what it looks like.',
+  '--t-window-backdrop':
+    'Names an operating-system window effect — "acrylic", "mica" or "opaque" — and is read by applyTheme.ts, which hands it to Electron over IPC. There is no CSS property that means "ask the compositor to blur what is behind this window", so this one genuinely cannot have a consumer here. Its companion --t-window-tint *is* consumed: the shell stamps `data-window-backdrop` on the root, and that attribute is what index.css branches on, because CSS can match an attribute value and cannot match a custom property value.',
   '--t-trail-palette':
     'A comma-separated colour list for the canvas trails, where "rainbow" strokes one band per entry. CSS has no way to consume a variable-length colour list — a gradient would fix the count and the geometry, which is exactly what the renderer needs to decide per effect. Read by trailCanvas.ts alongside --t-trail-mode.',
 };

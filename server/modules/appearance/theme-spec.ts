@@ -278,6 +278,14 @@ export const themeSpecV2Schema = z.object({
   }))
     .describe('Caret, text selection and pointer. Small surface, disproportionate effect: these are the details that separate a themed app from a recoloured one, and none of them were reachable before.'),
 
+  window: z.object({
+    backdrop: z.enum(['opaque', 'acrylic', 'mica']).default('opaque')
+      .describe('Whether the application window itself is see-through. "opaque" is the normal case and the default. "acrylic" makes the desktop behind the app visible through a heavy blur; "mica" is the quieter, wallpaper-tinted variant. This is the only property in the whole spec that reaches outside the page — it is an operating-system window effect, not CSS — so it is the only one that can do nothing on a platform that does not support it. Windows 11 only; everywhere else it degrades to opaque, silently and by design, because a look that merely fails to be translucent is still a working look.'),
+    tint: colorRefSchema.optional()
+      .describe('Colour laid over the blurred desktop, and effectively mandatory when `backdrop` is not "opaque": without one the app is transparent onto arbitrary wallpaper and text contrast becomes whatever happens to be behind the window. Keep the alpha high enough that the desktop reads as texture rather than as content — around 0.6-0.85 for a dark tint.'),
+  }).strict().default(() => ({ backdrop: 'opaque' as const }))
+    .describe('The application window itself, as opposed to anything drawn inside it.'),
+
   surfaces: surfacesMapSchema.default({})
     .describe('Per-surface recipes. Every key is optional and inherits, field by field, from `default`, which itself inherits from a plain bordered panel. This map is where a look is actually invented: two themes with the same palette and different surfaces are two different products, while two themes with different palettes and no surfaces are the same product in two colours.'),
 }).strict();

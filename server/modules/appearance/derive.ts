@@ -992,6 +992,40 @@ function buildToneTokens(ramp: Ramp, colors: Record<string, Hsl>): Record<string
  * ink, and forcing a colour there is how selections end up less legible than
  * the text they are highlighting.
  */
+/**
+ * The window's own backdrop, for the shell rather than for CSS.
+ *
+ * Emitted as ordinary custom properties because that is the channel the
+ * renderer already watches — a theme apply is one atomic stylesheet swap, so
+ * anything carried this way changes at exactly the same instant as the colours
+ * do. A second channel would be a second thing to keep in step, and the failure
+ * mode would be a window that is translucent while the theme that asked for it
+ * has already gone.
+ *
+ * `--t-window-backdrop` is read by JavaScript and handed to Electron; it has no
+ * CSS consumer and cannot have one, since no CSS property means "ask the
+ * operating system to blur what is behind this window". `--t-window-tint` does
+ * have one: it is what the page paints instead of its opaque background once
+ * the desktop is showing through.
+ */
+function buildWindowTokens(spec: ThemeSpecV2, ramp: Ramp): Record<string, string> {
+  const backdrop = spec.window?.backdrop ?? 'opaque';
+  if (backdrop === 'opaque') return { 't-window-backdrop': 'opaque' };
+
+  const tint = spec.window?.tint;
+  const resolved = tint ? resolveColorRef(tint, ramp) : null;
+
+  return {
+    't-window-backdrop': backdrop,
+    // Falls back to a heavy near-black rather than to nothing. A translucent
+    // window with no tint is text over whatever wallpaper happens to be there,
+    // which is not a contrast risk so much as a guarantee of failing it.
+    't-window-tint': resolved
+      ? formatColor(resolved.color, resolved.alpha)
+      : 'rgb(6 6 8 / 0.72)',
+  };
+}
+
 function buildInteractionTokens(
   spec: ThemeSpecV2,
   ramp: Ramp,
@@ -1200,7 +1234,10 @@ export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
         ...shared,
         surfaces,
         tones: buildToneTokens(ramp, colors),
-        interaction: buildInteractionTokens(spec, ramp, colors),
+        interaction: {
+          ...buildInteractionTokens(spec, ramp, colors),
+          ...buildWindowTokens(spec, ramp),
+        },
         effectiveFills,
       } as ThemeTokens,
       adjusted,

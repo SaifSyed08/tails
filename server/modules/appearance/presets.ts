@@ -383,7 +383,7 @@ const PRESET_SPECS: Record<string, unknown> = {
   aurora: {
     specVersion: 2,
     name: 'Aurora',
-    summary: 'Black glass — heavily blurred translucent panels over an OLED ground, with a slow fluid wake behind the cursor.',
+    summary: 'Black glass — the window itself is see-through, blurred and tinted near-black, with panels floating on it as lit panes.',
     mode: 'dark',
     palette: {
       surfaceHue: 260, surfaceChroma: 'tinted',
@@ -402,47 +402,92 @@ const PRESET_SPECS: Record<string, unknown> = {
       caretShape: 'auto',
       caretCycleSeconds: 4,
       selectionFill: { role: 'accent', alpha: 0.24 },
+      /*
+        No trail.
+
+        It was a canvas approximation of a WebGL fluid solver, and against a
+        window you can see the desktop through it read as smearing rather than
+        as depth — the glass is the effect now, and a wake dragged across it
+        competes with the thing it is drawn on. Removed rather than tuned
+        down: the two ideas do not sit together at any strength.
+      */
       pointer: {
         kind: 'system',
         size: 40, opacity: 0.25, blend: 'screen', replace: false,
-        // Deliberately small and short-lived. The original is a WebGL fluid
-        // solver and this is a canvas approximation of it — see
-        // docs/reference/cursify-fluid-cursor.md — and the request was for
-        // something much subtler than the original either way.
-        trail: {
-          kind: 'fluid', length: 14, size: 26, opacity: 0.22,
-          palette: [{ role: 'accent' }, { role: 'support' }],
-        },
         click: { kind: 'none', size: 72, seconds: 0.45 },
       },
     },
+    /*
+      The window itself is the effect.
+
+      Everything above draws glass; this is what puts something behind it worth
+      looking through. Windows 11 blurs the desktop, and the tint keeps the
+      result readable — without one, text contrast would depend on the user's
+      wallpaper rather than on the theme.
+    */
+    window: { backdrop: 'acrylic', tint: { role: 'shadow', tier: 12, alpha: 0.74 } },
     surfaces: {
+      /*
+        A pane, not a tinted box.
+
+        Three things separate real glass from a translucent rectangle, and the
+        reference in docs/reference/liquid-glass-preview.html has all three:
+        a fill light enough that what is behind genuinely shows through, a
+        *bright* hairline along the lit edge that fades as the ring turns away,
+        and a specular lip just inside the top edge. The lip is the one people
+        do not think to add and the one that does most of the work — it is the
+        highlight where a real edge catches the light, and without it the panel
+        reads as paper with a hole punched in it.
+
+        The fill runs a touch lighter than before and the blur harder, because
+        these panels now float over the desktop rather than over an opaque app
+        background. Anything more transparent and the wallpaper starts
+        competing with the text.
+      */
       default: {
-        fill: [{ kind: 'solid', stops: [{ color: { role: 'light', tier: 2, alpha: 0.1 } }] }],
+        fill: [{ kind: 'linear', angle: 150, stops: [
+          { color: { role: 'light', tier: 4, alpha: 0.14 }, position: 0 },
+          { color: { role: 'light', tier: 1, alpha: 0.06 }, position: 55 },
+          { color: { role: 'shadow', tier: 2, alpha: 0.10 }, position: 100 },
+        ] }],
         border: {
           width: 1,
           variant: 'gradient-ring',
           ring: { angle: 145, stops: [
-            { color: { role: 'light', tier: 12, alpha: 0.4 }, position: 0 },
-            { color: { role: 'light', tier: 6, alpha: 0.06 }, position: 45 },
-            { color: { role: 'shadow', tier: 4, alpha: 0.3 }, position: 100 },
+            { color: { role: 'light', tier: 12, alpha: 0.55 }, position: 0 },
+            { color: { role: 'light', tier: 8, alpha: 0.14 }, position: 30 },
+            { color: { role: 'light', tier: 4, alpha: 0.04 }, position: 62 },
+            { color: { role: 'shadow', tier: 4, alpha: 0.34 }, position: 100 },
           ] },
         },
-        corner: { radius: 20, shape: 'squircle' },
+        corner: { radius: 22, shape: 'squircle' },
         shadows: [
-          { inset: true, y: 1, blur: 1, color: { role: 'light', tier: 12 }, alpha: 0.28 },
-          { y: 18, blur: 48, spread: -14, color: { role: 'shadow', tier: 10 }, alpha: 0.5 },
+          // The specular lip. Hairline, bright, top edge only.
+          { inset: true, y: 1, blur: 0, color: { role: 'light', tier: 12 }, alpha: 0.34 },
+          // And the thickness of the pane, read as a soft inner shade below it.
+          { inset: true, y: -1, blur: 2, color: { role: 'shadow', tier: 8 }, alpha: 0.30 },
+          { y: 22, blur: 56, spread: -16, color: { role: 'shadow', tier: 10 }, alpha: 0.55 },
         ],
-        backdrop: { blur: 32, saturate: 1.7, brightness: 1.04, refraction: 0.4 },
+        backdrop: { blur: 40, saturate: 1.8, brightness: 1.06, refraction: 0.5 },
         texture: { kind: 'none' },
         overlay: { kind: 'none' },
       },
+      /*
+        Translucent too, now that there is something behind it worth seeing —
+        but *lighter* than the page, which on this preset is not a style choice.
+
+        The ground is `true-black`, so the page composites to lightness zero and
+        there is nothing darker to be. A shadow-role rail flattened to black on
+        black and the region-separation guard caught it at exactly 1.000:1,
+        which is the number you get when two colours are the same colour. The
+        rail has to lift off the ground rather than sink into it.
+      */
       sidebar: {
-        fill: [{ kind: 'solid', stops: [{ color: { role: 'surface', tier: 2 } }] }],
-        border: { width: 1, sides: ['right'], color: { role: 'light', tier: 6, alpha: 0.12 } },
+        fill: [{ kind: 'solid', stops: [{ color: { role: 'light', tier: 6, alpha: 0.30 } }] }],
+        border: { width: 1, sides: ['right'], color: { role: 'light', tier: 8, alpha: 0.14 } },
         shadows: [],
         corner: { radius: 0, shape: 'square' },
-        backdrop: { blur: 20, saturate: 1.3 },
+        backdrop: { blur: 44, saturate: 1.5 },
       },
       code: {
         fill: [{ kind: 'solid', stops: [{ color: { role: 'shadow', tier: 2, alpha: 0.5 } }] }],

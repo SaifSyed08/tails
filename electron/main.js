@@ -367,9 +367,20 @@ function createMainWindow() {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    // Matches the app's dark `--background`, so there is no white flash between
-    // the window appearing and the first paint.
-    backgroundColor: '#0f0f11',
+    /*
+      Transparent, because `setBackgroundMaterial` needs it to be.
+
+      Windows composites the acrylic backdrop *behind* the window's own
+      background, so an opaque one hides the effect entirely and the call
+      appears to do nothing. There is no flash to worry about from this: the
+      window is created with `show: false` and only revealed on
+      `ready-to-show`, by which point the page has painted its own background.
+
+      An opaque theme is therefore painted entirely by CSS — `body` carries
+      `--background` — which was already true; this only removes the duplicate
+      underneath it that #28 was filed about.
+    */
+    backgroundColor: '#00000000',
     icon: readAppIcon(),
     // No OS title bar. The app draws its own header instead, so nothing looks
     // like stock Windows chrome bolted onto the UI. On Windows/Linux the
@@ -558,6 +569,30 @@ function installPetBridge() {
   });
 
   ipcMain.handle('tails:desktop-pet-state', () => ({ hidden: isPetHidden() }));
+
+  /**
+   * Make the window see-through, or stop.
+   *
+   * `setBackgroundMaterial` is Windows 11 and nothing else: on Windows 10, mac
+   * and Linux it either throws or quietly does nothing. Both are fine and
+   * neither is worth reporting — a theme that fails to be translucent is still
+   * a working theme, and a dialog saying "your operating system cannot blur"
+   * helps nobody. So this swallows the failure and the page keeps its own
+   * tint, which is what makes the degraded case merely *less pretty* rather
+   * than unreadable.
+   *
+   * Guarded on the value because an unknown string from a generated theme must
+   * not reach the platform call.
+   */
+  ipcMain.on('tails:window-backdrop', (_event, kind) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const material = kind === 'acrylic' || kind === 'mica' ? kind : 'none';
+    try {
+      mainWindow.setBackgroundMaterial(material);
+    } catch {
+      // Not supported here. See above.
+    }
+  });
 
   /*
    * Turn completion, from the renderer, filtered by what only the shell knows.

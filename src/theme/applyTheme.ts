@@ -149,6 +149,41 @@ function dropPrebootStyle(): void {
   document.getElementById('tails-theme-preboot')?.remove();
 }
 
+/**
+ * Tells the shell whether this look wants a see-through window.
+ *
+ * Read from the computed style rather than from the payload, because the value
+ * has to survive everything between the two: the token may come from the
+ * theme, from a freeform CSS layer on top of it, or from neither. Whatever the
+ * document actually resolves is the truth, and reading it after the write is
+ * the only way to get that.
+ *
+ * The attribute and the OS call are set together and must stay together. The
+ * attribute stops the page painting its opaque background; the call asks
+ * Windows to blur what is behind. Either one alone is a bug you can see —
+ * attribute without call is a window onto black, call without attribute is an
+ * effect hidden under an opaque page — so there is exactly one function that
+ * does both.
+ *
+ * No-ops in a browser, where there is no shell and nothing behind the window.
+ */
+function syncWindowBackdrop(): void {
+  const root = document.documentElement;
+  const requested = getComputedStyle(root)
+    .getPropertyValue('--t-window-backdrop')
+    .trim();
+
+  const backdrop = requested === 'acrylic' || requested === 'mica' ? requested : 'opaque';
+
+  if (backdrop === 'opaque') root.removeAttribute('data-window-backdrop');
+  else root.setAttribute('data-window-backdrop', backdrop);
+
+  const bridge = (window as {
+    tailsDesktop?: { window?: { setBackdrop?: (kind: string) => void } };
+  }).tailsDesktop;
+  bridge?.window?.setBackdrop?.(backdrop);
+}
+
 export async function applyTheme(payload: AppearancePayload): Promise<void> {
   const { write } = ensureSheet();
 
@@ -157,6 +192,7 @@ export async function applyTheme(payload: AppearancePayload): Promise<void> {
   const commit = () => {
     write(payload.css);
     dropPrebootStyle();
+    syncWindowBackdrop();
 
     // A pinned single-mode theme owns the class as well as the tokens;
     // otherwise every `dark:` utility would stay on the wrong branch.
@@ -193,6 +229,9 @@ export function clearTheme(): void {
   ensureSheet('theme').write('');
   ensureSheet('css').write('');
   dropPrebootStyle();
+  // The reset has to reach the window too, or a theme that made it
+  // see-through leaves it that way with no theme left to explain why.
+  syncWindowBackdrop();
 
   try {
     localStorage.removeItem(THEME_CSS_KEY);

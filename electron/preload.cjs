@@ -12,6 +12,18 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
   isDesktop: true,
   platform: process.platform,
 
+  /**
+   * The application window's own backdrop.
+   *
+   * The one part of the appearance system that reaches outside the page: a
+   * blurred, see-through window is an operating-system effect, and no amount
+   * of CSS can ask for one. The renderer decides *whether* from the active
+   * theme; the shell decides whether the platform can honour it.
+   */
+  window: {
+    setBackdrop: (kind) => ipcRenderer.send('tails:window-backdrop', String(kind || 'opaque')),
+  },
+
   voice: {
     /**
      * Says the user has just asked to dictate.

@@ -129,8 +129,14 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  # The display name, back again — see `productName` above.
-  shortcutName: T.A.I.L.S.
+  # The shortcut's name is also its search key, and "T.A.I.L.S." is a bad one.
+  #
+  # Windows Search tokenises a filename on its punctuation, so the dotted form
+  # indexes as five single letters and typing "tails" into the Start menu
+  # matches nothing at all. The brand is still T.A.I.L.S. everywhere the app
+  # writes it — the window title, the splash, the about text — but the thing
+  # you type to find it has to be the thing you call it.
+  shortcutName: TAILS
   artifactName: TAILS-Setup-${version}-${arch}.${ext}
   # `~/.tails` holds the database, imported pets and any downloaded speech
   # model. An uninstall removes the app; it is not permission to delete the

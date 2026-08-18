@@ -247,6 +247,14 @@
     --t-corner-shape: round;
     --t-shadow: none;
     --t-backdrop: none;
+
+    /* The window's own tint, floored like every other consumed token so an app
+       with no theme bound still resolves it. Only ever painted when the shell
+       has stamped `data-window-backdrop`, which it does not do unless a theme
+       asked for a see-through window — so this value is what a translucent
+       theme gets if it forgets to name one, not something the default look
+       ever shows. */
+    --t-window-tint: rgb(6 6 8 / 0.72);
     --t-texture-image: none;
     --t-texture-size: auto;
     --t-texture-opacity: 0;
@@ -493,6 +501,42 @@
     /* The caret colour cycle, when a theme asks for one. `none` otherwise, so
        body carries no animation at all in the ordinary case. */
     animation: var(--t-caret-animation);
+  }
+
+  /*
+    A window you can see the desktop through.
+
+    Driven by an attribute rather than by the token directly, because CSS cannot
+    branch on a custom property's *value* — `--t-window-backdrop` is read by the
+    shell bridge, which stamps the attribute here and asks Electron for the
+    matching OS effect. Both halves have to agree: the operating system blurs
+    what is behind the window, and this stops the page painting over it.
+
+    The tint is not decoration. Without it the app is text on whatever wallpaper
+    happens to be there, and contrast becomes a property of the user's desktop
+    picture rather than of the theme. `--t-window-tint` always resolves — the
+    deriver substitutes a near-black when the theme names none.
+  */
+  html[data-window-backdrop="acrylic"] body,
+  html[data-window-backdrop="mica"] body {
+    background-color: var(--t-window-tint, rgb(6 6 8 / 0.72));
+  }
+
+  /* The inner edge of the glass. A translucent window with a hard rectangular
+     cut looks like a rendering fault rather than like a pane, so it gets a lip
+     of light on the inside and a hairline on the outside. */
+  html[data-window-backdrop="acrylic"] body::after,
+  html[data-window-backdrop="mica"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    border-radius: inherit;
+    box-shadow:
+      inset 0 0 0 1px rgb(255 255 255 / 0.07),
+      inset 0 1px 0 0 rgb(255 255 255 / 0.10),
+      inset 0 0 120px 0 rgb(0 0 0 / 0.55);
   }
 
   /**
