@@ -79,6 +79,24 @@ export function readLocalUrl(raw: string): string | null {
   return parsed.toString();
 }
 
+/**
+ * Opens the pane from elsewhere in the server.
+ *
+ * `dev_server_start` uses it: once a server has announced its port there is
+ * nothing left to decide, and making the model call a second tool to see what
+ * it just started is a step that exists only because the code was arranged that
+ * way. Returns false when the address is refused, so the caller can say so
+ * rather than claim a pane that never opened.
+ */
+export function openPreviewFor(url: string, title?: string): boolean {
+  const safe = readLocalUrl(url);
+  if (!safe) return false;
+
+  const parsed = new URL(safe);
+  publish({ url: safe, title: title?.trim() || `${parsed.hostname}:${parsed.port || '80'}` });
+  return true;
+}
+
 const previewOpenTool = tool(
   'preview_open',
   [

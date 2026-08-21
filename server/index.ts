@@ -17,6 +17,7 @@ import { attachTerminalGateway } from '@/modules/terminal/terminal-gateway.js';
 import { createVoiceRouter } from '@/modules/voice/voice.routes.js';
 import { attachVoiceGateway } from '@/modules/voice/voice-gateway.js';
 import { AppError } from '@/shared/utils.js';
+import { stopAllDevServers } from '@/modules/devserver/dev-servers.js';
 
 const PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
 const HOST = '127.0.0.1';
@@ -125,6 +126,10 @@ server.listen(PORT, HOST, () => {
 });
 
 const shutdown = () => {
+  // Before the HTTP server, because these are the app's own children and a
+  // preview server that outlives the application is an orphan holding a port
+  // the user has no window left to find.
+  stopAllDevServers();
   server.close(() => process.exit(0));
   // Don't hang forever on a websocket that refuses to close.
   setTimeout(() => process.exit(0), 3000).unref();
