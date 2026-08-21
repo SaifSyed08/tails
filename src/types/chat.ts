@@ -114,6 +114,14 @@ export type NormalizedMessage = {
   questions?: AskUserQuestion[];
   plan?: string;
   exitCode?: number;
+  /**
+   * How long the turn took, on `complete` only.
+   *
+   * Measured by the server from the moment the prompt was accepted rather than
+   * taken from the SDK's own figure: what the user waited for includes the CLI
+   * spawning, and that is the number the footer is claiming.
+   */
+  durationMs?: number;
   statusCode?: string;
   appearance?: unknown;
   errorCode?: string;
@@ -150,8 +158,22 @@ export type PendingPermission = {
  * bubble — and several kinds render nothing at all.
  */
 export type ChatRow =
-  | { type: 'user'; id: string; content: string; attachments?: MessageAttachment[] }
-  | { type: 'assistant'; id: string; content: string; streaming?: boolean }
+  | {
+    type: 'user';
+    id: string;
+    content: string;
+    attachments?: MessageAttachment[];
+    /** When it was sent. Shown on hover; absent for a row without one. */
+    at?: string;
+  }
+  | {
+    type: 'assistant';
+    id: string;
+    content: string;
+    streaming?: boolean;
+    /** How long the turn took, in ms. Only on the last message of a turn. */
+    tookMs?: number;
+  }
   | { type: 'thinking'; id: string; content: string }
   | {
     type: 'tool';

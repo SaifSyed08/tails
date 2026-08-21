@@ -1104,7 +1104,20 @@ export function ChatPet({ sessionId }: ChatPetProps) {
             would have to chase him. `bottom-full` puts it above his head
             without changing his size — see the component.
           */}
-          {remark ? <PetSpeechBubble text={remark.text} petWidth={width} /> : null}
+          {remark ? (
+            <PetSpeechBubble
+              text={remark.text}
+              petWidth={width}
+              petLeft={here.x}
+              petTop={geometry.floorTop + here.y + (fullHeight - height)}
+              /*
+                The stage, not the pet. `maxX` is how far left the pet's own left
+                edge may go, so the stage is that plus the pet — which is the
+                width the bubble must fit inside, because the layer clips.
+              */
+              bounds={{ width: geometry.maxX + width, height: geometry.floorTop + fullHeight }}
+            />
+          ) : null}
 
           <PetPill
             open={hovered && !carrying}

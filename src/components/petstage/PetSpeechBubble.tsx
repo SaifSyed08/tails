@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
+import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
 /**
@@ -79,10 +80,35 @@ export function usePetRemark(
 ): PetRemark | null {
   const { subscribe } = useWebSocket();
   const [held, setHeld] = useState<HeldRemark | null>(null);
-  /** Bumped whenever the idle timer fires, so the effect below can restart. */
+  /** Bumped whenever the idle timer should restart. */
   const [idleTick, setIdleTick] = useState(0);
+  /**
+   * When the assistant was last doing something.
+   *
+   * Read by the idle timer as a second gate. Bumping `idleTick` alone would
+   * restart the countdown, but a burst of deltas arriving one a frame would
+   * restart it sixty times a second and the timer would never get to run at all
+   * — so the deltas set this instead, and the timer waits for quiet.
+   */
+  const [busyAt, setBusyAt] = useState(0);
 
   useEffect(() => subscribe((message) => {
+    /*
+      Anything the assistant is doing pushes the mutter out.
+
+      Muttering is for *nothing happening*, so a stray "zzz..." in the middle of
+      a streaming answer is the feature firing at exactly the wrong moment. Any
+      sign of work restarts the two-minute clock, which is also why this is a
+      floor rather than a metronome — the pet only talks to itself once the room
+      has actually been quiet that long.
+    */
+    if (message.kind === 'stream_delta' || message.kind === 'tool_use'
+      || message.kind === 'thinking' || message.kind === 'status') {
+      setIdleTick((tick) => tick + 1);
+      setBusyAt(Date.now());
+      return;
+    }
+
     if (message.kind !== 'pet_remark' || !message.content) return;
     // Only for the conversation on screen. A remark about a chat the user left
     // would be a pet reacting to something they cannot see.
@@ -139,14 +165,23 @@ export function usePetRemark(
       return undefined;
     }
 
+    /*
+      Time still owed since the assistant last did anything.
+
+      A delta arriving resets the clock, so this is what is left of the interval
+      rather than the whole of it — the pet does not wait two fresh minutes after
+      every token, it waits for two minutes of actual quiet.
+    */
+    const owed = Math.max(0, IDLE_EVERY_MS - (Date.now() - busyAt));
+
     const timer = window.setTimeout(() => {
       const line = idleLines[Math.floor(Math.random() * idleLines.length)];
       if (line) setHeld({ id: `idle-${Date.now()}`, text: line, sessionId });
       setIdleTick((tick) => tick + 1);
-    }, IDLE_EVERY_MS);
+    }, Math.max(owed, IDLE_EVERY_MS / 4));
 
     return () => window.clearTimeout(timer);
-  }, [sessionId, idleLines, held, idleTick]);
+  }, [sessionId, idleLines, held, idleTick, busyAt]);
 
   // The window becoming visible again re-arms the timer above, which the guard
   // inside it declined to set while nobody was looking.
@@ -194,9 +229,18 @@ const PIXEL = 2;
 
 type Props = {
   text: string;
-  /** Width of the pet, so the bubble can be centred over him. */
+  /** Width of the pet, so the bubble can be centred over it. */
   petWidth: number;
+  /** The pet's left edge inside the stage, for keeping the bubble in bounds. */
+  petLeft: number;
+  /** The pet's top edge inside the stage, for deciding which side to sit on. */
+  petTop: number;
+  /** The stage the pet lives in. It clips, so the bubble has to fit. */
+  bounds: { width: number; height: number };
 };
+
+/** Clear of the stage edge, so a clamped bubble does not touch the sidebar. */
+const EDGE_PAD = 6;
 
 /** Milliseconds per character. Fast enough to finish a short line in a beat. */
 const TYPE_MS = 28;
@@ -252,8 +296,66 @@ function useTyped(text: string): string {
   return text.slice(0, typed.text === text ? typed.count : (reduced ? text.length : 1));
 }
 
-export function PetSpeechBubble({ text, petWidth }: Props) {
+export function PetSpeechBubble({ text, petWidth, petLeft, petTop, bounds }: Props) {
   const shown = useTyped(text);
+
+  /*
+    Kept inside the stage, because the stage clips.
+
+    The pet walks the whole width of the chat and the bubble is centred on it and
+    can be three times as wide, so near either wall the ideal position hangs off
+    the edge — and `overflow: hidden` on the layer (which is there so the pet
+    cannot slide under the sidebar) cuts it off mid-word. Clamping is the fix
+    rather than removing the clip: the pet must still be contained, and only the
+    thing it says needs to escape.
+
+    Measured rather than guessed, because the width is the text's own — there is
+    no formula for it. The observer catches the width changing as the line types
+    itself, which is exactly when a clamped bubble would otherwise drift.
+  */
+  const [box, setBox] = useState({ width: 0, height: 0 });
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      // Only on a real change: a no-op write here would re-render on every
+      // frame of the typing animation for nothing.
+      setBox((current) => (Math.abs(current.width - rect.width) < 0.5
+        && Math.abs(current.height - rect.height) < 0.5
+        ? current
+        : { width: rect.width, height: rect.height }));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  /*
+    How far to slide it back into view, and the tail slides the other way so it
+    keeps pointing at the animal rather than travelling with the box.
+  */
+  const centre = petLeft + petWidth / 2;
+  const ideal = centre - box.width / 2;
+  const clamped = Math.min(
+    Math.max(ideal, EDGE_PAD),
+    Math.max(EDGE_PAD, bounds.width - box.width - EDGE_PAD),
+  );
+  const shift = box.width > 0 ? clamped - ideal : 0;
+
+  /*
+    And below the pet when there is no room above it.
+
+    A thrown pet ends up near the top of the chat, where a bubble over its head
+    is the half that gets clipped. Flipping is better than clamping vertically:
+    a bubble squeezed against the ceiling overlaps the sprite.
+  */
+  const flip = box.height > 0 && petTop < box.height + EDGE_PAD * 2;
 
   return (
     <div
@@ -263,7 +365,11 @@ export function PetSpeechBubble({ text, petWidth }: Props) {
         pushed the sprite down would look like the pet flinching every time it
         spoke.
       */
-      className="pet-bubble pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5"
+      ref={ref}
+      className={cn(
+        'pet-bubble pointer-events-none absolute left-1/2 z-10',
+        flip ? 'top-full mt-1.5' : 'bottom-full mb-1.5',
+      )}
       style={{
         /*
           As wide as the words and no wider.
@@ -275,7 +381,16 @@ export function PetSpeechBubble({ text, petWidth }: Props) {
           ceiling so a long one wraps instead of crossing the chat.
         */
         width: 'max-content',
-        maxWidth: Math.max(petWidth * 3, 210),
+        /*
+          Never wider than the stage it has to fit inside, and never wider than
+          about three pets. The first is a hard limit and the second is taste.
+        */
+        maxWidth: Math.max(
+          120,
+          Math.min(Math.max(petWidth * 3, 210), bounds.width - EDGE_PAD * 2),
+        ),
+        // The clamp, applied on top of the centring the class does.
+        marginLeft: shift,
       }}
     >
       <div
@@ -326,7 +441,13 @@ export function PetSpeechBubble({ text, petWidth }: Props) {
         a rotated square has anti-aliased diagonals, which is the one thing this
         whole component exists to avoid.
       */}
-      <div className="flex flex-col items-center">
+      {/* The tail moves back by however far the bubble was clamped, so it stays
+          under the pet. Below the box when the bubble is above, and above it
+          when the bubble has flipped underneath. */}
+      <div
+        className={cn('flex flex-col items-center', flip && 'order-first')}
+        style={{ marginLeft: -shift * 2 }}
+      >
         <span
           style={{
             width: PIXEL * 4,

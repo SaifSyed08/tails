@@ -1,4 +1,4 @@
-import { Brain, Paperclip } from 'lucide-react';
+import { Brain, Check, Copy, Paperclip } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,6 +13,7 @@ import { PermissionBanner } from '@/components/chat/PermissionBanner';
 import { PlanCard } from '@/components/chat/PlanCard';
 import { QuestionCard } from '@/components/chat/QuestionCard';
 import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
+import { TurnFooter } from '@/components/chat/TurnFooter';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
 import { useArmedWakeWords } from '@/components/voice/useArmedWakeWords';
@@ -126,7 +127,34 @@ function Row({ row }: { row: ChatRow }) {
   switch (row.type) {
     case 'user':
       return (
-        <div className="flex justify-end">
+        /*
+          The bubble, with its own metadata on hover.
+
+          `group` rather than per-row state: two affordances that appear together
+          on hover are one hover, and tracking it in React would re-render the
+          transcript on every pointer move across it.
+        */
+        <div className="group/msg flex items-end justify-end gap-1.5">
+          {/*
+            To the left of the bubble, because the bubble is right-aligned and
+            anything after it would push it off the column. Ordered so the copy
+            button is nearest the text it copies.
+          */}
+          <span className="flex shrink-0 items-center gap-1 pb-1 opacity-0 transition-opacity duration-quick group-hover/msg:opacity-100">
+            {row.at ? (
+              <time
+                dateTime={row.at}
+                className="text-[10px] tabular-nums text-muted-foreground"
+                // The full date on hover: the short form is a time of day, which
+                // is ambiguous the moment a conversation is more than a day old.
+                title={new Date(row.at).toLocaleString()}
+              >
+                {new Date(row.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+              </time>
+            ) : null}
+            <CopyMessageButton content={row.content} />
+          </span>
+
           <div
             data-tails-part="bubbleUser"
             // Same reasoning as the assistant's turn: this element is what a
@@ -204,9 +232,51 @@ type ChatViewProps = {
   onFirstMessage?: (content: string) => void;
 };
 
+/**
+ * Whether tokens are arriving into this row right now.
+ *
+ * Only the assistant row carries the flag, so this is a type guard rather than a
+ * property read — and it is the question the waiting indicator actually wants
+ * asked, which is not the same as "is the last row from the assistant".
+ */
+const isStreaming = (row: ChatRow | undefined): boolean =>
+  row?.type === 'assistant' && row.streaming === true;
+
+/**
+ * Copies one message's text.
+ *
+ * Its own component so the "copied" flash is its own state: held on the row it
+ * belongs to, it would be state on the transcript, and every copy would
+ * re-render every message.
+ */
+function CopyMessageButton({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button
+      type="button"
+      aria-label={copied ? 'Copied' : 'Copy message'}
+      title={copied ? 'Copied' : 'Copy message'}
+      onClick={() => {
+        void navigator.clipboard.writeText(content)
+          .then(() => setCopied(true))
+          // A refused clipboard is not worth a dialog; the icon simply does not
+          // change, which is the honest signal that nothing was copied.
+          .catch(() => {});
+        window.setTimeout(() => setCopied(false), 1200);
+      }}
+      className="rounded p-0.5 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+    >
+      {copied
+        ? <Check className="size-3" aria-hidden="true" />
+        : <Copy className="size-3" aria-hidden="true" />}
+    </button>
+  );
+}
+
 export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const {
-    rows, busy, pendingPermissions, pendingPrompts, error, mode, changeMode,
+    rows, busy, lastTurnMs, pendingPermissions, pendingPrompts, error, mode, changeMode,
     turnSettings, changeTurnSettings, suggestion, clearSuggestion,
     sendMessage, abort, answerPermission, answerQuestion, answerPlan,
   } = useChatSession(sessionId);
@@ -451,7 +521,28 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
 
             {/* Only while nothing is streaming — once tokens are arriving the
                 text itself is the progress indicator. */}
-            {busy && rows[rows.length - 1]?.type !== 'assistant' ? (
+            {/*
+              Shown whenever the turn is running and nothing is arriving.
+
+              The test used to be "the last row is not an assistant message",
+              which hid the indicator for the whole gap between a finished text
+              block and the tool call that follows it — several seconds of a
+              running turn with no sign of life anywhere on screen. That is the
+              reported "period of nothingness", and it was this line.
+
+              The right question is whether tokens are *currently* streaming: the
+              streaming row has its own caret, so an indicator beside it would be
+              two things saying the same thing. Any other moment in a running
+              turn is a wait, and a wait needs saying.
+            */}
+            {/*
+              After the rows and before the waiting indicator, so a turn that has
+              finished reads as finished. Only when idle: a duration shown while
+              the next turn is running would be describing the previous one.
+            */}
+            {!busy && lastTurnMs !== undefined ? <TurnFooter ms={lastTurnMs} /> : null}
+
+            {busy && !isStreaming(rows[rows.length - 1]) ? (
               <ThinkingIndicator petPhrases={pet?.phrases} />
             ) : null}
 

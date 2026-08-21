@@ -26,6 +26,7 @@ import {
 
 import { ModelPicker } from '@/components/chat/ModelPicker';
 import { useComposerHeight } from '@/components/chat/useComposerHeight';
+import { atDraft, newer, older, rememberInput } from '@/components/chat/input-history';
 import {
   describeVoiceControl,
   runVoiceAction,
@@ -500,6 +501,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     this conversation's draft. Clearing on change would also have fixed the
     leak, by throwing away work; this keeps what you left behind.
   */
+  /** One line per row, and the thing the arrow keys check for. */
+  const NEWLINE = String.fromCharCode(10);
+
   const draftKey = sessionId ?? '__unsaved';
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draft = drafts[draftKey] ?? '';
@@ -528,6 +532,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  /*
+    Where the arrow keys have walked to, and what they interrupted.
+
+    Reset on send and on any edit — a recalled line that has been changed is a
+    draft, so the next Up starts from the end of the list again rather than from
+    wherever it left off.
+  */
+  const [walk, setWalk] = useState(() => atDraft(''));
   // Grows with what is being written, to ten lines. See the hook.
   useComposerHeight(textareaRef, draft);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -615,6 +628,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const submit = (spoken = false) => {
     const content = draftRef.current.trim();
     if ((!content && attachments.length === 0) || busy) return;
+
+    // Recorded before it is cleared, so Up can bring it back.
+    if (content) rememberInput(content);
+    setWalk(atDraft(''));
+
     setDraft('');
     setAttachments([]);
     onSend(content || 'Have a look at this.', attachments, { spoken });
@@ -708,6 +726,43 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
+      return;
+    }
+
+    /*
+      Walking back through what you have sent, like a shell.
+
+      Two conditions before the key is taken, and both are about not stealing a
+      cursor movement the user meant:
+
+      - **Only on a single line.** In a multi-line draft Up moves the caret, and
+        hijacking that would make the box unusable for anything but one-liners.
+      - **Only at the edge.** Up from the first line and Down from the last are
+        the only presses where the caret has nowhere to go, so they are the only
+        ones free to mean something else.
+    */
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const field = event.currentTarget;
+      const before = field.value.slice(0, field.selectionStart ?? 0);
+      const after = field.value.slice(field.selectionEnd ?? 0);
+      const atTop = !before.includes(NEWLINE);
+      const atBottom = !after.includes(NEWLINE);
+
+      const step = event.key === 'ArrowUp'
+        ? (atTop ? older(walk, field.value) : null)
+        : (atBottom ? newer(walk) : null);
+
+      if (step) {
+        event.preventDefault();
+        setWalk(step.walk);
+        setDraft(step.text);
+        // The caret goes to the end, which is where you want it when a line has
+        // been handed to you to edit.
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          if (el) el.setSelectionRange(el.value.length, el.value.length);
+        });
+      }
     }
   };
 
@@ -867,6 +922,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             value={draft}
             onChange={(event) => {
               setDraft(event.target.value);
+              // Typing ends the walk: this is a draft now, not a recalled line.
+              if (walk.index >= 0) setWalk(atDraft(event.target.value));
               // The moment the user writes anything of their own, the guess is
               // stale — including if they delete back to empty.
               if (suggestion) onSuggestionDismiss?.();

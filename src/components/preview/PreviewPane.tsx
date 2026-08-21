@@ -1,4 +1,4 @@
-import { RotateCw, X } from 'lucide-react';
+import { ExternalLink, RotateCw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
@@ -10,6 +10,19 @@ import {
   type PreviewTarget,
 } from '@/components/preview/preview-store';
 import { cn } from '@/lib/utils';
+
+/**
+ * Hands a URL to the real browser.
+ *
+ * `window.open` and nothing else, which needs saying because it looks like the
+ * naive choice: the shell already installs a `setWindowOpenHandler` that sends
+ * every such URL to the system browser and refuses to open an app window for it.
+ * So this is correct in the packaged build *and* in a plain browser, and a
+ * bespoke IPC channel would be a second path to maintain for no gain.
+ */
+const openExternally = (url: string): void => {
+  window.open(url, '_blank', 'noopener,noreferrer');
+};
 
 /** How long the pane takes to slide out. Matches the keyframes in `index.css`. */
 const CLOSE_MS = 220;
@@ -146,6 +159,25 @@ export function PreviewPane({ sessionId }: { sessionId: string | null }) {
           <span className="ml-1.5 font-mono opacity-60">{target.url}</span>
         </span>
 
+        {/*
+          Out to a real browser.
+
+          The pane has no address bar, no back button and no devtools, which is
+          right for a glance and wrong the moment you want to actually work on
+          the thing. Opening externally is the escape hatch, and it goes through
+          the shell rather than a plain link: an `<a target="_blank">` inside
+          Electron opens a second app window with none of a browser's chrome,
+          which is a worse place to end up than where you started.
+        */}
+        <button
+          type="button"
+          onClick={() => openExternally(target.url)}
+          aria-label="Open in browser"
+          title="Open in your browser"
+          className="rounded p-1 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+        >
+          <ExternalLink className="size-3.5" />
+        </button>
         <button
           type="button"
           onClick={() => setReloadKey((current) => current + 1)}

@@ -92,10 +92,17 @@ export function buildPrompt(pet: { name: string; description: string; persona: s
       better on the next. These narrow the spread by naming what the good runs
       were doing anyway.
     */
-    '- Reach for what the character is FAMOUS for: their catchphrases, the noise they make, the thing they cannot stop talking about.',
+    /*
+      The same correction as the reaction brief. Told to use what a character is
+      famous for, the generator gives you that and only that — ten variations on
+      one trait. A character muttering to itself should be drawing on its whole
+      life, which is where the interesting lines are.
+    */
+    '- Draw on EVERYTHING the character is, not the one thing they are famous for: their friends and rivals by name, the places they know, what has happened to them, what they believe, what they are sick of. If they are a well-known character, use the specific names and running jokes from their world.',
+    '- Their single most obvious trait is the boring answer. Use it once at most across the whole set.',
     '- Match their VOLUME and ENERGY. An excitable character is thrilled about nothing in particular; a brash one boasts to an empty room; a mostly-wordless animal just makes its own sound. Do not level everyone out to the same polite patience.',
     '',
-    'Spread them across these moods: boredom, impatience, nearly falling asleep, a stray thought, a scrap of advice from their own strange life, a small boast, and being ready to go.',
+    'Spread them across these moods: boredom, impatience, nearly falling asleep, a stray thought about someone they know, a scrap of advice from their own strange life, a small boast, a grudge, and being ready to go.',
     '',
     '- No markdown, no quotes around the line, no emoji, no stage directions.',
     // Measured: a duck called Guga came back saying 咕嘎 — a perfectly good

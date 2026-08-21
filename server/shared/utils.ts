@@ -54,8 +54,15 @@ export function createMessage(
  * Exactly one `complete` must reach the client per run. The registry enforces
  * uniqueness; this just guarantees the shape.
  */
-export function createCompleteMessage(sessionId: string, exitCode: number): NormalizedMessage {
-  return createMessage('complete', sessionId, { exitCode });
+export function createCompleteMessage(
+  sessionId: string,
+  exitCode: number,
+  durationMs?: number,
+): NormalizedMessage {
+  return createMessage('complete', sessionId, {
+    exitCode,
+    ...(durationMs === undefined ? {} : { durationMs }),
+  });
 }
 
 /** Narrows unknown JSON to a plain object, or null. */

@@ -58,6 +58,9 @@ export function buildChatRows(messages: NormalizedMessage[]): ChatRow[] {
             id: message.id,
             content: message.content ?? '',
             ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+            // Already on every message in the envelope; it was simply never
+            // projected, so the row had no way to show when it was sent.
+            ...(message.timestamp ? { at: message.timestamp } : {}),
           });
           break;
         }
@@ -120,6 +123,8 @@ export function buildChatRows(messages: NormalizedMessage[]): ChatRow[] {
 type ChatSessionState = {
   rows: ChatRow[];
   busy: boolean;
+  /** How long the most recent finished turn took, or undefined. */
+  lastTurnMs?: number;
   pendingPermissions: PendingPermission[];
   /** Questions and plans awaiting an answer, rendered as their own cards. */
   pendingPrompts: PendingPrompt[];
@@ -418,7 +423,20 @@ export function useChatSession(sessionId: string | null) {
         case 'complete':
           resetStream();
           setState((current) => ({
-            ...current, busy: false, pendingPermissions: [], pendingPrompts: [],
+            ...current,
+            busy: false,
+            pendingPermissions: [],
+            pendingPrompts: [],
+            /*
+              How long the turn took, for the footer.
+
+              Kept on the session rather than pinned to a message, because it
+              describes the *turn* — which is a text block, some tools and
+              another text block — and there is no single row it belongs to. Set
+              here and cleared when the next turn starts, so it is always about
+              the most recent one.
+            */
+            lastTurnMs: message.durationMs,
           }));
           // Re-read from the transcript so what's on screen matches what was
           // actually persisted, then drop only the live messages that read
@@ -483,7 +501,9 @@ export function useChatSession(sessionId: string | null) {
   ) => {
     const attachments = options.attachments ?? [];
     if (!sessionId || (!content.trim() && attachments.length === 0)) return;
-    setState((current) => ({ ...current, busy: true, error: null }));
+    setState((current) => ({
+      ...current, busy: true, error: null, lastTurnMs: undefined,
+    }));
     // Whatever the last turn predicted, this message is the real answer.
     setSuggestion(null);
     send({

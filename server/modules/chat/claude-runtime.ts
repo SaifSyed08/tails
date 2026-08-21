@@ -378,10 +378,19 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
    * twice as well.
    */
   let completed = false;
+  /*
+    When the user pressed send.
+
+    The footer's number is what they waited for, which includes resolving the
+    CLI and spawning it — so it is measured here rather than taken from the SDK's
+    own duration, which starts counting later and would always read low.
+  */
+  const startedAt = Date.now();
+
   const finishTurn = () => {
     if (completed) return;
     completed = true;
-    send(createCompleteMessage(sessionId, exitCode));
+    send(createCompleteMessage(sessionId, exitCode, Date.now() - startedAt));
     sessionsRepository.touchSession(sessionId);
     publishSessionsChanged(sessionId);
   };

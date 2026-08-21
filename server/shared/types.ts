@@ -84,6 +84,16 @@ export type NormalizedMessage = {
   toolId?: string;
   toolResult?: { content?: string; isError?: boolean };
 
+  /**
+   * How long the turn took, on `complete` only.
+   *
+   * Measured by this app from the moment the prompt was accepted, not taken from
+   * the SDK's own figure: what the user waited for includes the CLI spawning and
+   * everything else between pressing send and the answer settling, and that is
+   * the number the footer is claiming.
+   */
+  durationMs?: number;
+
   /** Correlation id for any prompt awaiting the user, echoed back in the response. */
   requestId?: string;
   /** `question_request` payload — the questions the model is asking. */

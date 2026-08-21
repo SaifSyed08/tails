@@ -10,11 +10,12 @@ import {
   type ChatAttachment,
 } from '@/modules/chat/claude-runtime.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
+import { readPreview } from '@/modules/preview/preview.tools.js';
 import { readEffortLevel } from '@/modules/chat/turn-settings.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { appBroadcast } from '@/shared/broadcast.js';
 import type { ClientMessage, NormalizedMessage } from '@/shared/types.js';
-import { createMessage, readRecord, readString } from '@/shared/utils.js';
+import { createCompleteMessage, createMessage, readRecord, readString } from '@/shared/utils.js';
 
 /**
  * Parses an inbound frame into a known client message.
@@ -181,7 +182,25 @@ export function attachChatGateway(server: Server): WebSocketServer {
           return;
 
         case 'chat.abort':
-          runRegistry.abortRun(message.sessionId);
+          /*
+            Told to stop, and told so immediately.
+
+            `abortRun` signals the SDK, and the SDK's teardown is not quick: the
+            subprocess has to notice, the iterator has to finish, and only then
+            does the runtime reach its `finally` and send the terminal event. Up
+            to that point the composer is still showing a running turn, so the
+            stop button reads as not having worked and gets pressed again.
+
+            The acknowledgement is therefore sent from here, at the moment the
+            user asks. It is safe to be early because the registry drops a second
+            terminal event for a run it has already completed — see `record` —
+            so the runtime's own `complete` a moment later is a no-op rather than
+            a duplicate. The teardown still happens; it just stops being
+            something the user has to wait for.
+          */
+          if (runRegistry.abortRun(message.sessionId)) {
+            runRegistry.record(message.sessionId, createCompleteMessage(message.sessionId, 0));
+          }
           return;
 
         case 'chat.subscribe':
@@ -199,6 +218,24 @@ export function attachChatGateway(server: Server): WebSocketServer {
               turnSettings: getSessionTurnSettings(entry.sessionId),
               appearance: { pendingPermissions: runRegistry.listPendingPermissions(entry.sessionId) },
             }));
+
+            /*
+              And whatever this conversation was previewing.
+
+              The pane's state lives on the server for the length of the process,
+              but the client only ever heard about it through the *change* event —
+              so re-opening a chat whose dev server was still running showed no
+              pane, and the user had to ask the model to open it again. The
+              server knew all along; nobody asked. Sent as the same
+              `preview_changed` shape a tool emits, so there is one code path on
+              the client rather than a second one for restores.
+            */
+            const preview = readPreview(entry.sessionId);
+            if (preview) {
+              send(createMessage('preview_changed', entry.sessionId, {
+                content: JSON.stringify({ sessionId: entry.sessionId, target: preview }),
+              }));
+            }
 
             for (const replayed of runRegistry.replay(entry.sessionId, entry.lastSeq ?? 0)) {
               send(replayed);
