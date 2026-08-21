@@ -4,6 +4,25 @@ import { themeService } from '@/modules/appearance/theme.service.js';
 import { readString } from '@/shared/utils.js';
 
 /** Thin transport around the theme service. */
+/**
+ * Reads a client-supplied map of custom property to value.
+ *
+ * Anything not shaped like `--name: short string` is dropped rather than
+ * rejected: the values come from a control panel, and one malformed entry
+ * should cost that knob, not the whole save.
+ */
+function readControlValues(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object') return {};
+
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^--[a-z0-9-]+$/.test(key)) continue;
+    if (typeof value !== 'string' || value.length === 0 || value.length > 200) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 export function createAppearanceRouter(): express.Router {
   const router = express.Router();
 
@@ -59,6 +78,17 @@ export function createAppearanceRouter(): express.Router {
   router.post('/keep', respond((req) => themeService.keepCurrent(
     String(req.body?.name ?? ''),
     readString(req.body?.sessionId) ?? '',
+    /*
+      The values the user dragged, which only the renderer knows.
+
+      A published control writes a custom property live and never told the
+      server, so saving a look used to keep the spec and discard the tuning —
+      the preset you got back was the one from before you touched the knobs.
+      Filtered here rather than trusted: keys must look like custom properties
+      and values are capped, because this is a client-supplied map that ends up
+      in a stylesheet.
+    */
+    readControlValues(req.body?.controlValues),
   )));
 
   // The live-controls layer. Ephemeral like /css and separate from it because

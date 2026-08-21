@@ -203,7 +203,18 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
       const response = await fetch('/api/appearance/keep', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name, sessionId }),
+        /*
+          The dragged values go with it.
+
+          Only the renderer knows them — a published control writes a custom
+          property live and nothing sent it to the server — so without this the
+          saved preset was the look from *before* the knobs were touched.
+        */
+        body: JSON.stringify({
+          name,
+          sessionId,
+          controlValues: stateRef.current.controlValues ?? {},
+        }),
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(body?.error?.message ?? 'Could not save that look.');

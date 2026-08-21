@@ -1237,6 +1237,22 @@ export function deriveTokens(rawSpec: ThemeSpec): DerivedTheme {
         interaction: {
           ...buildInteractionTokens(spec, ramp, colors),
           ...buildWindowTokens(spec, ramp),
+          /*
+            Last, so they win.
+
+            These are values the user dragged on a live control. Everything
+            above is derived and everything here is literal, and the literal
+            one has to take precedence or saving a look would produce a preset
+            that does not match what was on screen when it was saved.
+
+            The `--` is stripped because `declarations()` adds it back; leaving
+            it produces `----t-*`, which is a mistake this file has already
+            made once.
+          */
+          ...Object.fromEntries(
+            Object.entries(spec.overrides ?? {})
+              .map(([property, value]) => [property.replace(/^--/, ''), value]),
+          ),
         },
         effectiveFills,
       } as ThemeTokens,

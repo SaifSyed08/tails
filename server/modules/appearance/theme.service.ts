@@ -570,7 +570,7 @@ export const themeService = {
    * reused rather than duplicated, so a kept look is the same kind of row
    * whichever way it got there.
    */
-  keepCurrent(name: string, sessionId = ''): StoredTheme {
+  keepCurrent(name: string, sessionId = '', controlValues: Record<string, string> = {}): StoredTheme {
     const trimmed = name.trim().slice(0, 40);
     if (!trimmed) {
       throw new AppError('Give the look a name.', { code: 'THEME_NAME_REQUIRED', statusCode: 400 });
@@ -600,7 +600,30 @@ export const themeService = {
       });
     }
 
-    return this.saveTheme({ ...spec, name: trimmed }, 'saved');
+    /*
+      The knobs are part of the look, so they are part of what is saved.
+
+      A published control writes a CSS custom property live on `:root` and
+      nothing sent it to the server — so keeping a look saved the spec and threw
+      away every value the user had dragged, and the preset they got back was
+      the one *before* they tuned it. Folded into `overrides`, which is emitted
+      last and therefore wins over the derived value it replaced.
+
+      Merged under whatever the spec already carried, so re-saving a look that
+      was itself saved from dragged values does not lose the earlier ones.
+    */
+    /*
+      Only v2 carries `overrides`. A v1 spec is a replayed cache entry from an
+      older build, and quietly adding a field its schema does not have would
+      fail validation on save — so an old look keeps its knobs unsaved rather
+      than becoming unsaveable, which is the better of the two.
+    */
+    if (spec.specVersion !== 2 || Object.keys(controlValues).length === 0) {
+      return this.saveTheme({ ...spec, name: trimmed }, 'saved');
+    }
+
+    const overrides = { ...(spec.overrides ?? {}), ...controlValues };
+    return this.saveTheme({ ...spec, name: trimmed, overrides }, 'saved');
   },
 
   /**

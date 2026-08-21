@@ -286,6 +286,12 @@ export const themeSpecV2Schema = z.object({
   }).strict().default(() => ({ backdrop: 'opaque' as const }))
     .describe('The application window itself, as opposed to anything drawn inside it.'),
 
+  overrides: z.record(
+    z.string().regex(/^--[a-z0-9-]+$/, 'must be a CSS custom property, e.g. --glass-blur'),
+    z.string().max(200),
+  ).default({})
+    .describe('Literal values for named CSS custom properties, emitted last so they win over everything derived. This is where a knob the user dragged is stored: the control panel writes `--glass-blur` live, and saving the look has to keep that value or the preset is not the thing that was on screen. Not a general escape hatch for authoring a theme — use the surface recipes for that, because a value written here is opaque to the contrast solver.'),
+
   surfaces: surfacesMapSchema.default({})
     .describe('Per-surface recipes. Every key is optional and inherits, field by field, from `default`, which itself inherits from a plain bordered panel. This map is where a look is actually invented: two themes with the same palette and different surfaces are two different products, while two themes with different palettes and no surfaces are the same product in two colours.'),
 }).strict();
