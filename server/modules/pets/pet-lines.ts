@@ -27,21 +27,28 @@ import { askHaiku } from '@/modules/pets/haiku.js';
  */
 
 /**
- * The situations worth having lines for.
+ * The one thing worth having written in advance.
  *
- * Small on purpose. Each one has to be distinguishable from the others by a
- * cheap look at the turn — a category the app cannot detect is a category that
- * never gets used — and every extra one dilutes the model's attention across a
- * single generation call.
+ * There were five groups — approval, done, explained, problem, idle — and four of
+ * them were wrong in the same way: a canned line pretending to be a reaction.
+ * "Neat idea!" out of a bank is not a companion noticing what you asked for, it
+ * is a fortune cookie, and it reads as one the second time it appears.
+ *
+ * Reactions are generated live now, from the actual exchange. What cannot be
+ * generated live is muttering: there is nothing to react to, so a model call
+ * would be spending on inventing a mood. Those are exactly the lines that are
+ * *better* prebuilt — written once in the character's voice, cycled at random —
+ * and it leaves one group instead of five, which is a fifth of the generation
+ * cost per pet.
  */
-export const LINE_KINDS = ['approve', 'done', 'explain', 'problem', 'idle'] as const;
+export const LINE_KINDS = ['idle'] as const;
 
 export type LineKind = (typeof LINE_KINDS)[number];
 
 export type LineBank = Record<LineKind, string[]>;
 
-/** Lines per situation. Enough that a repeat is rare in a working session. */
-const PER_KIND = 5;
+/** Idle lines per pet. More than before, since it is the only group now. */
+const PER_KIND = 10;
 
 /** The longest line that fits the bubble without becoming a dialog box. */
 export const MAX_LINE = 70;
@@ -61,41 +68,18 @@ export const MAX_LINE = 70;
  */
 const UNDRAWABLE = /[^ -ɏ‐-›]/;
 
-export const emptyBank = (): LineBank => ({
-  approve: [], done: [], explain: [], problem: [], idle: [],
-});
+export const emptyBank = (): LineBank => ({ idle: [] });
 
-const BRIEF: Record<LineKind, string> = {
-  approve: 'the user has just asked for something — a change, a fix, an idea. React to the *request*, keen and encouraging.',
-  done: 'the assistant has just finished doing something successfully. React like a spectator who saw it happen.',
-  explain: 'the assistant has just explained something. React to having been told a thing.',
-  problem: 'something went wrong — an error, a failure, a dead end. React without being discouraging.',
-  idle: 'nothing is happening. The user is reading or thinking. Mutter something to yourself — a stray thought, a bit of advice from your own strange life, impatience, boredom, or almost falling asleep.',
-};
-
-/**
- * What the generator is told.
- *
- * The constraints that matter, in the order they matter: who you are, that you
- * are *not* the assistant, first person, short, and take your volume from the
- * character. The last one is the point of the whole prompt — without it every
- * pet comes back sounding like the same eager sidekick.
- */
 export function buildPrompt(pet: { name: string; description: string; persona: string }): string {
   return [
     `You are writing dialogue for a small on-screen pet called ${pet.name}.`,
     pet.description ? `Appearance and nature: ${pet.description}` : '',
     pet.persona ? `How the user describes them: ${pet.persona}` : '',
     '',
-    `The pet sits at the corner of a chat window and watches the user work with an AI assistant. The pet is a SPECTATOR — it is not the assistant, it never answers the user's questions, it just reacts.`,
+    'The pet sits in the corner of a chat window while its owner works. Write the things it says to ITSELF when nothing is happening — the owner is reading or thinking and there is nothing to react to.',
     '',
-    'Write lines it can say. Rules:',
+    `Write ${PER_KIND} such lines. Rules:`,
     '- First person, as the pet. Never refer to the pet by name.',
-    /*
-      Two numbers on purpose. The target is what shapes the writing; the cap is
-      what the parser enforces. Given only the cap, the generator writes to it —
-      thirty-eight characters of warm chat where four words would land better.
-    */
     '- BRUTALLY short. Three to six words. A single sound or word is often best.',
     `- Never longer than ${MAX_LINE} characters.`,
     '- Funny, entertaining, and unmistakably this character.',
@@ -105,34 +89,28 @@ export function buildPrompt(pet: { name: string; description: string; persona: s
       The generator is high-variance: the same prompt gave a famously fast
       hedgehog "Finally" and "About time" on one run — generic impatience, the
       character's mood with none of the character in it — and something much
-      better on the next. These two narrow that spread by naming what the good
-      runs were doing anyway.
+      better on the next. These narrow the spread by naming what the good runs
+      were doing anyway.
     */
-    '- Reach for what the character is FAMOUS for: their catchphrases, the noise they make, the thing they cannot stop talking about. Put the task in their own terms — a fast character measures work in laps, a boastful one in how nobody does it better.',
-    '- Match their VOLUME and ENERGY. An excitable character is genuinely thrilled and uses exclamation marks; a brash one boasts; a mostly-wordless animal mostly just makes its own sound and says very little. Do not level everyone out to the same polite enthusiasm.',
+    '- Reach for what the character is FAMOUS for: their catchphrases, the noise they make, the thing they cannot stop talking about.',
+    '- Match their VOLUME and ENERGY. An excitable character is thrilled about nothing in particular; a brash one boasts to an empty room; a mostly-wordless animal just makes its own sound. Do not level everyone out to the same polite patience.',
+    '',
+    'Spread them across these moods: boredom, impatience, nearly falling asleep, a stray thought, a scrap of advice from their own strange life, a small boast, and being ready to go.',
+    '',
     '- No markdown, no quotes around the line, no emoji, no stage directions.',
     // Measured: a duck called Guga came back saying 咕嘎 — a perfectly good
     // Chinese rendering of a quack, and a row of empty boxes in a pixel font.
     '- English, and plain keyboard characters only. No other scripts.',
-    '- Never mention the assistant, the tool, the app, or that you are a pet.',
+    '- Never mention the owner, the chat, the assistant, or that you are a pet.',
     '',
-    /*
-      Invented characters, so nothing is copied verbatim — and picked to show the
-      range rather than a house style: one shouts, one barely speaks, one turns
-      everything into its own obsession.
-    */
     'For register, here is the range wanted — for characters that are not yours:',
-    '  a boastful old general -> "Nobody plans better. Nobody!"',
+    '  a boastful old general -> "Nobody waits better. Nobody!"',
     '  a very sleepy cat -> "mrrrp..."',
-    '  a hyperactive squirrel -> "I could do that twice before lunch!"',
-    '  a shy moth -> "oh. ok."',
+    '  a hyperactive squirrel -> "I could nap twice by now!"',
+    '  a shy moth -> "oh. still here."',
     '',
-    'Produce exactly these groups, in this order, each as a JSON array of '
-      + `${PER_KIND} strings:`,
-    ...LINE_KINDS.map((kind) => `"${kind}": ${BRIEF[kind]}`),
-    '',
-    'Reply with ONLY a JSON object with those five keys and nothing else.',
-  ].filter((line) => line !== undefined).join('\n');
+    'Reply with ONLY a JSON object of the form {"idle": ["...", "..."]} and nothing else.',
+  ].filter(Boolean).join('\n');
 }
 
 /**
@@ -231,32 +209,15 @@ export async function generateBank(
 }
 
 /**
- * Which kind of line suits what just happened.
+ * Whether a chatty pet speaks on this turn.
  *
- * A deliberately cheap read of the turn. The alternative — asking a model which
- * category applies — is a second call to classify something for a decoration,
- * and the categories were chosen to be separable this way in the first place.
- *
- * Order matters: a turn can be several of these at once, and the most specific
- * true thing is the most interesting one to react to.
+ * Two gates answering different questions. The cooldown (in `pet-voice.tools.ts`)
+ * stops a pet commenting on every message in a fast exchange; these odds are what
+ * make it "occasionally" rather than "always" once it is allowed to. Seventy
+ * percent was asked for and is about right: often enough to read as a companion
+ * paying attention, rare enough that the bubble stays a small event — and, now
+ * that a reaction is a model call, it is also the thing keeping the cost down.
  */
-export function pickKind(userMessage: string, reply: string): LineKind {
-  const said = reply.toLowerCase();
-  if (/\b(error|failed|failure|cannot|could not|couldn't|no such|denied|broken)\b/.test(said)) {
-    return 'problem';
-  }
+export const REMARK_ODDS = 0.7;
 
-  const asked = userMessage.toLowerCase().trim();
-  // An imperative or a request: "add", "fix", "can you", "please". This is the
-  // "neat idea!" case, and it reads off the *user's* words rather than the
-  // reply, because it is a reaction to being asked.
-  if (/^(add|fix|make|change|build|write|create|remove|delete|update|refactor|rename|move|try|run|use|set|implement|can you|could you|please|let'?s)\b/.test(asked)) {
-    return 'approve';
-  }
-
-  if (/\b(done|added|created|fixed|updated|removed|committed|passing|works|working)\b/.test(said)) {
-    return 'done';
-  }
-
-  return 'explain';
-}
+export const remarkDue = (roll: number): boolean => roll < REMARK_ODDS;

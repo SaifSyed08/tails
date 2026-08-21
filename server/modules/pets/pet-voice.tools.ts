@@ -1,35 +1,27 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
-import { runRegistry } from '@/modules/chat/run-registry.js';
 import { MAX_PERSONA_LENGTH, personaPromptSchema } from '@/modules/pets/pet-spec.js';
 import { petsService } from '@/modules/pets/pets.service.js';
 
 /**
  * How a pet gets a word in.
  *
- * ## Why a tool, and not the end of the reply
+ * ## What used to be here
  *
- * The obvious way to have the model add an in-character aside is to ask for one
- * at the end of its answer behind a marker, and strip the marker server-side.
- * That does not work here, and the reason is the streaming: deltas reach the
- * transcript as they arrive, so by the time the marker exists there is nothing
- * left to strip — the user has already watched `<<pet>> nice work!` type itself
- * into the middle of their answer. Buffering the tail to prevent it would mean
- * holding back the end of every reply on the chance that a remark is coming.
+ * A `pet_say` tool, so the model could make the pet speak at the end of a turn.
+ * The design was sound — a tool call is not text, so a half-formed aside could
+ * never land in the middle of an answer the way a marker-in-the-reply scheme
+ * would. It simply never fired: MCP tools are deferred in this CLI, so calling
+ * one cost a `ToolSearch` round trip that the model reasonably skipped on a
+ * routine turn, and three rounds of firmer wording did not move it.
  *
- * A tool call is not text. It arrives on its own channel, the transcript never
- * sees it, and a model that produces a malformed one produces a malformed tool
- * call rather than a corrupted answer. The runtime routes it to the pet's speech
- * bubble and drops the tool row, so nothing about the mechanism is visible.
+ * Reactions are generated outside the turn now — see `pet-reaction.ts` — which
+ * is more reliable, reads better, and means a chatty pet costs the system prompt
+ * nothing at all.
  *
- * ## Registered per turn, not always
- *
- * The tools below exist only when the conversation's pet is actually in the mode
- * that uses them. A model that cannot see a tool cannot be tempted by it, which
- * is a stronger guarantee than an instruction telling it not to — and it means a
- * pet set to `none` is not one forgotten sentence away from starting to talk.
+ * The cooldown below outlived the tool, because it is about the *pet* rather
+ * than about who produced the line.
  */
 
 const textResult = (text: string) => ({ content: [{ type: 'text' as const, text }] });
@@ -85,50 +77,6 @@ export function resetRemarkCooldown(): void {
  */
 export const MAX_REMARK_LENGTH = 120;
 
-const sayTool = (sessionId: string) => tool(
-  'pet_say',
-  [
-    'Have the on-screen companion say one short thing, in character, in a speech bubble above him.',
-    'Call this ONCE at the very end of a turn. The application only offers this tool on turns where a remark is wanted, so when you can see it, use it — react to what you just did, what the user is working on, or how it went.',
-    'It is a flourish, not a report: it must never carry information the user needs, because it disappears after a few seconds and is not part of the transcript.',
-    'Never mention this tool, the bubble, or the fact that you were asked to do this. Skip it only if the turn genuinely offers nothing to react to.',
-  ].join(' '),
-  {
-    remark: z.string().min(1).max(MAX_REMARK_LENGTH)
-      .describe(`One sentence at most, in the companion's voice. Plain text — no markdown, no quotes around it. Hard limit ${MAX_REMARK_LENGTH} characters.`),
-  },
-  async ({ remark }) => {
-    const text = remark.trim().replace(/\s+/g, ' ');
-    if (!text) return textResult('Nothing said.');
-
-    // Recorded before publishing, so a burst of calls inside one turn cannot
-    // each pass the check on the way in.
-    recordRemark(sessionId);
-
-    /*
-      Published on the run's own stream, as a message kind.
-
-      Which means it inherits everything the transcript protocol already does —
-      it reaches every subscriber, it survives the replay buffer, and a client
-      that does not know the kind ignores it. The alternative, a second channel
-      for pet chatter, is the parallel protocol this app's message envelope
-      exists to avoid.
-    */
-    runRegistry.record(sessionId, {
-      id: `pet-remark-${randomUUID()}`,
-      sessionId,
-      timestamp: new Date().toISOString(),
-      kind: 'pet_remark',
-      role: 'assistant',
-      content: text,
-    });
-
-    // The model is told it landed, and nothing more. A tool result describing
-    // the bubble would invite a follow-up remark about the remark.
-    return textResult('Said.');
-  },
-);
-
 const personaTool = tool(
   'pet_persona',
   [
@@ -162,32 +110,23 @@ const personaTool = tool(
   },
 );
 
-/**
- * The remark tool's full name, as the transcript sees it.
- *
- * Exported so the runtime can drop its rows: the aside reaches the user as a
- * `pet_remark` event, so the call and its result would only show the machinery.
- * A literal in two files is a literal that will disagree with itself.
- */
-export const PET_SAY_TOOL = 'mcp__tails-pet__pet_say';
-
-export const PET_VOICE_ALLOWED_TOOLS = [
-  PET_SAY_TOOL,
-  'mcp__tails-pet__pet_persona',
-];
-
-/** Just the persona tool, for pets that are not chatty. */
 export const PET_PERSONA_ALLOWED_TOOLS = ['mcp__tails-pet__pet_persona'];
 
 /**
- * Built per turn, because the session id is baked into the remark tool.
+ * One tool: writing a pet a persona.
  *
- * `pet_say` has to publish to *this* conversation's run, and a tool has no way
- * to ask which one it was called from — so the server is constructed with the
- * id rather than looked up from a registry at call time.
+ * There used to be a second — `pet_say`, which had the model call a tool at the
+ * end of a chatty turn to make the pet speak. It worked and it almost never
+ * fired: MCP tools are deferred in this CLI, so a remark cost the model a
+ * `ToolSearch` round trip that it reasonably declined on a routine turn. The
+ * reaction is generated outside the turn now (`pet-reaction.ts`), which also
+ * means a chatty pet adds nothing at all to the system prompt.
+ *
+ * Still a factory rather than a constant, because `sessionId` is what a second
+ * tool would need and the shape should not have to be rediscovered.
  */
-export const createPetVoiceServer = (sessionId: string, chatty: boolean) => createSdkMcpServer({
+export const createPetVoiceServer = (_sessionId: string) => createSdkMcpServer({
   name: 'tails-pet',
   version: '1.0.0',
-  tools: chatty ? [sayTool(sessionId), personaTool] : [personaTool],
+  tools: [personaTool],
 });

@@ -1259,3 +1259,75 @@
     }
   }
 }
+
+@layer utilities {
+  /**
+   * The preview pane arriving and leaving.
+   *
+   * Width as well as translation, and that pairing is the point: sliding a
+   * fixed-width panel out from behind the chat column leaves a gap the chat does
+   * not fill until the panel is gone, so the last frame is a jump. Animating both
+   * means the chat grows into the space at exactly the rate the panel leaves it.
+   *
+   * `42vw` rather than the panel's own `42%` because a percentage width has
+   * nothing to resolve against mid-animation — the parent is a flex row and the
+   * panel is what was giving it that dimension.
+   */
+  .preview-pane-in,
+  .preview-pane-out {
+    width: clamp(320px, 42vw, 720px);
+  }
+
+  .preview-pane-in {
+    animation: t-preview-in 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+
+  .preview-pane-out {
+    animation: t-preview-out 220ms cubic-bezier(0.55, 0.06, 0.68, 0.19) both;
+    /* Nothing in it is usable on the way out, and a click landing on a panel
+       that is leaving is a click the user did not mean. */
+    pointer-events: none;
+  }
+
+  @keyframes t-preview-in {
+    from {
+      width: 0;
+      transform: translateX(24px);
+      opacity: 0;
+    }
+
+    to {
+      width: clamp(320px, 42vw, 720px);
+      transform: none;
+      opacity: 1;
+    }
+  }
+
+  @keyframes t-preview-out {
+    from {
+      width: clamp(320px, 42vw, 720px);
+      transform: none;
+      opacity: 1;
+    }
+
+    to {
+      width: 0;
+      transform: translateX(24px);
+      opacity: 0;
+    }
+  }
+
+  /**
+   * Reduced motion still gets the two states, without the travel.
+   *
+   * The pane appearing and disappearing is the information; the slide is the
+   * decoration. `display: none` would be hiding content, which this preference
+   * never asks for.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .preview-pane-in,
+    .preview-pane-out {
+      animation-duration: 1ms;
+    }
+  }
+}

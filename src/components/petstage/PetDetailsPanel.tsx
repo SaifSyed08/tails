@@ -18,13 +18,13 @@ import {
 } from './chat-pet-api';
 
 /**
- * The pet's own page, opened from his pill.
+ * The pet's own page, opened from its pill.
  *
  * What the marketplace's detail dialog is for a pet you are *choosing*, this is
- * for the pet you already have standing next to you: who he is, how his sheet
- * is cut, what he can do — playable rather than described, because "waving:
+ * for the pet you already have standing next to you: what it is, how its sheet
+ * is cut, what it can do — playable rather than described, because "waving:
  * frames 24-27" tells you nothing about whether the wave is any good — and the
- * two settings that are about him being here rather than about him existing.
+ * two settings that are about it being here rather than about it existing.
  *
  * It is a panel rather than the small menu it replaces because the menu could
  * only ever hold a list, and a list is the wrong shape for "show me this pet".
@@ -40,14 +40,14 @@ export type PetDetailsPanelProps = {
   pet: InstalledPet;
   stage: PetStage;
   onChange: (stage: PetStage) => void;
-  /** Saves the voice, or `null` to hand the question back to his manifest. */
+  /** Saves the voice, or `null` to hand the question back to its manifest. */
   onChangeVoice: (voice: PetVoice | null) => void;
   onClose: () => void;
-  /** Puts him on the desktop, out of the chat. Absent when he is already there. */
+  /** Puts it on the desktop, out of the chat. Absent when it is already there. */
   onSendToDesktop?: () => void;
   /**
-   * Gives him to the conversation on screen. Absent when there is no
-   * conversation to give him to, or when he is already in it.
+   * Gives it to the conversation on screen. Absent when there is no
+   * conversation to give it to, or when it is already in it.
    *
    * Presented as the panel's headline action rather than a footer link. It used
    * to sit beside "Put on the desktop" in the footer, at the same weight as the
@@ -224,7 +224,7 @@ export function PetDetailsPanel({
               <span>
                 Wander
                 <span className="block text-xs text-muted-foreground">
-                  He strolls about when nothing is happening.
+                  It strolls about when nothing is happening.
                 </span>
               </span>
               <input
@@ -237,7 +237,7 @@ export function PetDetailsPanel({
           </section>
 
           {/*
-            The look he brings and the lines he says.
+            The look it brings and the lines it says.
 
             Reused from the marketplace rather than rebuilt here. Both fields
             were already stored, validated and persisted — and both were only
@@ -252,7 +252,7 @@ export function PetDetailsPanel({
             His voice.
             
             Three states, and they are deliberately distinct: no choice stored
-            (his manifest decides, which for every pet shipped so far means
+            (its manifest decides, which for every pet shipped so far means
             silence), a chosen voice, and *chosen* silence. The last two look
             the same from outside and are not the same thing — a pet authored to
             be quiet is a decision, not an empty field.
@@ -283,8 +283,8 @@ export function PetDetailsPanel({
                       if (next.engine === 'system') speakPreview(next);
                     }}
                   >
-                    <option value="__unset">Not set — whatever his file says</option>
-                    <option value="__none">No voice — he stays quiet</option>
+                    <option value="__unset">Not set — whatever its file says</option>
+                    <option value="__none">No voice — it stays quiet</option>
                     {speech.voices.map((available) => (
                       <option key={available.name} value={available.name}>
                         {available.name}

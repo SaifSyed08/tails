@@ -1,10 +1,12 @@
 import { Check, FolderOpen, PanelLeftOpen, PanelRight, SquareTerminal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import { reopenPreview, subscribePreview } from '@/components/preview/preview-store';
+import { readPreviewState, reopenPreview, subscribePreview } from '@/components/preview/preview-store';
 import { cn } from '@/lib/utils';
 
 type HeaderProps = {
+  /** Which conversation is on screen; the preview button is scoped to it. */
+  sessionId: string | null;
   sessionTitle: string;
   cwd: string;
   sidebarCollapsed: boolean;
@@ -130,19 +132,26 @@ function EditableLabel({
  * and a header control that duplicates it is the same mistake as the second
  * settings button.
  */
-function PreviewReopenButton() {
+function PreviewReopenButton({ sessionId }: { sessionId: string | null }) {
   const [available, setAvailable] = useState(false);
 
-  useEffect(() => subscribePreview((state) => {
-    setAvailable(state.last !== null && state.current === null);
-  }), []);
+  // For this conversation only. A preview belongs to the work that produced it,
+  // so a button offering to reopen another chat's is offering the wrong thing.
+  useEffect(() => {
+    const sync = () => {
+      const entry = readPreviewState(sessionId);
+      setAvailable(entry.last !== null && entry.current === null);
+    };
+    sync();
+    return subscribePreview(sync);
+  }, [sessionId]);
 
   if (!available) return null;
 
   return (
     <button
       type="button"
-      onClick={reopenPreview}
+      onClick={() => reopenPreview(sessionId)}
       aria-label="Reopen preview"
       title="Reopen the preview panel"
       className="rounded-md p-1.5 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
@@ -161,6 +170,7 @@ function PreviewReopenButton() {
  * at the window's trailing edge.
  */
 export function Header({
+  sessionId,
   sessionTitle,
   cwd,
   sidebarCollapsed,
@@ -215,7 +225,7 @@ export function Header({
           inputClassName="w-[22rem] font-mono text-xs"
         />
 
-        <PreviewReopenButton />
+        <PreviewReopenButton sessionId={sessionId} />
 
         <button
           type="button"

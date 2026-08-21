@@ -12,17 +12,13 @@ import { APPEARANCE_ALLOWED_TOOLS, appearanceMcpServer } from '@/modules/appeara
 import { resolveClaudeCli } from '@/modules/chat/claude-cli.js';
 import { expandLocalCommand } from '@/modules/chat/commands.service.js';
 import { applySpokenSteer } from '@/modules/chat/spoken-turn.js';
-import { DEVSERVER_ALLOWED_TOOLS, devServerMcpServer } from '@/modules/devserver/devserver.tools.js';
-import { PREVIEW_ALLOWED_TOOLS, previewMcpServer } from '@/modules/preview/preview.tools.js';
+import { createDevServerServer, DEVSERVER_ALLOWED_TOOLS } from '@/modules/devserver/devserver.tools.js';
+import { createPreviewServer, PREVIEW_ALLOWED_TOOLS } from '@/modules/preview/preview.tools.js';
 import { formatPetVoice, readPetVoice } from '@/modules/pets/pet-persona.js';
-import { pickKind } from '@/modules/pets/pet-lines.js';
-import { composeRemark } from '@/modules/pets/pet-remark.js';
+import { reactTo } from '@/modules/pets/pet-reaction.js';
 import {
   createPetVoiceServer,
-  mayRemark,
   PET_PERSONA_ALLOWED_TOOLS,
-  PET_SAY_TOOL,
-  PET_VOICE_ALLOWED_TOOLS,
   recordRemark,
 } from '@/modules/pets/pet-voice.tools.js';
 import { localRoutingEnv } from '@/modules/routing/local-model.js';
@@ -401,55 +397,49 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   */
   const petVoice = readPetVoice(sessionId);
 
-  /*
-    The last thing the assistant said, for choosing which kind of line fits.
-
-    Only the tail is kept: the classifier looks for words like "error" or
-    "added", and a whole reply's worth of text makes every category match at
-    once. The end of an answer is also where its outcome usually is.
-  */
-  let lastAssistantText = '';
 
   let drainTimer: NodeJS.Timeout | null = null;
 
   /*
-    The pet's remark, if the model did not make one.
+    The pet's reaction, started now rather than at the end.
 
-    Called once, when the turn ends on screen. `mayRemark(sessionId)` still
-    returning true is exactly the evidence that the tool never fired — the tool
-    stamps the cooldown as its first act — so this needs no separate flag and
-    cannot double up with a remark the model already made.
+    It reacts to what the user just *asked*, which is both what was wanted — "ask
+    it to make a change and it says neat idea!" — and the only version that
+    arrives in time. The call takes fifteen to forty-five seconds, nearly all of
+    it spawning a CLI, so a reaction to the reply could not begin until the turn
+    was over and would land half a minute after the thing it was about. Started
+    here it runs while the assistant writes, and the bubble usually appears
+    before the answer has finished.
 
-    Why the app says it at all: the tool is deferred in this CLI, so a remark
-    costs the model a `ToolSearch` round trip and on a routine turn it declines.
-    See `pet-remark.ts`. The words are the pet's own authored phrases, so a pet
-    with none stays quiet rather than saying something in nobody's voice.
+    Not awaited, and deliberately not part of the turn: nothing about the
+    conversation waits on it, and a failure is a pet that stayed quiet.
+
+    `mayRemark` was rolled once above — cooldown and odds together — so most
+    turns never reach this at all.
   */
-  const deliverPetRemark = () => {
-    if (!petVoice.mayRemark || !mayRemark(sessionId)) return;
-
-    const remark = composeRemark({
-      // Which group suits what just happened — approval, done, a problem, or
-      // simply having been told something. See `pickKind`.
-      lines: petVoice.lines[pickKind(prompt, lastAssistantText)],
-      phrases: petVoice.phrases,
-      // The user's own words, not the expanded prompt: matching against a slash
-      // command's expansion would score the app's boilerplate, not the request.
-      message: prompt,
-      roll: Math.random(),
-    });
-    if (!remark) return;
-
+  if (petVoice.mayRemark) {
     recordRemark(sessionId);
-    send({
-      id: `pet-remark-${randomUUID()}`,
-      sessionId,
-      timestamp: new Date().toISOString(),
-      kind: 'pet_remark',
-      role: 'assistant',
-      content: remark,
+    void reactTo(
+      { name: petVoice.name, description: petVoice.description, persona: petVoice.persona },
+      // The user's own words, not the expanded prompt: a slash command's
+      // expansion is app boilerplate and the pet would be reacting to us.
+      prompt,
+    ).then((remark) => {
+      if (!remark) return;
+      send({
+        id: `pet-remark-${randomUUID()}`,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        kind: 'pet_remark',
+        role: 'assistant',
+        content: remark,
+      });
+    }).catch(() => {
+      // A pet that says nothing. Never worth surfacing.
     });
-  };
+  }
+
+
 
   // The mode this turn runs in is the mode the conversation is in, so a
   // client that reconnects — or a new one that opens the same chat — can be
@@ -586,12 +576,14 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       // authenticating back into our own HTTP API.
       mcpServers: {
         'tails-appearance': appearanceMcpServer,
-        'tails-preview': previewMcpServer,
-        'tails-devserver': devServerMcpServer,
-        // Built per turn: the remark tool publishes to *this* run, and it only
-        // exists at all when the conversation's pet is chatty. A tool the model
-        // cannot see is a stronger guarantee than one it is asked not to use.
-        'tails-pet': createPetVoiceServer(sessionId, petVoice.mayRemark),
+        'tails-preview': createPreviewServer(sessionId),
+        'tails-devserver': createDevServerServer(sessionId),
+        // Only the persona tool now — "give Sonic a personality" is worth being
+        // able to ask for in any conversation. The pet's *remark* used to be a
+        // tool here and is generated outside the turn instead: it cost the model
+        // a `ToolSearch` round trip it reasonably declined, and a canned
+        // fallback read as canned. See `pet-reaction.ts`.
+        'tails-pet': createPetVoiceServer(sessionId),
       },
       // Every appearance tool runs unprompted; see the comment on the constant
       // for why the two that used to be gated no longer are. What guards the
@@ -602,11 +594,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         ...APPEARANCE_ALLOWED_TOOLS,
         ...PREVIEW_ALLOWED_TOOLS,
         ...DEVSERVER_ALLOWED_TOOLS,
-        // The persona tool is always allowed — "give Sonic a personality" is a
-        // thing to be able to ask for in any conversation. The remark tool is
-        // in the list only when the pet is chatty, and only registered then
-        // either, so this pairs with the server above.
-        ...(petVoice.mayRemark ? PET_VOICE_ALLOWED_TOOLS : PET_PERSONA_ALLOWED_TOOLS),
+        ...PET_PERSONA_ALLOWED_TOOLS,
       ],
       // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
       // each turn, so any live mode change would be discarded anyway. The same
@@ -681,36 +669,6 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
           Both halves have to go. Suppressing the call and leaving the result is
           a transcript with an answer to a question nobody asked.
         */
-        const isToolRow = normalized.kind === 'tool_use' || normalized.kind === 'tool_result';
-        const isPetRemark = isToolRow && normalized.toolName === PET_SAY_TOOL;
-
-        /*
-          And the lookup that fetched it, which was the actual leak.
-
-          MCP tools are *deferred* in this CLI: the model is given their names
-          and has to load the schema with `ToolSearch` before it can call one. So
-          suppressing `pet_say` was not enough — the transcript still showed
-
-              ToolSearch
-              mcp__tails-pet__pet_say
-
-          right above the reply, which is the machinery on display with the
-          decoration hidden. Measured in the running app, not reasoned about.
-
-          Matched on the tool's own name appearing in the query, so a `ToolSearch`
-          the model made for any other reason is left alone. It is the narrowest
-          test available: nothing else in the app is called `tails-pet`.
-        */
-        const isPetLookup = isToolRow
-          && normalized.toolName === 'ToolSearch'
-          && JSON.stringify(normalized.toolInput ?? '').includes('tails-pet');
-
-        if (isPetRemark || isPetLookup) continue;
-
-        if (normalized.kind === 'text' && normalized.role === 'assistant' && normalized.content) {
-          lastAssistantText = normalized.content.slice(-400);
-        }
-
         send(normalized);
       }
 
@@ -718,7 +676,6 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         // The turn is over on screen here, not when the iterator ends. What
         // follows is only the suggestion, and it must not hold the spinner.
         finishTurn();
-        deliverPetRemark();
         drainTimer = setTimeout(() => abortController.abort(), SUGGESTION_DRAIN_MS);
       }
     }

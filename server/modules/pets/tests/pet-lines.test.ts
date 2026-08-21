@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { emptyBank, parseBank, pickKind, readBank } from '@/modules/pets/pet-lines.js';
+import { emptyBank, parseBank, readBank, remarkDue } from '@/modules/pets/pet-lines.js';
 
 /**
  * The bank has to survive whatever a small model sends back.
@@ -14,16 +14,20 @@ import { emptyBank, parseBank, pickKind, readBank } from '@/modules/pets/pet-lin
 
 describe('parseBank', () => {
   it('reads a plain object', () => {
+    assert.deepEqual(parseBank('{"idle":["zzz","hmm"]}').idle, ['zzz', 'hmm']);
+  });
+
+  it('ignores groups that no longer exist', () => {
+    // Four reaction groups used to live here. A bank written by that build must
+    // not resurrect them, and its idle lines are still worth keeping.
     const bank = parseBank('{"approve":["neat!"],"idle":["zzz"]}');
-    assert.deepEqual(bank.approve, ['neat!']);
+    assert.deepEqual(Object.keys(bank), ['idle']);
     assert.deepEqual(bank.idle, ['zzz']);
-    // Absent groups are empty, never missing.
-    assert.deepEqual(bank.problem, []);
   });
 
   it('reads it out of a fence or a sentence', () => {
-    const bank = parseBank('Sure! ```json\n{"done":["boom"]}\n``` hope that helps');
-    assert.deepEqual(bank.done, ['boom']);
+    const bank = parseBank('Sure! ```json\n{"idle":["boom"]}\n``` hope that helps');
+    assert.deepEqual(bank.idle, ['boom']);
   });
 
   it('is empty rather than thrown for nonsense', () => {
@@ -32,11 +36,8 @@ describe('parseBank', () => {
     assert.deepEqual(parseBank(''), emptyBank());
   });
 
-  it('keeps a partial bank rather than discarding the call', () => {
-    // Four keys out of five is a working pet, and the call cost half a minute.
-    const bank = parseBank('{"approve":["a"],"done":["b"],"explain":["c"],"problem":["d"]}');
-    assert.equal(bank.approve.length, 1);
-    assert.equal(bank.idle.length, 0);
+  it('is empty rather than broken when the one group is missing', () => {
+    assert.deepEqual(parseBank('{"something":["a"]}'), emptyBank());
   });
 
   /*
@@ -69,7 +70,7 @@ describe('readBank', () => {
     // An unknown key from a newer or hand-edited payload is dropped rather than
     // carried into code that does not expect it.
     const bank = readBank({ idle: ['zzz'], nonsense: ['x'] });
-    assert.deepEqual(Object.keys(bank).sort(), ['approve', 'done', 'explain', 'idle', 'problem']);
+    assert.deepEqual(Object.keys(bank), ['idle']);
     assert.deepEqual(bank.idle, ['zzz']);
   });
 
@@ -78,25 +79,11 @@ describe('readBank', () => {
   });
 });
 
-describe('pickKind', () => {
-  it('reads a request off the user, not the reply', () => {
-    // The "neat idea!" case: the pet reacts to being asked, before anything has
-    // happened, so the signal has to be the user's own words.
-    assert.equal(pickKind('add a retry loop', 'I will add that.'), 'approve');
-    assert.equal(pickKind('can you fix the parser', 'Sure.'), 'approve');
-  });
-
-  it('puts a problem ahead of everything else', () => {
-    // A turn can be several of these at once; the most specific true thing is
-    // the most interesting one to react to.
-    assert.equal(pickKind('add a retry loop', 'That failed with an error.'), 'problem');
-  });
-
-  it('notices something getting done', () => {
-    assert.equal(pickKind('what about the tests', 'All 464 are passing now.'), 'done');
-  });
-
-  it('falls back to having been told something', () => {
-    assert.equal(pickKind('what is a semaphore', 'It is a counter that limits access.'), 'explain');
+describe('the odds', () => {
+  it('is a flourish, not a certainty', () => {
+    // Also the cost control, now that a reaction is a model call.
+    assert.equal(remarkDue(0), true);
+    assert.equal(remarkDue(0.69), true);
+    assert.equal(remarkDue(0.7), false);
   });
 });

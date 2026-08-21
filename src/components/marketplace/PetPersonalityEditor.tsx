@@ -39,16 +39,20 @@ type PetChatMode = 'none' | 'chatty' | 'override';
  * a programmer and "when you ask for something" is a name for whoever is editing
  * the lines.
  */
-const LINE_GROUPS: { id: string; label: string; hint: string }[] = [
-  { id: 'approve', label: 'When you ask for something', hint: 'Neat idea!' },
-  { id: 'done', label: 'When it gets done', hint: 'Nailed it.' },
-  { id: 'explain', label: 'When something is explained', hint: 'Huh, got it.' },
-  { id: 'problem', label: 'When something goes wrong', hint: 'Ouch.' },
-  { id: 'idle', label: 'Muttering to himself', hint: 'zzz...' },
-];
-
 /** One line per row in the textarea, which is the only sane way to edit a list. */
 const NEWLINE = String.fromCharCode(10);
+
+const LINE_GROUPS: { id: string; label: string; hint: string }[] = [
+  /*
+    One group, where there were five.
+
+    The other four were reactions — approval, done, explained, problem — and a
+    canned reaction reads as canned the second time it appears. Those are written
+    fresh from the actual exchange now, so the only thing worth keeping in advance
+    is the muttering: there is nothing to react to, so nothing to generate from.
+  */
+  { id: 'idle', label: 'Muttering to itself', hint: 'zzz...' },
+];
 
 const countLines = (lines: Record<string, string[]>): number =>
   Object.values(lines).reduce((total, group) => total + group.filter((l) => l.trim()).length, 0);
@@ -57,22 +61,22 @@ const CHAT_MODES: { id: PetChatMode; label: string; blurb: string }[] = [
   {
     id: 'none',
     label: 'Quiet',
-    blurb: 'He walks about and reacts to being picked up, and never says anything.',
+    blurb: 'It walks about and reacts to being picked up, and never says anything.',
   },
   {
     id: 'chatty',
     label: 'Chimes in',
-    blurb: 'After a reply he sometimes says one of his lines below, in a bubble above him. Never in the transcript, and never anything you need. Give him some lines or he stays quiet.',
+    blurb: 'After a reply it sometimes says something in character, in a bubble above it. Written fresh each time from what actually happened. Never in the transcript, and never anything you need.',
   },
   {
     id: 'override',
     label: 'In character',
-    blurb: 'Replies in his conversations are written in his voice. Only the voice — he still uses every tool and stays accurate. This one outranks the general tone in your own conversation instructions; your specific rules still bind him.',
+    blurb: 'Replies in this pet’s conversations are written in its voice. Only the voice — it still uses every tool and stays accurate. This outranks the general tone in your own conversation instructions; your specific rules still apply.',
   },
 ];
 
 /**
- * A persona from what the app already knows about him.
+ * A persona from what the app already knows about the pet.
  *
  * Composed, not generated, and that is the honest trade: instant, free, needs no
  * network, and it is a starting point rather than a character. The description is
@@ -166,18 +170,18 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
       </div>
 
       {/*
-        How much of a personality he is, above the two decorative settings.
+        How much of a personality the pet is, above the two decorative settings.
 
         Three options, and the third differs in kind: the first two change what
         the pet does, and "in character" changes what the *assistant* sounds
-        like in every reply in conversations he lives in. That is a large thing
+        like in every reply in conversations it lives in. That is a large thing
         to hand somebody from a pet panel, so it is described in terms of what it
         does to the answers, and it shows the text that will be sent rather than
         hiding it behind a label.
       */}
       <div className="space-y-1.5">
         <span className="block text-[11px] font-medium text-muted-foreground">
-          How much he talks
+          How much it talks
         </span>
         {CHAT_MODES.map((option) => (
           <button
@@ -206,7 +210,7 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-[11px] font-medium text-muted-foreground">
-              What he says
+              What it mutters
               {countLines(lines) > 0 ? ` — ${countLines(lines)} lines` : ''}
             </span>
             <button
@@ -219,7 +223,7 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
                   .then((next) => {
                     setLines(next.lines ?? {});
                     if (countLines(next.lines ?? {}) === 0) {
-                      setError('Nothing came back. Try again, or write his lines yourself.');
+                      setError('Nothing came back. Try again, or write the lines yourself.');
                     }
                   })
                   .catch((failure: unknown) => {
@@ -231,14 +235,14 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
             >
               {writing
                 ? <><Loader2 className="size-3 animate-spin" aria-hidden="true" /> Writing…</>
-                : <><Sparkles className="size-3" aria-hidden="true" /> Write his lines</>}
+                : <><Sparkles className="size-3" aria-hidden="true" /> Write its lines</>}
             </button>
           </div>
 
           {countLines(lines) === 0 ? (
             <p className="text-[11px] text-muted-foreground">
-              He has nothing to say yet. Have them written for him, or type your own below — one per
-              line. He stays quiet until there is something here.
+              Nothing to mutter yet. Have some written, or type your own below — one per line.
+              Reactions to your work are written fresh each time and do not need this.
             </p>
           ) : null}
 
@@ -262,8 +266,7 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
           ))}
 
           <p className="text-[11px] text-muted-foreground">
-            He picks one when it fits what just happened, about seven times in ten, and not twice
-            within a minute. The last group is what he mutters to himself while you read.
+            Said to itself every couple of minutes while a chat is open and nothing is happening.
           </p>
         </div>
       ) : null}
@@ -272,7 +275,7 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-[11px] font-medium text-muted-foreground">
-              How he speaks
+              How it speaks
             </span>
             <button
               type="button"
@@ -297,9 +300,9 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
           />
 
           <p className="text-[11px] text-muted-foreground">
-            Sent with every message in conversations he lives in, so keep it short. You can also ask
+            Sent with every message in conversations it lives in, so keep it short. You can also ask
             in chat — &ldquo;write {pet.definition.displayName} a persona&rdquo; — and it lands here.
-            {!persona.trim() ? ' Left empty, he is played from his name and description.' : ''}
+            {!persona.trim() ? ' Left empty, it is played from its name and description.' : ''}
           </p>
         </div>
       ) : null}

@@ -31,6 +31,7 @@ const voice = (over: Partial<PetTurnVoice> = {}): PetTurnVoice => ({
   // Default true so a test about *wording* does not have to know about the
   // cooldown; the cooldown gets its own tests below.
   mayRemark: true,
+  lines: { idle: [] },
   ...over,
 });
 
@@ -62,21 +63,16 @@ describe('the system-prompt section', () => {
     assert.equal(formatPetVoice(voice({ mode: 'none' })), '');
   });
 
-  it('asks for the remark and keeps it invisible', () => {
-    const text = formatPetVoice(voice({ mode: 'chatty' }));
-    assert.match(text, /pet_say/);
-    // The two instructions that keep a flourish from becoming a channel.
-    assert.match(text, /never carry anything the user needs/i);
-    assert.match(text, /do not mention/i);
-  });
-
   /*
-    The cadence lives in the app, so the briefing has to disappear with the tool.
+    A chatty pet says nothing to the model at all, and that is the design.
 
-    Describing a tool the model has not been given is how a turn ends with an
-    apology about being unable to do something nobody asked for.
+    It used to describe a `pet_say` tool. The tool is gone — deferred tools cost
+    a round trip the model declined, so it almost never fired — and the reaction
+    is generated after the turn instead. So "chimes in" is now free as far as the
+    system prompt is concerned, and this is the assertion that it stays free.
   */
-  it('says nothing at all on a turn inside the cooldown', () => {
+  it('adds nothing to the prompt for a chatty pet', () => {
+    assert.equal(formatPetVoice(voice({ mode: 'chatty' })), '');
     assert.equal(formatPetVoice(voice({ mode: 'chatty', mayRemark: false })), '');
   });
 
@@ -87,12 +83,10 @@ describe('the system-prompt section', () => {
     assert.match(text, /as Sonic/);
   });
 
-  it('names the pet and quotes his description in both talking modes', () => {
-    for (const mode of ['chatty', 'override'] as const) {
-      const text = formatPetVoice(voice({ mode }));
-      assert.match(text, /Sonic/);
-      assert.match(text, /fast blue hedgehog/);
-    }
+  it('names the pet and quotes its description', () => {
+    const text = formatPetVoice(voice({ mode: 'override' }));
+    assert.match(text, /Sonic/);
+    assert.match(text, /fast blue hedgehog/);
   });
 
   it('survives a pet with no description', () => {

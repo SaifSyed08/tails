@@ -195,6 +195,7 @@ export default function App() {
 
           <main className="flex min-w-0 flex-1 flex-col">
             <Header
+              sessionId={sessionId}
               sessionTitle={view === 'marketplace' ? 'Marketplace' : sessionTitle}
               cwd={cwd}
               sidebarCollapsed={sidebarCollapsed}
@@ -236,7 +237,7 @@ export default function App() {
                 renders nothing until a tool opens it, so it costs no layout
                 when unused.
               */}
-              <PreviewPane />
+              <PreviewPane sessionId={sessionId} />
             </div>
           </main>
         </div>

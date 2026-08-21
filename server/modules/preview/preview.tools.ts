@@ -41,17 +41,29 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '0.0.0.0']);
 
 export type PreviewTarget = { url: string; title: string } | null;
 
-let current: PreviewTarget = null;
+/**
+ * What each conversation is previewing.
+ *
+ * A map rather than one value, and that was a bug rather than a refinement: the
+ * pane was global, so a Pong game started in one chat showed up beside every
+ * other conversation in the app. A preview belongs to the work that produced it
+ * — it is the output of *this* conversation's dev server — so it is keyed by the
+ * conversation, and opening a different chat shows that chat's preview or none.
+ */
+const previews = new Map<string, NonNullable<PreviewTarget>>();
 
-/** What the renderer should be showing, for a client that connects late. */
-export const readPreview = (): PreviewTarget => current;
+/** What this conversation should be showing, for a client that connects late. */
+export const readPreview = (sessionId: string): PreviewTarget =>
+  previews.get(sessionId) ?? null;
 
-function publish(target: PreviewTarget): void {
-  current = target;
+function publish(sessionId: string, target: PreviewTarget): void {
+  if (target) previews.set(sessionId, target);
+  else previews.delete(sessionId);
+
   appBroadcast.publish(createMessage('preview_changed', 'app', {
     // Carried as JSON rather than as new top-level fields: the wire protocol is
     // deliberately small, and a closed preview has to be expressible.
-    content: JSON.stringify(target),
+    content: JSON.stringify({ sessionId, target }),
   }));
 }
 
@@ -88,16 +100,19 @@ export function readLocalUrl(raw: string): string | null {
  * way. Returns false when the address is refused, so the caller can say so
  * rather than claim a pane that never opened.
  */
-export function openPreviewFor(url: string, title?: string): boolean {
+export function openPreviewFor(sessionId: string, url: string, title?: string): boolean {
   const safe = readLocalUrl(url);
   if (!safe) return false;
 
   const parsed = new URL(safe);
-  publish({ url: safe, title: title?.trim() || `${parsed.hostname}:${parsed.port || '80'}` });
+  publish(sessionId, {
+    url: safe,
+    title: title?.trim() || `${parsed.hostname}:${parsed.port || '80'}`,
+  });
   return true;
 }
 
-const previewOpenTool = tool(
+const previewOpenTool = (sessionId: string) => tool(
   'preview_open',
   [
     'Show a locally running page in a preview pane beside the conversation.',
@@ -134,7 +149,10 @@ const previewOpenTool = tool(
     }
 
     const parsed = new URL(safe);
-    publish({ url: safe, title: title?.trim() || `${parsed.hostname}:${parsed.port || '80'}` });
+    publish(sessionId, {
+      url: safe,
+      title: title?.trim() || `${parsed.hostname}:${parsed.port || '80'}`,
+    });
 
     return {
       content: [{
@@ -145,12 +163,12 @@ const previewOpenTool = tool(
   },
 );
 
-const previewCloseTool = tool(
+const previewCloseTool = (sessionId: string) => tool(
   'preview_close',
   'Close the preview pane. The user can also close it themselves, so do not call this to tidy up after yourself — only when the thing being previewed is genuinely gone, such as a server you have stopped.',
   {},
   async () => {
-    publish(null);
+    publish(sessionId, null);
     return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, closed: true }) }] };
   },
 );
@@ -168,8 +186,15 @@ export const PREVIEW_ALLOWED_TOOLS = [
   'mcp__tails-preview__preview_close',
 ];
 
-export const previewMcpServer = createSdkMcpServer({
+/**
+ * Built per turn, because a preview belongs to a conversation.
+ *
+ * The tools have to know which chat they were called from and there is no way to
+ * ask, so the id is baked in when the server is constructed — the same shape as
+ * the pet's remark tool, and for the same reason.
+ */
+export const createPreviewServer = (sessionId: string) => createSdkMcpServer({
   name: 'tails-preview',
   version: '1.0.0',
-  tools: [previewOpenTool, previewCloseTool],
+  tools: [previewOpenTool(sessionId), previewCloseTool(sessionId)],
 });

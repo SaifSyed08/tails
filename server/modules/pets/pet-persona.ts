@@ -1,5 +1,4 @@
-import { emptyBank, type LineBank } from '@/modules/pets/pet-lines.js';
-import { remarkDue } from '@/modules/pets/pet-remark.js';
+import { emptyBank, remarkDue, type LineBank } from '@/modules/pets/pet-lines.js';
 import { mayRemark } from '@/modules/pets/pet-voice.tools.js';
 import { readChatMode, type PetChatMode } from '@/modules/pets/pet-spec.js';
 import { petsService } from '@/modules/pets/pets.service.js';
@@ -31,25 +30,16 @@ export type PetTurnVoice = {
    */
   mayRemark: boolean;
   /**
-   * The pet's own written lines, by situation.
+   * The pet's prebuilt lines.
    *
-   * These are what he actually says. The remark tool is still offered, and a
-   * model that uses it wins — but it rarely does, and the bank is why the
-   * feature works anyway. See `pet-lines.ts`.
+   * Only the idle group now: reactions are generated live from the actual
+   * exchange, and a canned reaction read as canned. See `pet-lines.ts`.
    */
   lines: LineBank;
-  /**
-   * His thinking phrases, as a last resort.
-   *
-   * Older pets have these and no bank. They were written for a spinner rather
-   * than for a reaction, so they read a little oddly as commentary, which is
-   * exactly why they are third in line rather than first.
-   */
-  phrases: string[];
 };
 
 const SILENT: PetTurnVoice = {
-  mode: 'none', name: '', description: '', persona: '', mayRemark: false, lines: emptyBank(), phrases: [],
+  mode: 'none', name: '', description: '', persona: '', mayRemark: false, lines: emptyBank(),
 };
 
 /**
@@ -85,42 +75,21 @@ export function readPetVoice(sessionId: string): PetTurnVoice {
       */
       mayRemark: mode === 'chatty' && mayRemark(sessionId) && remarkDue(Math.random()),
       lines: pet.lines,
-      phrases: pet.thinkingPhrases ?? [],
     };
   } catch {
     return SILENT;
   }
 }
 
-/**
- * The briefing for a pet who comments.
- *
- * Deliberately short. It is competing for attention with the Claude Code preset
- * and this app's own appearance briefing, and every extra sentence here is a
- * sentence of pressure toward doing the decorative thing.
- *
- * It *encourages* the remark rather than offering it, and that only became safe
- * once the cadence moved into the app: this briefing is only assembled on turns
- * where the cooldown has elapsed, so the turns that see it are exactly the turns
- * where a remark is wanted. The earlier version called it "entirely optional",
- * and the model duly declined on an ordinary question — the right answer to the
- * wrong question, because it was being asked to pace something it cannot see
- * across turns.
- */
-function chattyBriefing(voice: PetTurnVoice): string {
-  return [
-    `The user has a companion on screen called ${voice.name}.`,
-    voice.description ? `He is: ${voice.description}` : '',
-    'Finishing this turn includes one more step: call mcp__tails-pet__pet_say with a short remark in his voice about what just happened. Do it after your reply, as the last thing you do.',
-    // Named explicitly because MCP tools are deferred in this CLI: the model
-    // holds the name and has to fetch the schema before it can call one. Left
-    // unsaid, it reads the round trip as a cost to be avoided and quietly skips
-    // the remark — which is what "chatty" not being chatty turned out to be.
-    'That tool is deferred, so load it with ToolSearch first — that is expected and its cost is accounted for.',
-    'It is decoration and must never carry anything the user needs to know. The application decides which turns get one and it has chosen this turn, so it is not a judgement call about whether a remark is warranted — it is.',
-    'Do not mention the companion, the tool, or the bubble in your reply.',
-  ].filter(Boolean).join(' ');
-}
+/*
+  There is no briefing for a chatty pet, and that is the point.
+
+  There used to be one, describing a `pet_say` tool the model could call at the
+  end of a turn. Both are gone: the tool almost never fired (deferred tools cost
+  a round trip the model declined) and reactions are generated outside the turn
+  instead. So "chimes in" now costs the system prompt exactly nothing, which is
+  a better place to be than a paragraph asking for a flourish.
+*/
 
 /**
  * The briefing for a pet who *is* the voice.
@@ -194,8 +163,8 @@ function overrideBriefing(voice: PetTurnVoice): string {
 
 /** The system-prompt section for this conversation's pet, or nothing. */
 export function formatPetVoice(voice: PetTurnVoice): string {
-  // Silent on a turn inside the cooldown: no tool, so nothing to brief.
-  if (voice.mode === 'chatty') return voice.mayRemark ? chattyBriefing(voice) : '';
+  // Only the mode that changes the reply says anything to the model. A chatty
+  // pet is handled entirely after the turn.
   if (voice.mode === 'override') return overrideBriefing(voice);
   return '';
 }

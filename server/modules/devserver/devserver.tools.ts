@@ -38,7 +38,7 @@ const textResult = (payload: unknown, isError = false) => ({
 const URL_WAIT_MS = 4_000;
 const URL_POLL_MS = 250;
 
-const startTool = tool(
+const startTool = (sessionId: string) => tool(
   'dev_server_start',
   [
     'Start a long-running server — a dev server, a preview build, a static file server, a watcher.',
@@ -77,7 +77,7 @@ const startTool = tool(
       found = detectUrl(current.log);
     }
 
-    const shown = found ? openPreviewFor(found, title) : false;
+    const shown = found ? openPreviewFor(sessionId, found, title) : false;
     const current = readDevServer(started.id);
 
     return textResult({
@@ -138,8 +138,16 @@ export const DEVSERVER_ALLOWED_TOOLS = [
   'mcp__tails-devserver__dev_server_stop',
 ];
 
-export const devServerMcpServer = createSdkMcpServer({
+/**
+ * Built per turn, because starting a server opens this conversation's preview.
+ *
+ * Only `dev_server_start` needs the id — it opens the pane itself once the
+ * server announces a port — but the whole server is constructed per turn rather
+ * than mixing a factory tool with two constants, which would leave the next
+ * person guessing which is which.
+ */
+export const createDevServerServer = (sessionId: string) => createSdkMcpServer({
   name: 'tails-devserver',
   version: '1.0.0',
-  tools: [startTool, statusTool, stopTool],
+  tools: [startTool(sessionId), statusTool, stopTool],
 });

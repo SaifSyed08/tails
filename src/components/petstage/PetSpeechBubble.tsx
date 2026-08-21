@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
+import { useReducedMotion } from '@/shared/ui/Motion';
 
 /**
  * The pet saying something.
@@ -197,7 +198,63 @@ type Props = {
   petWidth: number;
 };
 
+/** Milliseconds per character. Fast enough to finish a short line in a beat. */
+const TYPE_MS = 28;
+
+/**
+ * Reveals a string one character at a time.
+ *
+ * A timer per character rather than a CSS animation, because the width has to
+ * grow with the text and CSS cannot animate to a length it does not know. It
+ * also means the caret and the bubble stay in step for free: they are the same
+ * element growing.
+ *
+ * Restarts whenever the text changes, which is what makes a new remark type
+ * itself rather than appearing whole because the element was reused.
+ */
+function useTyped(text: string): string {
+  const reduced = useReducedMotion();
+
+  /*
+    How much of the current line has been revealed.
+
+    Held with the text it belongs to, and reset during *render* when the text
+    changes rather than in an effect. An effect that calls setState in its body
+    is a second render for a value that was already knowable in the first, and it
+    is the thing this codebase's lint rule exists to prevent. The pattern is used
+    elsewhere here for the same reason.
+  */
+  const [typed, setTyped] = useState(() => ({ text, count: reduced ? text.length : 1 }));
+
+  if (typed.text !== text) setTyped({ text, count: reduced ? text.length : 1 });
+
+  useEffect(() => {
+    if (reduced) return undefined;
+
+    // Every setState below is inside a callback, so none of them run during the
+    // effect body.
+    const timer = window.setInterval(() => {
+      setTyped((current) => {
+        if (current.text !== text) return current;
+        if (current.count >= text.length) {
+          window.clearInterval(timer);
+          return current;
+        }
+        return { text, count: current.count + 1 };
+      });
+    }, TYPE_MS);
+
+    return () => window.clearInterval(timer);
+  }, [text, reduced]);
+
+  // Sliced from the live text, so the very first render after a change shows the
+  // new line's first character rather than the old line's.
+  return text.slice(0, typed.text === text ? typed.count : (reduced ? text.length : 1));
+}
+
 export function PetSpeechBubble({ text, petWidth }: Props) {
+  const shown = useTyped(text);
+
   return (
     <div
       /*
@@ -208,9 +265,16 @@ export function PetSpeechBubble({ text, petWidth }: Props) {
       */
       className="pet-bubble pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5"
       style={{
-        // Wide enough for a sentence, never wider than about three pets, so it
-        // stays something the animal is saying rather than a panel beside him.
-        minWidth: Math.min(petWidth * 1.6, 150),
+        /*
+          As wide as the words and no wider.
+
+          It used to have a minimum width scaled off the sprite, which meant a
+          two-word line sat in the middle of a box built for a sentence. There is
+          no reason for the bubble to know how big the animal is — only how long
+          the line is — so the width is the text's, and the only limit is a
+          ceiling so a long one wraps instead of crossing the chat.
+        */
+        width: 'max-content',
         maxWidth: Math.max(petWidth * 3, 210),
       }}
     >
@@ -221,6 +285,10 @@ export function PetSpeechBubble({ text, petWidth }: Props) {
           // behind it is still faintly there.
           background: 'rgba(255, 255, 255, 0.92)',
           border: '1px solid rgba(0, 0, 0, 0.28)',
+          // A touch of rounding. Square corners were more faithful to the
+          // sprite and read as a dialog box; this is enough to say "balloon"
+          // without becoming a tooltip.
+          borderRadius: 5,
           // Ink, not the theme's foreground. See the note above — the bubble is
           // a voice, and it looks the same whatever the app is wearing.
           color: '#111',
@@ -228,7 +296,28 @@ export function PetSpeechBubble({ text, petWidth }: Props) {
           imageRendering: 'pixelated',
         }}
       >
-        {text}
+        {shown}
+        {/*
+          A caret while it is still typing, so a half-finished line reads as
+          being said rather than as having been cut off. Gone the moment the
+          text is complete — a blinking cursor on a settled bubble is a text
+          field, not speech.
+        */}
+        {shown.length < text.length ? (
+          <span
+            aria-hidden="true"
+            style={{
+              display: 'inline-block',
+              width: '0.5em',
+              marginLeft: 1,
+              background: '#111',
+              // A hair under the line, so it sits on the baseline rather than
+              // spanning the whole line box.
+              height: '0.85em',
+              verticalAlign: '-0.1em',
+            }}
+          />
+        ) : null}
       </div>
 
       {/*
