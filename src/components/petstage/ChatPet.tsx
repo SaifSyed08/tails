@@ -32,6 +32,7 @@ import { onDesktopPetDetails, placeDesktopPetAt } from './desktop-handoff';
 import { PetDetailsPanel } from './PetDetailsPanel';
 import { PetPill } from './PetPill';
 import { advanceMotion, type Bounds, type Motion } from './pet-motion';
+import { collisionSoundEnabled, playCollision } from './pet-sfx';
 import { fpsForState } from './sprite-rate';
 import { useChatActivity } from './useChatActivity';
 import { useDesktopPetAlerts } from './useDesktopPetAlerts';
@@ -859,6 +860,28 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     if (wanderRef.current !== undefined) window.clearTimeout(wanderRef.current);
     if (gestureRef.current !== undefined) window.clearTimeout(gestureRef.current);
   }, []);
+
+  /*
+    The wall, if he just found one.
+
+    `bumped` carries the speed of contact for exactly one frame, so this reads
+    it and does not have to remember anything. Read through a ref rather than an
+    effect dependency because the motion object changes every animation frame:
+    a dependency would run this sixty times a second to do nothing fifty-nine
+    of them.
+  */
+  const bumped = here?.bumped ?? 0;
+  const bumpedRef = useRef(0);
+  useEffect(() => {
+    const previous = bumpedRef.current;
+    bumpedRef.current = bumped;
+    // Rising edge only. A pet resting against a wall reports contact on frame
+    // after frame, and playing a thud for each is a drum roll.
+    if (bumped > 0 && previous === 0 && collisionSoundEnabled()) {
+      // Normalised against a hard throw, which is what MAX_THROW is.
+      playCollision(bumped / MAX_THROW);
+    }
+  }, [bumped]);
 
   // Landing lasts a moment. Held in the motion rather than measured at render
   // time, because a component may re-render for any reason at all and "how long

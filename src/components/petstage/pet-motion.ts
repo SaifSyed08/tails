@@ -70,6 +70,15 @@ export type Motion = {
   gesture: PetStateName | null;
   /** 0 at the size he was carried at, 1 at the size he stands at. */
   grow: number;
+  /**
+   * Speed at which he just hit a wall, or 0.
+   *
+   * Set on the single frame of contact and cleared on the next, the same way
+   * `squash` marks a landing. Carried as the *speed* rather than a boolean
+   * because the sound has to scale with the impact — every bounce sounding
+   * identical reads as a bug rather than as a room.
+   */
+  bumped?: number;
   /** True while a hand is holding him: no gravity, no walking. */
   carried: boolean;
   /** True for a moment after touching down, for the landing squash. */
@@ -142,11 +151,17 @@ export function advanceMotion(
     next.x = motion.x + motion.vx * elapsed;
 
     // The walls. He is in a room, so a throw ends against one of them.
+    // `bumped` records the speed of contact for whatever wants to react to it;
+    // it is per-frame, so it has to be cleared on every other path or the
+    // consumer sees one bounce as a continuous stream of them.
+    next.bumped = 0;
     if (next.x <= 0) {
       next.x = 0;
+      next.bumped = Math.abs(motion.vx);
       next.vx = Math.abs(motion.vx) * BOUNCE;
     } else if (next.x >= bounds.maxX) {
       next.x = bounds.maxX;
+      next.bumped = Math.abs(motion.vx);
       next.vx = -Math.abs(motion.vx) * BOUNCE;
     } else {
       next.vx = motion.vx;

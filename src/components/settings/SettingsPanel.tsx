@@ -16,6 +16,10 @@ import {
 } from '@/components/settings/default-voice';
 import { useSpeech } from '@/components/voice/useSpeech';
 import { VoiceSettings } from '@/components/voice/VoiceSettings';
+import {
+  collisionSoundEnabled,
+  setCollisionSoundEnabled,
+} from '@/components/petstage/pet-sfx';
 import { api, type ThemeSummary } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Reveal, Stagger, useReducedMotion } from '@/shared/ui/Motion';
@@ -46,6 +50,7 @@ const SECTIONS = [
   // to disambiguate rather than paper over.
   { id: 'settings-voice-input', label: 'Voice' },
   { id: 'settings-voice', label: 'Default voice' },
+  { id: 'settings-pets', label: 'Pets' },
   { id: 'settings-startup', label: 'Startup' },
 ] as const;
 
@@ -562,6 +567,9 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
   const [introDisabled, setIntroDisabled] = useState(
     () => localStorage.getItem(INTRO_DISABLED_KEY) === '1',
   );
+  // Read once on open rather than watched: it is only ever changed from this
+  // panel, so there is nothing else to stay in step with.
+  const [collisionSound, setCollisionSound] = useState(collisionSoundEnabled);
 
   // Reloads are requested by bumping a token rather than by calling a fetcher
   // directly, which keeps every state write inside a promise callback instead
@@ -835,6 +843,34 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
             </div>
 
             <DefaultVoiceControl />
+
+            <section id="settings-pets" className="space-y-2 border-t border-border pt-5">
+              <h3 className="text-sm font-semibold">Pets</h3>
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={collisionSound}
+                  onChange={(event) => {
+                    setCollisionSound(event.target.checked);
+                    setCollisionSoundEnabled(event.target.checked);
+                  }}
+                  className="mt-0.5 size-4 accent-primary"
+                />
+                <span>
+                  <span className="block text-sm">Sound when a pet hits a wall</span>
+                  {/*
+                    Off by default, and the copy says why rather than leaving it
+                    to be discovered: this one fires on bounces the user did not
+                    aim, which is the kind of noise people switch off once and
+                    never switch back on.
+                  */}
+                  <span className="block text-xs text-muted-foreground">
+                    A soft thud when a thrown pet reaches the edge of the chat, louder for a
+                    harder throw. Off by default, because it happens without being asked for.
+                  </span>
+                </span>
+              </label>
+            </section>
 
             <section id="settings-startup" className="space-y-2 border-t border-border pt-5">
               <h3 className="text-sm font-semibold">Startup</h3>
