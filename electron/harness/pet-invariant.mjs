@@ -399,6 +399,69 @@ app.whenReady().then(async () => {
   allPassed = healed && allPassed;
   await run('and he is usable after the page had been out of step');
 
+  /*
+   * 17. He must not be dropped while he is being held.
+   *
+   * Every path above asks whether the window is usable *at a moment*. This one
+   * asks whether it stays usable while the app carries on talking to it, which
+   * is a different question and the one behind "he appears but I cannot drag him
+   * nor click his buttons".
+   *
+   * `applyVisibility` runs for every reason the pet might be on screen, and the
+   * renderer produces a great many -- a measured session had 149 of them, 13
+   * landing on a window that had never stopped being visible. Each one used to
+   * send the page a resync, whose entire purpose is to make it forget that the
+   * pointer is on the pet. So a hover was cancelled, the pill closed and a drag
+   * died, every couple of seconds, on a pet that was demonstrably "usable" by
+   * every check above.
+   */
+  {
+    /*
+      Counted, not hovered.
+
+      Two earlier versions of this tried to establish a real hover and then
+      assert it survived, and both measured the harness instead of the fix: the
+      shell's poll reads the *actual* cursor, which in a test is not on the pet,
+      so it is correct to take the mouse back and the page is correctly told so.
+      A test cannot hold a hover it does not own.
+
+      What the fix changed is narrower and directly countable: whether showing a
+      window that was never hidden sends the page a reset. So that is what is
+      counted -- and the other half is asserted too, because a reset that stops
+      arriving when it *is* needed would be a worse bug than the one being
+      fixed.
+    */
+    const sent = [];
+    const realSend = win.webContents.send.bind(win.webContents);
+    win.webContents.send = (channel, ...rest) => { sent.push(channel); return realSend(channel, ...rest); };
+
+    /*
+      Settled first. The check before this one leaves the window interactive,
+      and the poll is then right to take the mouse back and say so -- which is a
+      resync this test must not count, because it is the mechanism working. One
+      poll interval of quiet separates "the shell noticed the cursor left" from
+      "showing him reset him".
+    */
+    await wait(700);
+
+    sent.length = 0;
+    for (let i = 0; i < 4; i += 1) { pet.setPetSuppressed(false); await wait(60); }
+    const spurious = sent.filter((c) => c === 'pet:resync').length;
+
+    sent.length = 0;
+    pet.setPetSuppressed(true);
+    await wait(150);
+    pet.setPetSuppressed(false);
+    await wait(150);
+    const wanted = sent.filter((c) => c === 'pet:resync').length;
+
+    win.webContents.send = realSend;
+
+    const ok = spurious === 0 && wanted >= 1;
+    console.log(`${ok ? 'ok  ' : 'FAIL'}  re-showing a visible pet does not reset him (${spurious} spurious, ${wanted} after a real hide)`);
+    allPassed = ok && allPassed;
+  }
+
   console.log(allPassed ? '\nINVARIANT HOLDS on every path' : '\nINVARIANT BROKEN');
   pet.destroyPetWindow(); server.close(); app.exit(allPassed ? 0 : 1);
 });

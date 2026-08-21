@@ -714,14 +714,43 @@ function applyReportedSize() {
  * it. Skipping the reset to protect a live carry is what left the page carrying
  * a pet that had been put down minutes ago.
  */
-function makeUsable() {
+function makeUsable(fromHidden) {
   if (!isAlive()) return;
 
+  // Unconditional, both of them. They are idempotent and they are the half of
+  // the invariant that has to hold continuously rather than at a moment.
   assertWindowState();
-  interactive = false;
-  petWindow.setIgnoreMouseEvents(true, { forward: true });
   startWatchdog();
 
+  /*
+   * And the rebuild only when there is something to rebuild.
+   *
+   * This used to run on every call, on the reasoning that making him usable is
+   * cheap and doing it *sometimes* was what cost four rounds of bugs. The first
+   * half of that is wrong: a resync is not free, it is a **reset**, and its job
+   * is to make the page forget that the pointer is on the pet.
+   *
+   * `applyVisibility` is called for every reason the pet might need to be on
+   * screen, and the renderer produces a lot of them -- a measured session had
+   * 149 calls, 13 of which reset a window that had never stopped being visible.
+   * Each of those arrives while the user may be hovering him, and takes the
+   * window click-through, closes the pill and cancels the gesture in progress.
+   * Do that every couple of seconds and the pet is not unusable in the sense of
+   * a stuck flag; he is unusable in the sense that he keeps dropping you.
+   *
+   * A window that was never hidden cannot have gone stale *from* being hidden,
+   * which is the only thing this reset repairs. And staleness by any other
+   * route now heals on the next poll by itself -- see `setPointerOver` in the
+   * page, which answers the probe authoritatively. That is what makes it safe
+   * to stop firing this defensively: recovery stopped depending on it.
+   */
+  if (!fromHidden) {
+    traceState('already-usable');
+    return;
+  }
+
+  interactive = false;
+  petWindow.setIgnoreMouseEvents(true, { forward: true });
   petWindow.webContents.send('pet:resync', { carrying: carryIsLive() });
   traceState('made-usable');
 }
@@ -764,8 +793,13 @@ function assertWindowState() {
  */
 function showPetWindow() {
   if (!isAlive()) return;
-  if (!petWindow.isVisible()) petWindow.showInactive();
-  makeUsable();
+
+  // Asked before the show, because it is the question `makeUsable` needs
+  // answering: was he actually away, or is this the tenth call in a row about a
+  // window that has been on screen the whole time.
+  const fromHidden = !petWindow.isVisible();
+  if (fromHidden) petWindow.showInactive();
+  makeUsable(fromHidden);
 }
 
 function applyVisibility() {
@@ -872,7 +906,19 @@ function installIpc() {
   ipcInstalled = true;
 
   ipcMain.on('pet:visibility', (_event, payload) => {
-    hasPet = Boolean(payload?.hasPet);
+    const next = Boolean(payload?.hasPet);
+    /*
+     * Only when it changed.
+     *
+     * The page announces this whenever it re-renders a pet, which is more often
+     * than the pet actually changes -- and a report that says what the shell
+     * already knows used to run the whole show path anyway. Cutting it here is
+     * cutting the loudest source of the resets described in `makeUsable`, at the
+     * point where the redundancy is obvious.
+     */
+    if (next === hasPet) return;
+
+    hasPet = next;
     traceState('page-reported-has-pet');
     applyVisibility();
   });
