@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import type { InstalledPet } from '@/components/marketplace';
+import { claimDesktop, releaseDesktopClaim } from '@/components/marketplace/desktop-claim';
 import { hideDesktopPet, refreshDesktopPet } from '@/components/marketplace/desktop-pet';
 
 import {
@@ -69,6 +70,10 @@ export function PetSettingsDialog({ pet, sessionId, inChat = false, onClose, onC
       first is what left a pet who was active, correct, and invisible.
     */
     hideDesktopPet(false);
+    // Three, in fact: the third is the record that this was a decision, without
+    // which opening the conversation he belongs to suppresses him again and for
+    // good. See `desktop-claim.ts`.
+    claimDesktop(pet.definition.id);
     void activatePet(pet.definition.id)
       .then(() => { refreshDesktopPet(); onChanged?.(); })
       .catch(() => {});
@@ -80,7 +85,9 @@ export function PetSettingsDialog({ pet, sessionId, inChat = false, onClose, onC
     void assignPetToSession(sessionId, pet.definition.id)
       .then(() => {
         // He is in a conversation now, so the desktop copy of him should not
-        // also be standing outside it.
+        // also be standing outside it -- and the desktop is no longer where he
+        // lives, which is the other half of the same statement.
+        releaseDesktopClaim(pet.definition.id);
         if (pet.active) return clearActivePet(pet.definition.id).catch(() => {});
         return undefined;
       })

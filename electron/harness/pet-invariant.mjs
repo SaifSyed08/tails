@@ -19,6 +19,20 @@
  * show the pet appears, add a case here; you should not have to work out which
  * of the eight conditions it might break.
  *
+ * ## When this is not enough
+ *
+ * This covers paths it knows about. For a report that arrives by a route not
+ * listed here, the shell can be made to write down what it believed, which is
+ * how the pill's-X-then-handoff case below was finally pinned to a flag rather
+ * than guessed at:
+ *
+ *     TAILS_PET_TRACE=/some/where/pet-trace.jsonl npm run desktop
+ *
+ * One JSONL line per state change -- see `pet-trace.js`. Pair it with the
+ * page's own published beliefs (the `data-` attributes on `#pet`, written by
+ * `publishState` in `desktop-window.ts`) and both halves of any "visible but
+ * unusable" report can be read side by side instead of argued about.
+ *
  * ## What it needs
  *
  * Electron, and two pets installed in `~/.tails/pets` (`sonic-art` and `pika`).
@@ -112,7 +126,7 @@ const B = loadPet('pika');
 let active = A;
 
 const server = http.createServer((req, res) => {
-  if (req.url.startsWith('/api/pets/window')) { res.writeHead(200, { 'content-type': 'text/html' }); res.end(renderDesktopWindowHtml()); }
+  if (req.url.startsWith('/api/pets/window')) { res.writeHead(200, { 'content-type': 'text/html' }); res.end(renderDesktopWindowHtml({ testHooks: true })); }
   else if (req.url.startsWith('/api/pets/display')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ source: 'global', pet: active.payload })); }
   else if (req.url.startsWith('/sprite/')) {
     const which = req.url.endsWith(A.payload.definition.id) ? A : B;
@@ -314,6 +328,76 @@ app.whenReady().then(async () => {
   await wait(200);
   pet.setPetHidden(false);
   await run('un-hidden while a stale suppression was still set');
+
+  /*
+   * 15. Hidden with the pill's X, then handed out of a chat.
+   *
+   * The reported bug, and the reason it was invisible from inside the handoff:
+   * `hidden` and `suppressed` are separate vetoes, and carrying a pet past the
+   * edge of the chat only ever released the second one. So after the X had been
+   * pressed, a pet dragged out was activated, placed and carried on a window
+   * that was never shown -- the hand opened over the desktop and there was
+   * nothing there. The handoff says `hide(false)` now, which is the whole job
+   * rather than half of it; this is the assertion that it is.
+   */
+  pet.setPetSuppressed(true);      // he is standing in the chat
+  pet.setPetHidden(true);          // ...and the pill's X was pressed earlier
+  await wait(200);
+  pet.setPetHidden(false);         // the handoff: carried out past the edge
+  await run('handed out of a chat after the pill had hidden him');
+
+  /*
+   * 16. The page's belief about the pointer, left out of step with the shell's.
+   *
+   * The two sides hold "is the pointer on him" in two places and nothing
+   * reconciled them. In the direction tested here -- the page believing the
+   * pointer is already on the pet while the shell has the window click-through
+   * -- every route out was closed: no mousemove could report a change, because
+   * as far as the page was concerned nothing had changed, and the shell's poll
+   * went through the same dedupe and returned silently. Visible, animating and
+   * impossible to press, for the rest of the session.
+   *
+   * The poll answers authoritatively now. This drives the page into the stale
+   * state directly rather than through a route, because the route that produces
+   * it in the wild has not been identified -- which is the whole reason this
+   * file checks the property instead.
+   */
+  const stale = await win.webContents.executeJavaScript(`(() => {
+    const r = document.getElementById('pet').getBoundingClientRect();
+    const spot = { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height * 0.62) };
+    /*
+      The precondition, established rather than assumed, and reached through the
+      page's own test seam.
+
+      Two earlier versions of this were wrong in instructive ways. The first set
+      the belief and sent the probe without putting the shell back to
+      click-through, so the healing report arrived at a shell that already
+      agreed and was deduped on that side. The second assigned to 'pointerOver'
+      from here -- but the page's script is a module, so that created a
+      same-named global and touched nothing, which looks exactly like a pass.
+      A test whose subject is a disagreement between two places has to put both
+      halves where it claims they are, and has to be able to prove it did.
+    */
+    petBridge.reportPointerOverPet(false);
+    window.__petTest.believePointerOver(true);
+    return {
+      spot,
+      // And the point has to actually be on him, or a "no" proves nothing.
+      onHim: window.__petTest.isOverPet(spot.x, spot.y),
+      state: window.__petTest.read(),
+    };
+  })()`);
+
+  await wait(80);
+  mouse.length = 0;
+  win.webContents.send('pet:probe', stale.spot);
+  await wait(150);
+  const staged = stale.onHim && stale.state.pointerOver === true;
+  const healed = staged && mouse.includes('INTERACTIVE');
+  console.log(`${healed ? 'ok  ' : 'FAIL'}  a stale "the pointer is on him" heals on the next poll`
+    + (staged ? '' : ` (not staged: onHim=${stale.onHim} pointerOver=${stale.state.pointerOver}, so this proved nothing)`));
+  allPassed = healed && allPassed;
+  await run('and he is usable after the page had been out of step');
 
   console.log(allPassed ? '\nINVARIANT HOLDS on every path' : '\nINVARIANT BROKEN');
   pet.destroyPetWindow(); server.close(); app.exit(allPassed ? 0 : 1);

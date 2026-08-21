@@ -95,6 +95,8 @@ export {
   suppressDesktopPet,
 } from './desktop-pet';
 
+export { claimDesktop, claimsDesktop, releaseDesktopClaim } from './desktop-claim';
+
 export { petsApi, usePetLibraryVersion } from './marketplace-api';
 export type {
   CatalogueEntry,

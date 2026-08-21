@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import {
+  claimDesktop,
+  claimsDesktop,
   hideDesktopPet,
   PetSprite,
   readPetDragFrame,
   refreshDesktopPet,
+  releaseDesktopClaim,
   resolveCellBox,
   SPRITE_KEYFRAMES,
   suppressDesktopPet,
@@ -290,14 +293,12 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    */
   const lastInChatPetRef = useRef<string | null>(null);
 
-  /**
-   * Pets the user deliberately put on the desktop, this run.
+  /*
+   * The escape hatch from the rule above lives in `desktop-claim.ts`.
    *
-   * The escape hatch from the rule above, and the thing that distinguishes the
-   * two cases: carrying him across the window edge is a decision, and clicking
-   * a different conversation is not.
+   * It used to be a `useRef` here, which meant it was forgotten on the very
+   * navigation the rule is about — see that file for the measured sequence.
    */
-  const desktopByChoiceRef = useRef<Set<string>>(new Set());
 
   /**
    * Who was on the desktop before a pick-up borrowed the slot.
@@ -632,6 +633,25 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * nothing else, so without this a pet dragged out either vanished (nobody
    * active) or turned into whoever was — which is what "a different pet appears
    * outside the chat interface" was.
+   *
+   * ## Why this un-hides rather than un-suppresses
+   *
+   * Carrying a pet past the edge of the chat is the most explicit "put him on
+   * the desktop" there is — more explicit than the marketplace switch, because
+   * the user is holding him at the time. It therefore has to clear *every*
+   * reason he might not appear, and the pill's X is one of them.
+   *
+   * Releasing the suppression alone was not enough, and the failure was silent:
+   * `hidden` is a separate flag with its own veto, so after the X had been
+   * pressed a pet carried out of a chat was placed, activated and carried on a
+   * window that was never shown. The hand opened over the desktop and nothing
+   * was there — and the way back was the marketplace, which is not something
+   * anyone would think to look for while dragging an animal.
+   *
+   * `hide(false)` is the whole job rather than half of it: see `setPetHidden`
+   * in the shell, which clears the suppression and puts an unreachable window
+   * back on a display as part of un-hiding. That is exactly what handing him
+   * out means here.
    */
   const takeOutside = useCallback((petId: string, show: boolean) => {
     if (activatedRef.current !== petId) {
@@ -641,7 +661,13 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         // the window already had. Nothing here is worth interrupting a drag.
       });
     }
-    if (show) suppressDesktopPet(false);
+    if (!show) return;
+    hideDesktopPet(false);
+    // And it is a decision about where he lives, not just about this gesture.
+    // See `desktop-claim.ts`: without a record of it, the rule that keeps a
+    // conversation's pet off the desktop applies to him too, and swallows him
+    // the next time his own chat is opened.
+    claimDesktop(petId);
   }, []);
 
   /**
@@ -776,7 +802,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         // brings him in — but until then the desktop is where he lives, and the
         // rule that keeps a chat's pet off the desktop has to know that.
         placeDesktopPetAt(clientX, clientY);
-        if (pet) desktopByChoiceRef.current.add(pet.definition.id);
+        if (pet) claimDesktop(pet.definition.id);
         restoreActiveRef.current = undefined;
         activatedRef.current = null;
         lastOutsideRef.current = null;
@@ -818,7 +844,12 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   // in order, so this is what makes "the pet we were just showing" true by the
   // time the question is asked.
   useEffect(() => {
-    if (pet && !handedOff) lastInChatPetRef.current = pet.definition.id;
+    if (!pet || handedOff) return;
+    lastInChatPetRef.current = pet.definition.id;
+    // And he is not living on the desktop any more, because he is standing
+    // here. Without this the claim only ever grows, and a rule that applies to
+    // nobody is the same as no rule.
+    releaseDesktopClaim(pet.definition.id);
   }, [pet, handedOff]);
 
   /**
@@ -840,7 +871,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   useEffect(() => {
     const homedInAChat = activePetId !== null
       && activePetId === lastInChatPetRef.current
-      && !desktopByChoiceRef.current.has(activePetId);
+      && !claimsDesktop(activePetId);
 
     suppressDesktopPet((Boolean(pet) && !handedOff && !outside) || homedInAChat);
   }, [pet, handedOff, outside, activePetId]);

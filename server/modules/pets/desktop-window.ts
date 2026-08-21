@@ -92,7 +92,23 @@ const HANDLE_RIM = 10;
 const ACTIVE_RATE = 1.35;
 const RESTING_RATES: Record<string, number> = { idle: 0.85, waiting: 1 };
 
-export function renderDesktopWindowHtml(): string {
+/**
+ * Options for the page.
+ *
+ * `testHooks` is the only one, and it exists because of a mistake worth not
+ * repeating. The page's script is a module, so everything in it -- the pointer
+ * belief, the hit test -- is module-scoped and unreachable from outside. An
+ * attempt to drive it from a debugger instead created a same-named global and
+ * proved nothing, while looking exactly like a pass.
+ *
+ * So there is a seam, and it is opt-in from the caller rather than gated on an
+ * environment variable: 'pets.routes.ts' never passes it, so the hook cannot
+ * exist in the running application by any configuration. Only the invariant
+ * harness, which calls this function directly, asks for it.
+ */
+export type DesktopWindowOptions = { testHooks?: boolean };
+
+export function renderDesktopWindowHtml(options: DesktopWindowOptions = {}): string {
   // A fresh nonce per render, so the page can keep its inline style and script
   // without opening the door to any others. It is a window floating over the
   // whole desktop; "default-src 'none'" is the right starting point, and the
@@ -914,8 +930,44 @@ function isOverPet(clientX, clientY) {
   return false;
 }
 
-function setPointerOver(next) {
-  if (pointerOver === next) return;
+/**
+ * The pointer arrived on him, or left him.
+ *
+ * ## 'force', and the deadlock it exists to break
+ *
+ * This reports *changes*, which is right for a mousemove: the shell only needs
+ * telling when the answer is different from the one it already has. It is wrong
+ * for the shell's poll, and the difference is the difference between a pet who
+ * cannot be picked up for a moment and one who cannot be picked up again.
+ *
+ * The two sides hold the same fact in two places -- this page's 'pointerOver'
+ * and the shell's 'interactive' -- and nothing reconciles them. If they ever
+ * disagree in the direction "the page thinks the pointer is on him, the shell
+ * thinks the window is click-through", the window is transparent to the mouse
+ * while the page believes there is nothing left to report. No mousemove can fix
+ * it, because the pointer is already where the page thinks it is; and the poll
+ * could not fix it either, because it came through this same dedupe and
+ * returned early. Visible, animating, and impossible to press or drag, for the
+ * rest of the session.
+ *
+ * So the poll answers **authoritatively**: it states the current value whether
+ * or not it has changed, and the shell -- which dedupes its own side -- decides
+ * what to do with it. The cost is one message per poll while the cursor is
+ * inside the window and the window is not yet interactive, which is exactly the
+ * state where the answer is worth having.
+ */
+function setPointerOver(next, force = false) {
+  if (pointerOver === next) {
+    if (force) {
+      bridge.reportPointerOverPet(next);
+      // Published as well as reported. The dataset is what a harness reads to
+      // decide whether this page and the shell agree, so a path that changes
+      // what the shell is told without refreshing it makes the one debugging
+      // surface this window has into another thing that can be wrong.
+      publishState();
+    }
+    return;
+  }
   pointerOver = next;
   bridge.reportPointerOverPet(next);
 
@@ -1083,7 +1135,10 @@ bubbleClose.addEventListener('click', (event) => {
  */
 bridge.onProbe((point) => {
   if (dragging || !point) return;
-  setPointerOver(isOverPet(point.x, point.y));
+  // Authoritative, not a change report -- see 'setPointerOver'. This is the one
+  // caller that can break a disagreement between this page and the shell,
+  // because it is the only one that runs when nothing at all is happening.
+  setPointerOver(isOverPet(point.x, point.y), true);
 });
 
 /**
@@ -1147,6 +1202,20 @@ async function poll() {
     // Offline, or the server is restarting. Keep drawing whatever we have.
   }
 }
+
+/*
+  The test seam. Absent unless the caller asked for it -- see the note on
+  'DesktopWindowOptions'. It exposes the two things a test of the input
+  handshake needs and cannot otherwise reach: the belief itself, so a
+  disagreement with the shell can be created deliberately, and the hit test, so
+  a probe point can be checked to be on the sprite before anything is concluded
+  from the answer.
+*/
+${options.testHooks ? `window.__petTest = {
+  believePointerOver(next) { pointerOver = next; publishState(); },
+  isOverPet,
+  read: () => ({ pointerOver, dragging, maskFor, pet: current && current.definition.id }),
+};` : ''}
 
 void poll();
 setInterval(() => {

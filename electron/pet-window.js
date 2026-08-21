@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { addAlert, clearAlert, describeAlerts } from './pet-alerts.js';
 import { clientPointToDip, sizeForScaleFactor } from './pet-geometry.js';
+import { trace, tracing } from './pet-trace.js';
 
 
 /**
@@ -207,6 +208,56 @@ function isAlive() {
   return petWindow && !petWindow.isDestroyed();
 }
 
+/**
+ * Everything the shell believes about this window, in one object.
+ *
+ * The whole state rather than the interesting field, because which field is
+ * interesting is exactly what is not known — see `pet-trace.js`. Paired with
+ * the page's own published beliefs (`publishState` in `desktop-window.ts`), the
+ * two halves of every "visible but unusable" report can be read side by side
+ * instead of argued about.
+ */
+function snapshot() {
+  return {
+    hasPet,
+    hidden,
+    suppressed,
+    shouldShow: shouldShow(),
+    visible: isAlive() ? petWindow.isVisible() : null,
+    movable: isAlive() ? petWindow.isMovable() : null,
+    onTop: isAlive() ? petWindow.isAlwaysOnTop() : null,
+    interactive,
+    carrying,
+    carrySource,
+    carryLive: carryIsLive(),
+    sinceCarry: carrying ? Date.now() - lastCarryAt : null,
+    watchdog: watchdogTimer !== null,
+    settle: settleTimer !== null,
+  };
+}
+
+/**
+ * Counters, kept out of the change test.
+ *
+ * "Is the shell still asking the page where the pointer is" is the single most
+ * useful thing to know about an unusable pet — a probe count that stops moving
+ * says the poll gave up, one that climbs while the page never answers says the
+ * page did. But a counter changes every tick, so including it in the change
+ * test would make every tick a new state and fill the file with nothing.
+ */
+let probesSent = 0;
+
+/** Traces only when something moved, so a 250ms poll does not fill the file. */
+let lastTraced = '';
+function traceState(event) {
+  if (!tracing) return;
+  const state = snapshot();
+  const key = JSON.stringify(state);
+  if (key === lastTraced && event === 'tick') return;
+  lastTraced = key;
+  trace(event, { ...state, probesSent });
+}
+
 /** Moves the window and records where it now is. The only caller of `setPosition`. */
 function moveTo(x, y) {
   if (!isAlive()) return;
@@ -333,6 +384,7 @@ function restorePosition(width, height) {
 function setInteractive(next) {
   if (!isAlive() || interactive === next) return;
   interactive = next;
+  traceState(next ? 'interactive-on' : 'interactive-off');
 
   // `forward: true` keeps move events coming while the window is transparent to
   // clicks, which is the only way the page can notice the pointer arriving.
@@ -371,6 +423,7 @@ function startWatchdog() {
     // on `assertWindowState`: it is why this poll is no longer only about the
     // cursor.
     assertWindowState();
+    traceState('tick');
 
     /*
      * A carry that has stopped producing frames has stopped.
@@ -415,6 +468,7 @@ function startWatchdog() {
       // a coordinate silently stops meaning what it says.
       const content = petWindow.getContentBounds();
       const zoom = petWindow.webContents.getZoomFactor() || 1;
+      probesSent += 1;
       petWindow.webContents.send('pet:probe', {
         x: (cursor.x - content.x) / zoom,
         y: (cursor.y - content.y) / zoom,
@@ -463,6 +517,7 @@ function stopWatchdog() {
 function onCarried(x, y, source = 'os', holding = false) {
   carrySource = source;
   lastCarryAt = Date.now();
+  if (!carrying) traceState(`carry-start-${source}${holding ? '-held' : ''}`);
   if (!carrying) {
     carrying = true;
     carryFrom = { x, y };
@@ -525,6 +580,7 @@ function carryIsLive() {
 function endCarry() {
   settleTimer = null;
   carrying = false;
+  traceState('carry-end');
   carrySource = null;
   carryFacing = null;
   if (!isAlive()) return;
@@ -667,6 +723,7 @@ function makeUsable() {
   startWatchdog();
 
   petWindow.webContents.send('pet:resync', { carrying: carryIsLive() });
+  traceState('made-usable');
 }
 
 /**
@@ -713,6 +770,7 @@ function showPetWindow() {
 
 function applyVisibility() {
   if (!isAlive()) return;
+  traceState('apply-visibility');
 
   if (shouldShow()) {
     // Every time, not only on the transition from hidden. `applyVisibility` is
@@ -777,6 +835,7 @@ export function clearPetAlert(sessionId) {
  */
 function hideFromPill() {
   hidden = true;
+  traceState('hide-from-pill');
   // Put away is put away. Keeping the queue would mean he re-appeared holding a
   // week-old announcement the next time he was let out.
   alerts = [];
@@ -814,6 +873,7 @@ function installIpc() {
 
   ipcMain.on('pet:visibility', (_event, payload) => {
     hasPet = Boolean(payload?.hasPet);
+    traceState('page-reported-has-pet');
     applyVisibility();
   });
 
@@ -1017,6 +1077,7 @@ export function createPetWindow(options) {
 /** Called when the app takes the pet in-window, and when it gives it back. */
 export function setPetSuppressed(next) {
   suppressed = Boolean(next);
+  traceState(next ? 'suppress-on' : 'suppress-off');
   applyVisibility();
 }
 
@@ -1115,6 +1176,7 @@ export function placePetAt(x, y, holding = false) {
  */
 export function setPetHidden(next) {
   hidden = Boolean(next);
+  traceState(next ? 'hide-on' : 'hide-off');
 
   if (!hidden) {
     suppressed = false;

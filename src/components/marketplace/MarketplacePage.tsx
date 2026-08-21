@@ -15,6 +15,7 @@ import { Reveal } from '@/shared/ui/Motion';
 import { readStaggerDelay } from '@/theme/motion';
 
 import { CatalogueShelf } from './CatalogueShelf';
+import { claimDesktop, releaseDesktopClaim } from './desktop-claim';
 import {
   hasDesktopPet,
   hideDesktopPet,
@@ -244,6 +245,20 @@ export function MarketplacePage({ onClose, className }: MarketplacePageProps) {
     if (activating) {
       hideDesktopPet(false);
       setDesktopHidden(false);
+      /*
+        And it is recorded as a decision, not only applied.
+
+        A pet who is also assigned to a conversation is kept off the desktop
+        after that conversation is left, so that opening a chat cannot put a pet
+        on the desktop as a side effect. That rule cannot be allowed to outrank
+        this button: pressing "on desktop" for a pet who happens to live in a
+        chat used to work until the moment that chat was opened, after which he
+        was suppressed everywhere -- including here -- with no way back short of
+        activating somebody else. See `desktop-claim.ts`.
+      */
+      claimDesktop(pet.definition.id);
+    } else {
+      releaseDesktopClaim(pet.definition.id);
     }
     void runAction(pet.definition.id, () => petsApi.setActive(pet.definition.id, activating));
   };
