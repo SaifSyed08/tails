@@ -52,14 +52,48 @@ below needs something only Saif can do, or is queued behind it.
 
 ## Carried over
 
-- [ ] **#54** — wake-word model: Colab training run per
-      `docs/WAKE-WORD-TRAINING.md` produces `tails.onnx`; then measure false
-      accepts against *fails / sales / tales / details / "heads or tails" /
-      "tails off" / "tails app"* and replace the 0.85 placeholder threshold.
+- [x] **#54** — wake word: both `tails` and `hey tails` trained locally on the
+      4060 and measured against the confusables. `tails` is unusable at any
+      threshold — seven negatives at or above the wake word, `tails off` at
+      0.982 and `tails app` at 0.979. `hey_tails` separates by 0.012 at a
+      threshold of 0.93. Both ship; see `WAKE-WORD-TRAINING.md` for the tables.
+- [x] **#28** — the duplicate window background hex, removed when the window
+      became transparent for Aurora's acrylic backdrop.
 - [ ] **#23** — bundle the fonts rather than relying on the system.
-- [ ] **#28** — the window background hex duplicates `--background`.
 
-## Closed
+## Newer asks
 
-- **#59 Chatterbox nano** — 10.8 s to first audio against a 1 s bar. Not
-  revisited unless asked.
+- [x] Right-click text for copy / cut / paste.
+- [x] Pet's assigned theme actually applies — it was stored and persisted all
+      along and nothing on the client read it.
+- [x] Theme and thinking phrases reachable from the pet settings panel.
+- [x] Preview browser the agent can open (`preview_open`), loopback only,
+      closable by the user.
+- [x] The duplicate settings button in the header, removed.
+- [x] Voice-mode steer cut to one sentence, and stopped leaking into the
+      transcript — the SDK's echo of the expanded prompt was being rendered.
+- [x] Duplicated messages, and the doubled streaming output. Two separate
+      faults: an append-only consumer of a replaying protocol, then the same
+      thing again for stream deltas, which accumulate rather than re-render.
+- [x] Drafts leaking between conversations — the composer was never remounted,
+      so unsent text followed you into every chat.
+
+## Open, and needing Saif
+
+- [ ] **Local voice: what goes?** He wants it ditched for now on quality
+      grounds, with BYO OpenAI Whisper later — but Whisper is dictation only,
+      so it is unclear whether Piper TTS and the trained wake words go with it.
+      Three options on the table: dictation only, all of it, or keep it working
+      but ship nothing in the installer. The duplicate default-voice section in
+      Settings is blocked on the same answer.
+- [ ] **The sidebar pet position.** Reported still wrong. The code now renders
+      the options button first inside a right-anchored container, collapsed to
+      zero width until hover, with the pet last — which should already do what
+      was asked. Needs a look rather than a second blind change.
+- [ ] **Unusable desktop pet, sixth route.** Put on screen, open a chat with a
+      pet in the interface, then any non-pet chat. The shell invariant holds on
+      15 harness paths including that sequence, so the cause is app-side.
+- [ ] **Kokoro for pets.** Decided, not built. It runs on the `onnxruntime-web`
+      already bundled, so it needs no new runtime — but a pet line would land
+      ~2.4 s after the trigger, and pets react, which makes them the most
+      timing-sensitive thing in the app rather than the least.
