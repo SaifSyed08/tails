@@ -1,7 +1,9 @@
 import express from 'express';
 
 import { downloadVoice, readSpeechStatus, synthesise } from '@/modules/voice/piper.js';
-import { downloadModel, MODEL_MIB, readStatus } from '@/modules/voice/whisper.js';
+import { writeKey } from '@/modules/voice/cloud-transcribe.js';
+import { activeProvider, readTranscriptionStatus, writeSettings } from '@/modules/voice/transcription.js';
+import { downloadModel, MODEL_MIB } from '@/modules/voice/whisper.js';
 import { bytesNeeded, downloadWakeWord } from '@/modules/voice/wake-download.js';
 import { readWakeWordStatus, resolveWakeModel } from '@/modules/voice/wake-word.js';
 import { AppError } from '@/shared/utils.js';
@@ -17,8 +19,82 @@ import { AppError } from '@/shared/utils.js';
 export function createVoiceRouter(): express.Router {
   const router = express.Router();
 
+  /**
+   * Whether the microphone button works, according to whichever engine is on.
+   *
+   * Answers for the *selected* provider rather than for the local one. The two
+   * fail for different reasons and with different fixes — a missing model is a
+   * download, a missing key is a paste — and reporting one obstacle while the
+   * user is blocked by the other is worse than reporting nothing.
+   */
   router.get('/status', (_req, res) => {
-    res.json(readStatus());
+    const provider = activeProvider();
+    const local = readTranscriptionStatus().local;
+
+    res.json({
+      ready: provider.ready,
+      reason: provider.reason,
+      provider: provider.id,
+      supportsPartials: provider.supportsPartials,
+      // Kept for the download button, which is about the local model whichever
+      // provider happens to be selected.
+      modelPresent: local.modelPresent,
+      enginePresent: local.enginePresent,
+      downloadMiB: local.downloadMiB,
+    });
+  });
+
+  /** Everything the settings panel needs. Never includes the key itself. */
+  router.get('/transcription', (_req, res) => {
+    res.json(readTranscriptionStatus());
+  });
+
+  /**
+   * Chooses the engine.
+   *
+   * Switching to `openai` is the moment audio starts leaving the machine, so it
+   * is a deliberate write from a control that says so — never inferred, and
+   * never a fallback from a local failure.
+   */
+  router.post('/transcription', (req, res, next) => {
+    try {
+      const body = req.body as { provider?: unknown; cloudModel?: unknown };
+      const next_ = writeSettings({
+        provider: body.provider === 'openai' ? 'openai' : body.provider === 'local' ? 'local' : undefined,
+        cloudModel: typeof body.cloudModel === 'string' ? body.cloudModel as never : undefined,
+      });
+      res.json({ ...readTranscriptionStatus(), provider: next_.provider });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * Saves or clears the key.
+   *
+   * Write-only by design: there is no route that returns it. The response is
+   * the same status everything else reads, so the panel can confirm a save
+   * without the value ever making the return trip.
+   */
+  router.post('/transcription/key', (req, res, next) => {
+    try {
+      const body = req.body as { key?: unknown };
+      const key = typeof body.key === 'string' ? body.key : '';
+
+      // A rough shape check, so a pasted mistake is caught here rather than as
+      // a 401 several seconds into the first sentence.
+      if (key && !key.startsWith('sk-')) {
+        throw new AppError(
+          'That does not look like an OpenAI key — they begin with "sk-".',
+          { code: 'voice.badKey', statusCode: 400 },
+        );
+      }
+
+      writeKey(key);
+      res.json(readTranscriptionStatus());
+    } catch (error) {
+      next(error);
+    }
   });
 
   /**
@@ -94,7 +170,7 @@ export function createVoiceRouter(): express.Router {
    * means the number has to be on screen while the user is choosing.
    */
   router.post('/model', async (_req, res, next) => {
-    const status = readStatus();
+    const status = readTranscriptionStatus().local;
     if (status.modelPresent) {
       res.json({ ok: true, alreadyPresent: true });
       return;

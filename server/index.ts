@@ -14,6 +14,7 @@ import { createPreferencesRouter } from '@/modules/preferences/preferences.route
 import { createSessionsRouter } from '@/modules/sessions/sessions.routes.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { attachTerminalGateway } from '@/modules/terminal/terminal-gateway.js';
+import { createRoutingRouter } from '@/modules/routing/routing.routes.js';
 import { createVoiceRouter } from '@/modules/voice/voice.routes.js';
 import { attachVoiceGateway } from '@/modules/voice/voice-gateway.js';
 import { AppError } from '@/shared/utils.js';
@@ -62,6 +63,9 @@ app.use('/api/sessions', createSessionsRouter());
 app.use('/api/appearance', createAppearanceRouter());
 app.use('/api/pets', createPetsRouter());
 app.use('/api/voice', createVoiceRouter());
+// The Anthropic-shaped endpoint Claude Code is pointed at when a turn is
+// routed to a local model. See `routing.routes.ts`.
+app.use('/api/routing', createRoutingRouter());
 
 // In production the built client is served from the same origin, so the app
 // and its API share cookies, websockets, and CSP with no special casing.

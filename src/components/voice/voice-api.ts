@@ -10,9 +10,42 @@
 export type DictationStatus = {
   ready: boolean;
   reason?: string;
+  /** Which engine answered. The reason belongs to this one, not to the other. */
+  provider?: TranscriptionProvider;
+  /** False for the cloud: a partial is a second billed request. */
+  supportsPartials?: boolean;
   modelPresent: boolean;
   enginePresent: boolean;
   downloadMiB: number;
+};
+
+export type TranscriptionProvider = 'local' | 'openai';
+
+export type CloudModel = { id: string; label: string; note: string };
+
+/**
+ * Everything the transcription section draws itself from.
+ *
+ * Note what is *not* here: the key. It is written to the server and never read
+ * back — `keyHint` is its last four characters, which is enough to tell two
+ * keys apart and worthless to anyone who sees a screenshot.
+ */
+export type TranscriptionStatus = {
+  provider: TranscriptionProvider;
+  cloudModel: string;
+  models: CloudModel[];
+  keySaved: boolean;
+  keyHint: string | null;
+  ready: boolean;
+  reason?: string;
+  supportsPartials: boolean;
+  local: {
+    ready: boolean;
+    reason?: string;
+    modelPresent: boolean;
+    enginePresent: boolean;
+    downloadMiB: number;
+  };
 };
 
 export type WakeWordEntry = {
@@ -43,9 +76,49 @@ async function get<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * A write, with the server's own message on failure.
+ *
+ * The message matters more here than in most places: the failures are "that key
+ * looks wrong" and "that key was rejected", which are things the user can act
+ * on, and a generic "request failed" would waste the one useful sentence the
+ * server had.
+ */
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+    throw new Error(payload?.error?.message ?? `${path} failed (${response.status})`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export const voiceApi = {
   status: () => get<DictationStatus>('/api/voice/status'),
   wake: () => get<WakeStatus>('/api/voice/wake'),
+  transcription: () => get<TranscriptionStatus>('/api/voice/transcription'),
+
+  /** Chooses the engine. Selecting `openai` is when audio starts leaving. */
+  async setTranscription(next: { provider?: TranscriptionProvider; cloudModel?: string }) {
+    return post<TranscriptionStatus>('/api/voice/transcription', next);
+  },
+
+  /**
+   * Saves the key, or clears it with an empty string.
+   *
+   * One-way on purpose: there is no companion getter. The response is the same
+   * status every other control reads, so a save can be confirmed without the
+   * value making the return trip.
+   */
+  async saveKey(key: string) {
+    return post<TranscriptionStatus>('/api/voice/transcription/key', { key });
+  },
 
   /** Fetches the dictation model. Only ever called from an explicit press. */
   async downloadSpeechModel(): Promise<void> {

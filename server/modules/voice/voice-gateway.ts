@@ -12,7 +12,7 @@ import {
 } from '@/modules/voice/pcm.js';
 import { cleanTranscript } from '@/modules/voice/cleanup.js';
 import { MIN_PASS_INTERVAL_MS, StableTranscript } from '@/modules/voice/live-transcript.js';
-import { readStatus, transcribe } from '@/modules/voice/whisper.js';
+import { activeProvider, transcribeUtterance } from '@/modules/voice/transcription.js';
 import { readRecord, readString } from '@/shared/utils.js';
 
 const VOICE_PATH = '/voice';
@@ -143,6 +143,17 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
      * transcription on stop is the one that must not fail.
      */
     const runLivePass = async () => {
+      /*
+       * Not every engine may be asked this.
+       *
+       * A partial is produced by transcribing the *same* audio again, a few
+       * hundred milliseconds later, and taking whatever has newly settled. That
+       * is free against a local binary and it is a separate billed request
+       * against an API — so a ten-word sentence would be charged five times to
+       * show the user words they were about to see anyway. The provider says
+       * whether it wants this; see `transcription.ts`.
+       */
+      if (!activeProvider().supportsPartials) return;
       if (capture.passing || capture.busy) return;
       const now = Date.now();
       if (now - capture.lastPassAt < MIN_PASS_INTERVAL_MS) return;
@@ -154,7 +165,7 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
       const snapshot = capture.buffer.slice(0, capture.used);
 
       try {
-        const settled = capture.live.advance(await transcribe(snapshot, capture.cwd));
+        const settled = capture.live.advance(await transcribeUtterance(snapshot, capture.cwd));
         if (settled) send({ type: 'partial', text: cleanTranscript(settled) });
       } catch {
         // See above: a live pass is best-effort.
@@ -200,7 +211,7 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
         // whatever was already shown cannot be taken back — so `flush` returns
         // only the part that has not been sent, re-anchored if this pass
         // disagrees with what the user is already looking at.
-        const tail = capture.live.flush(await transcribe(samples, capture.cwd));
+        const tail = capture.live.flush(await transcribeUtterance(samples, capture.cwd));
         const text = cleanTranscript(tail);
         if (text) send({ type: 'transcript', text });
       } catch (error) {
@@ -242,9 +253,12 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
       if (!message) return;
 
       if (message.type === 'voice.start') {
-        const status = readStatus();
-        if (!status.ready) {
-          send({ type: 'error', message: status.reason ?? 'Dictation is not available' });
+        // Asked of whichever engine is selected, not of the local one. A
+        // missing local model must not block a session that is going to the
+        // cloud, and a missing key must not be reported as a missing download.
+        const provider = activeProvider();
+        if (!provider.ready) {
+          send({ type: 'error', message: provider.reason ?? 'Dictation is not available' });
           return;
         }
         capture.cwd = readString(message.cwd);

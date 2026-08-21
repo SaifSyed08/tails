@@ -14,6 +14,7 @@ import { expandLocalCommand } from '@/modules/chat/commands.service.js';
 import { applySpokenSteer } from '@/modules/chat/spoken-turn.js';
 import { DEVSERVER_ALLOWED_TOOLS, devServerMcpServer } from '@/modules/devserver/devserver.tools.js';
 import { PREVIEW_ALLOWED_TOOLS, previewMcpServer } from '@/modules/preview/preview.tools.js';
+import { localRoutingEnv } from '@/modules/routing/local-model.js';
 import {
   formatConversationInstructions,
   readConversationInstructions,
@@ -39,6 +40,16 @@ import { createCompleteMessage, createMessage, readRecord } from '@/shared/utils
  * the keyboard and come back.
  */
 const PERMISSION_TIMEOUT_MS = Number(process.env.TAILS_PERMISSION_TIMEOUT_MS || 120_000);
+
+/**
+ * The port this app's own server is on.
+ *
+ * Read from the same variable `server/index.ts` reads, because the CLI has to be
+ * told an address it can reach and getting it wrong means every routed turn
+ * fails to connect. Duplicated rather than imported to avoid a cycle through the
+ * server entry point.
+ */
+const SERVER_PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
 
 /**
  * Tools whose entire purpose is to ask the user something.
@@ -445,7 +456,16 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       // Spreading rather than assigning: `options.env` REPLACES process.env in
       // the SDK rather than merging into it, so a bare object would strip PATH
       // and the subprocess would fail to spawn.
-      env: { ...process.env } as Record<string, string>,
+      /*
+        And the routing overlay on top, when there is one.
+
+        `localRoutingEnv` is empty unless the user has both selected a local
+        model *and* chosen one, so the ordinary path is byte for byte what it
+        was. When it is not empty it redirects the CLI's Anthropic traffic to
+        this app's own translating endpoint — see `local-model.ts` for why three
+        variables are the entire mechanism.
+      */
+      env: { ...process.env, ...localRoutingEnv(SERVER_PORT) } as Record<string, string>,
       systemPrompt: {
         // Always the preset, extended. The preset *is* Claude Code — the
         // tooling, the file editing, the agent — so everything this app or its

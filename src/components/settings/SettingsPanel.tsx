@@ -15,6 +15,8 @@ import {
   type DefaultVoice,
 } from '@/components/settings/default-voice';
 import { useSpeech } from '@/components/voice/useSpeech';
+import { RoutingSettings } from '@/components/settings/RoutingSettings';
+import { TranscriptionSettings } from '@/components/voice/TranscriptionSettings';
 import { VoiceSettings } from '@/components/voice/VoiceSettings';
 import {
   collisionSoundEnabled,
@@ -49,6 +51,8 @@ const SECTIONS = [
   // They share a word and nothing else, which is exactly the case an index has
   // to disambiguate rather than paper over.
   { id: 'settings-voice-input', label: 'Voice' },
+  { id: 'settings-routing', label: 'Model routing' },
+  { id: 'settings-transcription', label: 'Speech recognition' },
   { id: 'settings-voice', label: 'Default voice' },
   { id: 'settings-pets', label: 'Pets' },
   { id: 'settings-startup', label: 'Startup' },
@@ -840,6 +844,18 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
                 section draws for itself. */}
             <div id="settings-voice-input" className="border-t border-border pt-5">
               <VoiceSettings />
+            </div>
+
+            <div id="settings-routing" className="border-t border-border pt-5">
+              <RoutingSettings />
+            </div>
+
+            {/* The anchor and the divider live here rather than in the component,
+                which is the same arrangement the voice section uses — a guard
+                test checks every jump link points at an id this panel renders,
+                so a section that carried its own would be a link to nowhere. */}
+            <div id="settings-transcription" className="border-t border-border pt-5">
+              <TranscriptionSettings />
             </div>
 
             <DefaultVoiceControl />

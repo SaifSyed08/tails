@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { CommandToken, readStyledCommand } from '@/components/chat/commandStyle';
 import { Composer, type ComposerHandle } from '@/components/chat/Composer';
 import { EmptyState, type ModelBadgeState } from '@/components/chat/EmptyState';
+import { rehypeFadeTokens } from '@/components/chat/fade-tokens';
 import type { ModelChoice } from '@/types/chat';
 import { PetPicker } from '@/components/chat/PetPicker';
 import { PermissionBanner } from '@/components/chat/PermissionBanner';
@@ -160,7 +161,18 @@ function Row({ row }: { row: ChatRow }) {
           className="-mx-6 max-w-none px-6 py-4 text-[0.9375rem] leading-relaxed"
         >
           <div className="prose-tails space-y-3">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{row.content}</ReactMarkdown>
+            {/*
+              The word-splitting plugin only while the words are still arriving.
+              A settled message renders as plain markdown — see `fade-tokens.ts`
+              for why a span per word is right for one message and wrong for a
+              transcript of them.
+            */}
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={row.streaming ? [rehypeFadeTokens] : undefined}
+            >
+              {row.content}
+            </ReactMarkdown>
           </div>
           {row.streaming ? (
             <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-foreground align-middle" />

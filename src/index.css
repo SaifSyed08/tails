@@ -1172,3 +1172,52 @@
     }
   }
 }
+
+@layer utilities {
+  /**
+   * A word arriving, rather than appearing.
+   *
+   * Applied per word by `fade-tokens.ts` while a reply streams. Two properties
+   * and no layout: opacity, and a couple of pixels of rise. Anything that moves
+   * a word horizontally would shift the words after it, and text that jitters
+   * while you are trying to read it is worse than text that simply appears.
+   *
+   * `both` matters. Without the fill mode the word is drawn at full opacity for
+   * the frame before its animation starts, which is a flash of exactly the thing
+   * being smoothed out.
+   */
+  .tails-token {
+    animation: t-token-in 260ms ease-out both;
+    /*
+      No `will-change`. It was here to promote each word to its own layer, which
+      is the wrong trade at this count: the animation is 260ms and composited
+      anyway, and a hint held on every word of a long reply is memory reserved
+      for elements that have finished moving.
+    */
+  }
+
+  @keyframes t-token-in {
+    from {
+      opacity: 0;
+      transform: translateY(2px);
+    }
+
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /**
+   * Reduced motion gets the text, immediately.
+   *
+   * The words still arrive — that is the stream, not an effect — they just do
+   * not fade while doing it. `display: none` would be hiding content, which is
+   * the one thing this preference must never be read as asking for.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .tails-token {
+      animation: none;
+    }
+  }
+}

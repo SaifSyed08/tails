@@ -25,6 +25,7 @@ import {
 } from 'react';
 
 import { ModelPicker } from '@/components/chat/ModelPicker';
+import { useComposerHeight } from '@/components/chat/useComposerHeight';
 import {
   describeVoiceControl,
   runVoiceAction,
@@ -527,6 +528,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Grows with what is being written, to ten lines. See the hook.
+  useComposerHeight(textareaRef, draft);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
@@ -875,13 +878,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               event.preventDefault();
               void addFiles(files);
             }}
+            /*
+              One line to start, and the hook above takes it from there. This is
+              the *initial* height only: `rows` is a fixed height, so leaving it
+              to do the job is what made a ten-line message scroll inside a
+              one-line box.
+            */
             rows={1}
             // The ghost text draws itself; leaving the placeholder on would
             // print the two on top of each other.
             placeholder={ghostVisible ? '' : 'Ask anything'}
             aria-label="Message"
             aria-describedby={ghostVisible ? 'composer-suggestion' : undefined}
-            className="max-h-48 w-full resize-none bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
+            className="w-full resize-none overflow-hidden bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
           />
 
           {ghostVisible ? (
