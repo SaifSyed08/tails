@@ -1,3 +1,4 @@
+import { remarkDue } from '@/modules/pets/pet-remark.js';
 import { mayRemark } from '@/modules/pets/pet-voice.tools.js';
 import { readChatMode, type PetChatMode } from '@/modules/pets/pet-spec.js';
 import { petsService } from '@/modules/pets/pets.service.js';
@@ -28,9 +29,19 @@ export type PetTurnVoice = {
    * an apology about being unable to do something nobody asked for.
    */
   mayRemark: boolean;
+  /**
+   * The pet's own in-character lines.
+   *
+   * Carried because they are the app's fallback when the model does not supply a
+   * remark — see `pet-remark.ts` for why that fallback exists and why these are
+   * the only words available offline that are genuinely in his voice.
+   */
+  phrases: string[];
 };
 
-const SILENT: PetTurnVoice = { mode: 'none', name: '', description: '', persona: '', mayRemark: false };
+const SILENT: PetTurnVoice = {
+  mode: 'none', name: '', description: '', persona: '', mayRemark: false, phrases: [],
+};
 
 /**
  * Which pet is in this conversation, and in what mode.
@@ -58,7 +69,13 @@ export function readPetVoice(sessionId: string): PetTurnVoice {
       name: pet.definition.displayName,
       description: pet.definition.description ?? '',
       persona: pet.personaPrompt ?? '',
-      mayRemark: mode === 'chatty' && mayRemark(sessionId),
+      /*
+        The dice are rolled here, once, and gate everything downstream — the
+        tool, the briefing and the app's own fallback. Rolling them in three
+        places would be three different answers to one question.
+      */
+      mayRemark: mode === 'chatty' && mayRemark(sessionId) && remarkDue(Math.random()),
+      phrases: pet.thinkingPhrases ?? [],
     };
   } catch {
     return SILENT;
@@ -103,20 +120,54 @@ function chattyBriefing(voice: PetTurnVoice): string {
  * Because it is the same kind of thing, and the same trap: text appended to a
  * system prompt that already contains app-authored prose about MCP tools will be
  * read as one more clause of ours unless it introduces itself. So it says who is
- * speaking and, more importantly, **what it does not outrank** — a character
- * voice must not be able to talk the agent out of using a tool, or into being
- * less careful, or into refusing to answer plainly when asked to.
+ * speaking and **what it does not outrank** — a character voice must not be able
+ * to talk the agent out of using a tool, into being less careful, or into
+ * refusing work.
  *
- * That last clause is the whole reason this is safe to offer. "Answer as Sonic"
- * is a request about *voice*; a persona that started declining work or inventing
- * facts in character would be a broken agent wearing a costume.
+ * That clause is the whole reason this is safe to offer. "Answer as Sonic" is a
+ * request about *voice*; a persona that started declining work or inventing facts
+ * in character would be a broken agent wearing a costume.
+ *
+ * It is one sentence, though, and that is deliberate — see the note inside. An
+ * earlier version spent three clauses on the guardrail and produced replies with
+ * no character in them at all.
  */
 function overrideBriefing(voice: PetTurnVoice): string {
+  /*
+    Imperative first, hedges second, and that order was earned.
+
+    The first version led with "the user wants your replies voiced by X" and then
+    spent three clauses on what the persona does *not* change. Measured result:
+    the briefing arrived in full, in the right conversation, and the reply came
+    back barely in character at all — the guardrails were louder than the
+    instruction. "This governs voice only" reads as a limit on the voice, and
+    "drop the act entirely if…" primes dropping it.
+    
+    So the instruction is now a plain command, it says explicitly that short
+    factual answers are included (that being exactly where the voice was getting
+    dropped), and the guardrail is one sentence that constrains *conduct* without
+    hedging the voice.
+  */
   const head = [
-    `The user wants your replies in this conversation to be voiced by ${voice.name}, their on-screen companion.`,
+    `Write every reply in this conversation as ${voice.name}, the user's on-screen companion — including short factual answers, which is where a voice usually slips.`,
     voice.description ? `He is: ${voice.description}` : '',
-    'This governs voice only — wording, register, the odd aside in character.',
-    'It does not change what you do or how carefully you do it: keep using your tools exactly as you otherwise would, stay accurate, never invent something because it suits the character, and drop the act entirely if the user asks a direct question about it or asks you to stop.',
+    'Accuracy and tool use are unaffected: never bend a fact, skip a tool, or refuse work for the sake of the voice, and drop it if the user asks you to.',
+    /*
+      And the one that actually decided it.
+
+      The user's standing instructions are appended *after* this, deliberately —
+      see `conversation-instructions.ts` — because tone is theirs to set. Which
+      means a general preference like "be concise in simple conversational
+      English" wins on position over any character voice, and that is precisely
+      what it did: the briefing arrived intact and the reply came back in plain
+      English, twice.
+
+      Turning a pet to "in character" is the user choosing a register for this
+      one conversation, so it has to be said out loud that it supersedes the
+      general one. Their specific rules are untouched: a ban on a phrase or a
+      punctuation mark is not a tone preference and the character has to obey it.
+    */
+    'Their standing instructions still apply in full, with one exception: where those describe a general tone — plain, concise, conversational — this character voice is the tone they have chosen for this conversation and supersedes it. Every specific rule they give (banned words or phrases, punctuation, formatting, length) still binds you, in character.',
   ].filter(Boolean).join(' ');
 
   if (!voice.persona) return head;

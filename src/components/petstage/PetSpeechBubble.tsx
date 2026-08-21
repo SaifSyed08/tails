@@ -26,6 +26,15 @@ import { useWebSocket } from '@/contexts/WebSocketContext';
 /** How long a remark stays up. Long enough to read twice at a glance. */
 const VISIBLE_MS = 6_500;
 
+/**
+ * Older than this and it is history, not a remark.
+ *
+ * Generous, because a slow turn can put a few seconds between the tool call and
+ * the client seeing it, and the failure this guards is a replayed remark from a
+ * previous session — which is minutes or hours old, not seconds.
+ */
+const STALE_MS = 30_000;
+
 export type PetRemark = { id: string; text: string };
 
 /** Stored with the conversation it belongs to. See the hook. */
@@ -49,6 +58,23 @@ export function usePetRemark(sessionId: string | null): PetRemark | null {
     // Only for the conversation on screen. A remark about a chat the user left
     // would be a pet reacting to something they cannot see.
     if (sessionId && message.sessionId && message.sessionId !== sessionId) return;
+
+    /*
+      And only if it just happened.
+
+      Remarks travel as a message kind, which means they land in the run's replay
+      buffer along with everything else — so re-opening a conversation replayed
+      the last one and the pet said something about a turn from an hour ago.
+      Caught by the timing in a live test: the bubble appeared 1.5 seconds after
+      a message that had not been answered yet.
+
+      A remark is a live flourish and nothing else; a stale one is not worth
+      showing, so it is dropped rather than queued. Everything else in the replay
+      is transcript, which is exactly why the general rule cannot be "skip the
+      replay" and this has to be the remark's own rule.
+    */
+    const at = Date.parse(message.timestamp ?? '');
+    if (Number.isFinite(at) && Date.now() - at > STALE_MS) return;
 
     setHeld({ id: message.id, text: message.content, sessionId });
   }), [subscribe, sessionId]);

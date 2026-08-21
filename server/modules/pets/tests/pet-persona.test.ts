@@ -5,7 +5,7 @@ import { formatPetVoice, type PetTurnVoice } from '@/modules/pets/pet-persona.js
 import { readChatMode } from '@/modules/pets/pet-spec.js';
 import {
   mayRemark,
-  recordRemarkForTest,
+  recordRemark,
   resetRemarkCooldown,
 } from '@/modules/pets/pet-voice.tools.js';
 
@@ -84,7 +84,7 @@ describe('the system-prompt section', () => {
     // The cooldown is about the bubble. It has nothing to do with the mode that
     // changes the reply itself.
     const text = formatPetVoice(voice({ mode: 'override', mayRemark: false }));
-    assert.match(text, /voiced by Sonic/);
+    assert.match(text, /as Sonic/);
   });
 
   it('names the pet and quotes his description in both talking modes', () => {
@@ -107,12 +107,37 @@ describe('the system-prompt section', () => {
     instruction to prioritise character over correctness, and the model has no
     way to know that is not what was wanted.
   */
-  it('states that a persona governs voice and not conduct', () => {
+  it('constrains conduct without hedging the voice', () => {
     const text = formatPetVoice(voice({ mode: 'override' }));
-    assert.match(text, /voice only/i);
-    assert.match(text, /keep using your tools/i);
-    assert.match(text, /never invent/i);
-    assert.match(text, /drop the act/i);
+
+    // The instruction comes first and is a command, not a preference. An earlier
+    // version led with the hedges and produced replies with no character in them.
+    assert.match(text, /^Write every reply/);
+    // And short factual answers are named, because that is where it slipped.
+    assert.match(text, /short factual answers/i);
+
+    // The guardrail is still there, and still covers all three things a costume
+    // must not be able to talk the agent out of.
+    assert.match(text, /never bend a fact/i);
+    assert.match(text, /skip a tool/i);
+    assert.match(text, /refuse work/i);
+    assert.match(text, /drop it if the user asks/i);
+  });
+
+  /*
+    The clause that made the mode work at all.
+
+    The user's own instructions are appended after this section and win on tone
+    by position, so a preference like "be concise in simple conversational
+    English" silently beat every character voice. Measured twice before it was
+    found. If this sentence goes, the mode stops working and nothing fails.
+  */
+  it('says the character voice supersedes a general tone preference', () => {
+    const text = formatPetVoice(voice({ mode: 'override' }));
+    assert.match(text, /standing instructions still apply/i);
+    assert.match(text, /supersedes/i);
+    // And that specific rules are not swept along with it.
+    assert.match(text, /every specific rule/i);
   });
 
   it('puts the user persona last, with nothing after it', () => {
@@ -127,7 +152,7 @@ describe('the system-prompt section', () => {
 
   it('works with no persona written, from the description alone', () => {
     const text = formatPetVoice(voice({ mode: 'override', persona: '' }));
-    assert.match(text, /voiced by Sonic/);
+    assert.match(text, /as Sonic/);
     assert.doesNotMatch(text, /next line/);
   });
 
@@ -152,7 +177,7 @@ describe('the remark cooldown', () => {
     assert.equal(mayRemark('chat-a', now), true, 'a pet that has never spoken may speak');
     // Recorded by the tool itself in the real path; simulated here by asking
     // again a moment later against a clock that has barely moved.
-    recordRemarkForTest('chat-a', now);
+    recordRemark('chat-a', now);
     assert.equal(mayRemark('chat-a', now + 1_000), false);
     assert.equal(mayRemark('chat-a', now + 39_000), false);
     assert.equal(mayRemark('chat-a', now + 41_000), true);
@@ -161,7 +186,7 @@ describe('the remark cooldown', () => {
   it('is per conversation', () => {
     resetRemarkCooldown();
     const now = 2_000_000;
-    recordRemarkForTest('chat-a', now);
+    recordRemark('chat-a', now);
     // Two chats each have their own pet on screen; one having just spoken says
     // nothing about the other.
     assert.equal(mayRemark('chat-b', now + 1_000), true);

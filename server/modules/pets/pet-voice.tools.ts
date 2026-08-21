@@ -64,20 +64,17 @@ export function mayRemark(sessionId: string, now = Date.now()): boolean {
   return last === undefined || now - last >= REMARK_COOLDOWN_MS;
 }
 
+/** Stamps a remark, whoever made it. The tool calls this; so does the fallback. */
+export function recordRemark(sessionId: string, at = Date.now()): void {
+  lastRemarkAt.set(sessionId, at);
+}
+
 /** Test seam. The cooldown is process-wide state and a test must be able to clear it. */
 export function resetRemarkCooldown(): void {
   lastRemarkAt.clear();
 }
 
-/**
- * Test seam. Stamps a remark without going through the tool.
- *
- * The tool's own handler needs an MCP call to reach, which would make a test of
- * the *timing* a test of the SDK instead.
- */
-export function recordRemarkForTest(sessionId: string, at: number): void {
-  lastRemarkAt.set(sessionId, at);
-}
+
 
 /**
  * The longest remark that fits.
@@ -106,7 +103,7 @@ const sayTool = (sessionId: string) => tool(
 
     // Recorded before publishing, so a burst of calls inside one turn cannot
     // each pass the check on the way in.
-    lastRemarkAt.set(sessionId, Date.now());
+    recordRemark(sessionId);
 
     /*
       Published on the run's own stream, as a message kind.

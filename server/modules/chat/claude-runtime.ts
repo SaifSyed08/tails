@@ -15,11 +15,14 @@ import { applySpokenSteer } from '@/modules/chat/spoken-turn.js';
 import { DEVSERVER_ALLOWED_TOOLS, devServerMcpServer } from '@/modules/devserver/devserver.tools.js';
 import { PREVIEW_ALLOWED_TOOLS, previewMcpServer } from '@/modules/preview/preview.tools.js';
 import { formatPetVoice, readPetVoice } from '@/modules/pets/pet-persona.js';
+import { composeRemark } from '@/modules/pets/pet-remark.js';
 import {
   createPetVoiceServer,
+  mayRemark,
   PET_PERSONA_ALLOWED_TOOLS,
   PET_SAY_TOOL,
   PET_VOICE_ALLOWED_TOOLS,
+  recordRemark,
 } from '@/modules/pets/pet-voice.tools.js';
 import { localRoutingEnv } from '@/modules/routing/local-model.js';
 import {
@@ -386,7 +389,54 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
     publishSessionsChanged(sessionId);
   };
 
+  /*
+    Which pet is in this conversation, and what it is allowed to do.
+
+    Read once, before the turn, and used in four places — the briefing, the tool
+    server, the allowed-tools list, and the end-of-turn fallback below. Reading
+    it four times would be four chances to disagree, and the disagreement that
+    matters is a model holding a tool it has been told not to use. It is also
+    where the dice are rolled, so every one of those four sees the same answer.
+  */
+  const petVoice = readPetVoice(sessionId);
+
   let drainTimer: NodeJS.Timeout | null = null;
+
+  /*
+    The pet's remark, if the model did not make one.
+
+    Called once, when the turn ends on screen. `mayRemark(sessionId)` still
+    returning true is exactly the evidence that the tool never fired — the tool
+    stamps the cooldown as its first act — so this needs no separate flag and
+    cannot double up with a remark the model already made.
+
+    Why the app says it at all: the tool is deferred in this CLI, so a remark
+    costs the model a `ToolSearch` round trip and on a routine turn it declines.
+    See `pet-remark.ts`. The words are the pet's own authored phrases, so a pet
+    with none stays quiet rather than saying something in nobody's voice.
+  */
+  const deliverPetRemark = () => {
+    if (!petVoice.mayRemark || !mayRemark(sessionId)) return;
+
+    const remark = composeRemark({
+      phrases: petVoice.phrases,
+      // The user's own words, not the expanded prompt: matching against a slash
+      // command's expansion would score the app's boilerplate, not the request.
+      message: prompt,
+      roll: Math.random(),
+    });
+    if (!remark) return;
+
+    recordRemark(sessionId);
+    send({
+      id: `pet-remark-${randomUUID()}`,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      kind: 'pet_remark',
+      role: 'assistant',
+      content: remark,
+    });
+  };
 
   // The mode this turn runs in is the mode the conversation is in, so a
   // client that reconnects — or a new one that opens the same chat — can be
@@ -456,16 +506,6 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       exitCode = 1;
       return;
     }
-
-    /*
-      Which pet is in this conversation, and what it is allowed to do.
-
-      Read once, here, and used in three places below — the briefing, the tool
-      server and the allowed-tools list. Reading it three times would be three
-      chances for them to disagree, and the disagreement that matters is a model
-      holding a tool it has been told not to use.
-    */
-    const petVoice = readPetVoice(sessionId);
 
     const options: Options = {
       cwd,
@@ -661,6 +701,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         // The turn is over on screen here, not when the iterator ends. What
         // follows is only the suggestion, and it must not hold the spinner.
         finishTurn();
+        deliverPetRemark();
         drainTimer = setTimeout(() => abortController.abort(), SUGGESTION_DRAIN_MS);
       }
     }

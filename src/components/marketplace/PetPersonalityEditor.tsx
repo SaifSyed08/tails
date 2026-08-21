@@ -41,12 +41,12 @@ const CHAT_MODES: { id: PetChatMode; label: string; blurb: string }[] = [
   {
     id: 'chatty',
     label: 'Chimes in',
-    blurb: 'After a reply he sometimes says one short thing in character, in a bubble above him. Never in the transcript, and never anything you need.',
+    blurb: 'After a reply he sometimes says one of his lines below, in a bubble above him. Never in the transcript, and never anything you need. Give him some lines or he stays quiet.',
   },
   {
     id: 'override',
     label: 'In character',
-    blurb: 'Replies in his conversations are written in his voice. Only the voice — he still uses every tool and stays accurate.',
+    blurb: 'Replies in his conversations are written in his voice. Only the voice — he still uses every tool and stays accurate. This one outranks the general tone in your own conversation instructions; your specific rules still bind him.',
   },
 ];
 
