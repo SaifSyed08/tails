@@ -76,7 +76,7 @@ require(path.join(ROOT, 'node_modules', 'esbuild')).buildSync({
 
 const { armWatchdog } = require('../harness-guard.cjs');
 const { renderDesktopWindowHtml, codexSheetRows, CODEX_CELL, CODEX_COLUMNS, CODEX_FPS } = require(BUNDLE);
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, screen } = require('electron');
 const pet = await import('../pet-window.js');
 armWatchdog(180000);
 
@@ -90,6 +90,13 @@ BrowserWindow.prototype.showInactive = function patched() {
 };
 
 const mouse = [];
+const moves = [];
+const originalSetPosition = BrowserWindow.prototype.setPosition;
+BrowserWindow.prototype.setPosition = function patched(x, y, ...rest) {
+  moves.push(`${x},${y}`);
+  return originalSetPosition.call(this, x, y, ...rest);
+};
+
 const originalIgnore = BrowserWindow.prototype.setIgnoreMouseEvents;
 BrowserWindow.prototype.setIgnoreMouseEvents = function patched(ignore, opts) {
   mouse.push(ignore ? 'through' : 'INTERACTIVE');
@@ -460,6 +467,37 @@ app.whenReady().then(async () => {
     const ok = spurious === 0 && wanted >= 1;
     console.log(`${ok ? 'ok  ' : 'FAIL'}  re-showing a visible pet does not reset him (${spurious} spurious, ${wanted} after a real hide)`);
     allPassed = ok && allPassed;
+  }
+
+  /*
+   * 18. Coming back on screen re-applies the window's own geometry.
+   *
+   * The one hard fact about the outstanding report is the user's: "Recall pet"
+   * brings a dead pet back. That button clears the hide, calls `applyVisibility`
+   * and moves the window -- and the first two happen on every ordinary show, so
+   * the move is the part that was missing. It is on the show path now, and this
+   * is the assertion that it stays there.
+   *
+   * Several likelier explanations were ruled out by measurement first, which is
+   * why this is a remedy rather than a diagnosis: the OS's draggable region
+   * survives a hide/show intact (`WM_NCHITTEST` still answers `HTCAPTION` over
+   * his body), bounds and record agree to within a pixel, and a real cursor on a
+   * real pet completes the handshake.
+   *
+   * A detector -- re-assert once he has been unresponsive for a second -- was
+   * written and deleted. The condition it has to watch, the cursor inside this
+   * window while the window stays transparent to the mouse, is the normal state
+   * of a transparent rectangle larger than the sprite in it.
+   */
+  {
+    moves.length = 0;
+    pet.setPetSuppressed(true);
+    await wait(200);
+    pet.setPetSuppressed(false);
+    await wait(200);
+    const wrote = moves.length > 0;
+    console.log(`${wrote ? 'ok  ' : 'FAIL'}  coming back on screen re-applies his geometry (${moves.length} position writes)`);
+    allPassed = wrote && allPassed;
   }
 
   console.log(allPassed ? '\nINVARIANT HOLDS on every path' : '\nINVARIANT BROKEN');

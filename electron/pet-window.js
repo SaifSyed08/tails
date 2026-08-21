@@ -87,6 +87,7 @@ const POSITION_TOLERANCE = 2;
 /** How often to check that an interactive window still has the pointer over it. */
 const WATCHDOG_INTERVAL_MS = 250;
 
+
 let petWindow = null;
 let readState = () => ({});
 let writeState = () => {};
@@ -233,6 +234,42 @@ function snapshot() {
     sinceCarry: carrying ? Date.now() - lastCarryAt : null,
     watchdog: watchdogTimer !== null,
     settle: settleTimer !== null,
+    ...geometrySnapshot(),
+  };
+}
+
+/**
+ * Where this window is, according to everyone who has an opinion.
+ *
+ * Added because of the one clue that survived every other theory: "Recall pet"
+ * makes an unusable pet usable again, and the only thing Recall does that an
+ * ordinary show does not is **move the window**. That points at geometry rather
+ * than at any of the flags, so the flags are no longer the interesting part.
+ *
+ * Three views, deliberately side by side, because the failure this is looking
+ * for is them disagreeing: our own record, the window's own bounds, and the
+ * display the shell believes he is standing on. A pointer that lands on the pet
+ * on screen but arrives at the page as a coordinate somewhere else is a pet who
+ * cannot be hovered, cannot be pressed, and looks completely fine.
+ */
+function geometrySnapshot() {
+  if (!isAlive()) return {};
+
+  const bounds = petWindow.getBounds();
+  const content = petWindow.getContentBounds();
+  const at = trackedPosition;
+  const display = screen.getDisplayNearestPoint({ x: content.x, y: content.y });
+
+  return {
+    tracked: at ? `${at.x},${at.y}` : null,
+    bounds: `${bounds.x},${bounds.y} ${bounds.width}x${bounds.height}`,
+    content: `${content.x},${content.y} ${content.width}x${content.height}`,
+    reported: reportedSize ? `${reportedSize.width}x${reportedSize.height}` : null,
+    // The two numbers `sizeForScaleFactor` multiplies by, which is where a
+    // window twice the size of the sprite inside it comes from.
+    scale: `${screen.getPrimaryDisplay().scaleFactor} -> ${display.scaleFactor}`,
+    onDisplay: `${display.id}`,
+    drift: at ? Math.max(Math.abs(bounds.x - at.x), Math.abs(bounds.y - at.y)) : null,
   };
 }
 
@@ -461,6 +498,19 @@ function startWatchdog() {
       // The page has the pointer and answers faster than this poll can; asking
       // again would only fight it.
       if (interactive) return;
+
+      /*
+       * Deliberately no "he has been dead for N ticks, do something" rule here.
+       *
+       * One was written and removed, because the condition it would have to
+       * watch for -- the cursor inside this window while the window stays
+       * transparent to the mouse -- is the *normal* state. The window is a
+       * transparent rectangle larger than the sprite, so a pointer resting in
+       * the empty part of it is exactly that, and a detector built on it fires
+       * constantly on a perfectly healthy pet. Only the page can tell "inside
+       * the window" from "on the animal", and the page cannot know that its own
+       * answer is wrong.
+       */
 
       // Into the page's own coordinates. Zoom is pinned at 1 for this window —
       // see the guards around `setZoomLevel` — but it is read rather than
@@ -752,6 +802,9 @@ function makeUsable(fromHidden) {
   interactive = false;
   petWindow.setIgnoreMouseEvents(true, { forward: true });
   petWindow.webContents.send('pet:resync', { carrying: carryIsLive() });
+  // The window has just been off screen, which is where every geometry fault
+  // this feature has had was introduced. See `reassertGeometry`.
+  reassertGeometry('shown');
   traceState('made-usable');
 }
 
@@ -783,6 +836,60 @@ function assertWindowState() {
   if (!isAlive()) return;
   if (!petWindow.isMovable()) petWindow.setMovable(true);
   if (!petWindow.isAlwaysOnTop()) petWindow.setAlwaysOnTop(true, 'screen-saver');
+}
+
+/**
+ * Writes the window's own geometry back to it.
+ *
+ * ## Why this exists, and why it is a position write
+ *
+ * "Recall pet" reliably brings a dead pet back to life. That button clears the
+ * hide, calls `applyVisibility` and moves the window -- and the first two happen
+ * on every ordinary show, so the one thing it does that a show does not is
+ * **move**. That is a strong clue and it does not point at any of the flags:
+ * whatever the fault is, re-applying the window's geometry clears it.
+ *
+ * Several candidates were ruled out by measurement rather than argument. The
+ * OS's draggable region survives a hide/show intact -- `WM_NCHITTEST` still
+ * answers `HTCAPTION` over his body afterwards -- so it is not that. The
+ * window's bounds and our record of them agree to within a pixel. And a real
+ * cursor on a real pet, on this machine, produces the handshake correctly.
+ *
+ * So the cause is not identified, and this does not pretend to identify it.
+ * What it does is turn the known remedy into something the application applies
+ * itself at the moment it is most likely to be needed: when he comes back onto
+ * the screen, which is where every geometry fault this feature has had was
+ * introduced. A forced `setPosition` of the position he is already at costs one
+ * call and moves nothing -- the write is the point, not the destination, which
+ * is why it cannot go through `moveTo` (that skips a write matching the record,
+ * and here the record is not in question).
+ *
+ * It is deliberately *not* driven by a "he has been dead for a while" detector.
+ * One was written; see the note in the watchdog for why it cannot work from the
+ * shell's side.
+ *
+ * The pet is *not* sent home. Recall's other half -- the corner of the primary
+ * display -- is a deliberate, visible action for a pet nobody can find, and
+ * doing it silently would take a pet somebody parked somewhere and move him.
+ */
+function reassertGeometry(reason) {
+  if (!isAlive()) return;
+
+  const at = positionNow();
+  petWindow.setPosition(at.x, at.y);
+
+  // Reconciled afterwards, on the same rule as `moveTo`: a pixel is the DIP
+  // round trip, more than that is the record having come adrift.
+  const [actualX, actualY] = petWindow.getPosition();
+  if (Math.abs(actualX - at.x) > POSITION_TOLERANCE
+    || Math.abs(actualY - at.y) > POSITION_TOLERANCE) {
+    trackedPosition = { x: actualX, y: actualY };
+  }
+
+  // And the size, which is the other half of the window's geometry and the half
+  // that decides where the sprite and the pill land inside it.
+  applyReportedSize();
+  traceState(`geometry-reasserted-${reason}`);
 }
 
 /**
