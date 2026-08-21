@@ -28,7 +28,10 @@ const MARQUEE_DELAY_MS = 350;
  * has been laid out. A fixed `translateX(-100%)` either stops short of the end
  * or runs the name clean off the row, depending on how long it happens to be.
  */
-function MarqueeTitle({ text, active }: { text: string; active: boolean }) {
+function MarqueeTitle(
+  { text, active, emphasis = false }:
+  { text: string; active: boolean; emphasis?: boolean },
+) {
   const viewportRef = useRef<HTMLSpanElement>(null);
   const textRef = useRef<HTMLSpanElement>(null);
 
@@ -61,7 +64,7 @@ function MarqueeTitle({ text, active }: { text: string; active: boolean }) {
   }, [active, text]);
 
   return (
-    <span ref={viewportRef} className="block min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+    <span ref={viewportRef} className={cn('block min-w-0 flex-1 overflow-hidden whitespace-nowrap', emphasis && 'font-medium text-foreground')}>
       <span
         ref={textRef}
         className={cn(
@@ -89,6 +92,8 @@ type SessionRowProps = {
   onCancelRename: () => void;
   /** The pet assigned to this chat, once its sprite is known. */
   pet?: InstalledPet | null;
+  /** A turn finished here while the user was reading something else. */
+  unread?: boolean;
   /** Set while a pet is being installed for this row, or while one failed to. */
   dropStatus?: { state: 'installing' | 'failed'; message: string } | null;
   onAssignPet?: (payload: PetDragPayload) => void;
@@ -96,7 +101,7 @@ type SessionRowProps = {
 
 export function SessionRow({
   session, active, renaming, onOpen, onOpenMenu, onHover, onCommitRename, onCancelRename,
-  pet = null, dropStatus = null, onAssignPet,
+  pet = null, dropStatus = null, onAssignPet, unread = false,
 }: SessionRowProps) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
@@ -210,7 +215,34 @@ export function SessionRow({
           <Pin className="size-3 shrink-0 rotate-45 opacity-70" aria-hidden="true" />
         ) : null}
 
-        <MarqueeTitle text={session.title} active={hovered && !dragging} />
+        {/*
+          Before the name, not after it.
+
+          The right end of this row is already spoken for — the options button
+          and the pet live there — and a dot competing for that space would
+          either be pushed off by a long title or push the title further in. At
+          the head of the line it has a fixed cost and reads as a marker on the
+          row rather than as another control.
+        */}
+        {unread ? (
+          <span
+            className="size-1.5 shrink-0 rounded-full bg-primary"
+            /* Named, not decorative: the dot is the only thing saying this
+               conversation has something new in it. */
+            role="img"
+            aria-label="Finished while you were away"
+          />
+        ) : null}
+
+        <MarqueeTitle
+          text={session.title}
+          active={hovered && !dragging}
+          /* Unread reads as emphasis, which is what a dot means everywhere
+             else. Only when the row is not the active one — the chat you are
+             looking at is never unread, so styling it would be a state that
+             cannot happen. */
+          emphasis={unread && !active}
+        />
       </button>
 
       {dropStatus ? (

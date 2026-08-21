@@ -182,6 +182,59 @@ export const thinkingPhrasesSchema = z.array(
 
 export type ThinkingPhrases = z.infer<typeof thinkingPhrasesSchema>;
 
+/**
+ * How much of a personality a pet is allowed to be.
+ *
+ * Three modes, and the gap between the second and third is the whole point:
+ *
+ * - **none** — a sprite. He walks, he reacts to being thrown, and he says
+ *   nothing. What every pet was before this existed, and the default for every
+ *   pet that has never been configured.
+ *
+ * - **chatty** — he *comments*. The model is given one tool and asked to call it
+ *   at the end of a turn with a short in-character remark about what just
+ *   happened. The remark goes in a bubble above the pet and never touches the
+ *   reply: it is a tool call, not text, which is what makes it impossible for a
+ *   half-formed aside to end up in the middle of an answer.
+ *
+ * - **override** — he *is* the voice. The pet's persona is appended to the
+ *   system prompt for conversations he lives in, so the reply itself is in
+ *   character. This is the one with teeth, and the reason it is a separate mode
+ *   rather than a stronger setting of `chatty`: one decorates the answer and the
+ *   other changes it.
+ */
+export const PET_CHAT_MODES = ['none', 'chatty', 'override'] as const;
+
+export const petChatModeSchema = z.enum(PET_CHAT_MODES);
+
+export type PetChatMode = (typeof PET_CHAT_MODES)[number];
+
+/**
+ * The persona is read as "none" until somebody chooses.
+ *
+ * A null mode has to mean silence rather than a default personality: pets
+ * installed before this feature existed must behave exactly as they did, and a
+ * pet that starts talking because the app was updated is a surprise nobody
+ * asked for.
+ */
+export const readChatMode = (value: string | null | undefined): PetChatMode => {
+  const parsed = petChatModeSchema.safeParse(value);
+  return parsed.success ? parsed.data : 'none';
+};
+
+/**
+ * How long a persona may be.
+ *
+ * Appended to the system prompt of every turn in the conversations this pet
+ * lives in, so the same standing tax as the user's own instructions — see
+ * `conversation-instructions.ts`. Shorter than that budget on purpose: a
+ * character is a voice and a handful of habits, and anything approaching a page
+ * is a second system prompt fighting the first.
+ */
+export const MAX_PERSONA_LENGTH = 700;
+
+export const personaPromptSchema = z.string().trim().max(MAX_PERSONA_LENGTH);
+
 
 /**
  * How a pet should sound, if speech is ever wired up.

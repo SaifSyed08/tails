@@ -10,6 +10,7 @@ import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { ClaudeCliNotice } from '@/components/shell/ClaudeCliNotice';
 import { Header } from '@/components/shell/Header';
 import { Sidebar } from '@/components/sidebar/Sidebar';
+import { UnreadWatcher } from '@/components/sidebar/unread';
 import { TerminalPanel } from '@/components/terminal/TerminalPanel';
 import { AppearanceProvider, useAppearance } from '@/contexts/AppearanceContext';
 import { WebSocketProvider } from '@/contexts/WebSocketContext';
@@ -42,6 +43,7 @@ export default function App() {
     () => localStorage.getItem(INTRO_DISABLED_KEY) !== '1',
   );
   const [sessionId, setSessionId] = useState<string | null>(null);
+
   const [sessionTitle, setSessionTitle] = useState('New chat');
   const [cwd, setCwd] = useState<string>('');
   const [refreshToken, setRefreshToken] = useState(0);
@@ -154,6 +156,12 @@ export default function App() {
 
   return (
     <WebSocketProvider>
+      {/*
+        The unread dots. Inside the provider because it subscribes, and mounted
+        here rather than in the sidebar because a turn finishing while the
+        marketplace or settings is open is exactly the case the dot exists for.
+      */}
+      <UnreadWatcher sessionId={sessionId} />
       <AppearanceProvider sessionId={sessionId}>
         {showIntro ? <Intro onDone={() => setShowIntro(false)} /> : null}
         <RestylingChip />

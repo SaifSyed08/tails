@@ -109,6 +109,10 @@ export type InstalledPet = {
    * of eighty characters.
    */
   thinkingPhrases: string[];
+  /** Quiet sprite, occasional commentator, or the voice of the reply. */
+  chatMode: 'none' | 'chatty' | 'override';
+  /** The persona text `override` sends. Empty when nobody has written one. */
+  personaPrompt: string;
   /** ISO timestamp of when this pet entered the library, not when it was made. */
   installedAt: string | null;
   removable: boolean;
@@ -334,6 +338,8 @@ export const petsApi = {
     states?: PetStates;
     assignedTheme?: string | null;
     thinkingPhrases?: string[] | null;
+    chatMode?: string;
+    personaPrompt?: string;
   }) =>
     writing(request<InstalledPet>(`/${encodeURIComponent(id)}`, {
       method: 'PATCH',

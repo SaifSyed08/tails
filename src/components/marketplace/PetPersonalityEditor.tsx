@@ -26,6 +26,46 @@ import { petsApi, type InstalledPet } from './marketplace-api';
 
 /** Mirrors the server's cap. Enforced here too, so the UI cannot offer a save that fails. */
 const MAX_PHRASES = 12;
+
+/** Mirrors `personaPromptSchema`. */
+const MAX_PERSONA = 700;
+
+type PetChatMode = 'none' | 'chatty' | 'override';
+
+const CHAT_MODES: { id: PetChatMode; label: string; blurb: string }[] = [
+  {
+    id: 'none',
+    label: 'Quiet',
+    blurb: 'He walks about and reacts to being picked up, and never says anything.',
+  },
+  {
+    id: 'chatty',
+    label: 'Chimes in',
+    blurb: 'After a reply he sometimes says one short thing in character, in a bubble above him. Never in the transcript, and never anything you need.',
+  },
+  {
+    id: 'override',
+    label: 'In character',
+    blurb: 'Replies in his conversations are written in his voice. Only the voice — he still uses every tool and stays accurate.',
+  },
+];
+
+/**
+ * A persona from what the app already knows about him.
+ *
+ * Composed, not generated, and that is the honest trade: instant, free, needs no
+ * network, and it is a starting point rather than a character. The description is
+ * the only characterisation most pets have, so it does the work; the rest is the
+ * framing that stops a voice turning into a refusal to do the job.
+ */
+function draftPersona(name: string, description: string): string {
+  return [
+    `Speak as ${name}.`,
+    description ? `${name} is: ${description.replace(/\s+/g, ' ').trim()}` : '',
+    'Keep their manner and turns of phrase, and let it colour how you explain things rather than what you say.',
+    'Stay brief and stay accurate — never bend a fact to fit the character, and answer plainly whenever plainness is what is needed.',
+  ].filter(Boolean).join(' ').slice(0, MAX_PERSONA);
+}
 const MAX_PHRASE_LENGTH = 80;
 
 type PetPersonalityEditorProps = {
@@ -39,6 +79,8 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
   const [phrases, setPhrases] = useState<string[]>(
     pet.thinkingPhrases.length > 0 ? pet.thinkingPhrases : [''],
   );
+  const [mode, setMode] = useState<PetChatMode>(pet.chatMode ?? 'none');
+  const [persona, setPersona] = useState(pet.personaPrompt ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,6 +114,12 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
       await petsApi.updatePet(pet.definition.id, {
         assignedTheme: theme === '' ? null : theme,
         thinkingPhrases: cleaned.length > 0 ? cleaned : null,
+        chatMode: mode,
+        // Only meaningful in `override`, but always sent: a persona written and
+        // then parked by switching to "quiet" should still be there when the
+        // user switches back, rather than being silently dropped by the save
+        // that happened in between.
+        personaPrompt: persona.trim(),
       });
       onSaved();
     } catch (saveError) {
@@ -92,6 +140,72 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
           their folders are never written to.
         </p>
       </div>
+
+      {/*
+        How much of a personality he is, above the two decorative settings.
+
+        Three options, and the third differs in kind: the first two change what
+        the pet does, and "in character" changes what the *assistant* sounds
+        like in every reply in conversations he lives in. That is a large thing
+        to hand somebody from a pet panel, so it is described in terms of what it
+        does to the answers, and it shows the text that will be sent rather than
+        hiding it behind a label.
+      */}
+      <div className="space-y-1.5">
+        <span className="block text-[11px] font-medium text-muted-foreground">
+          How much he talks
+        </span>
+        {CHAT_MODES.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            onClick={() => setMode(option.id)}
+            className={cn(
+              'block w-full rounded-md border p-2 text-left transition-colors duration-quick',
+              mode === option.id ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent',
+            )}
+          >
+            <span className="block text-xs font-medium">{option.label}</span>
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">{option.blurb}</span>
+          </button>
+        ))}
+      </div>
+
+      {mode === 'override' ? (
+        <div className="space-y-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              How he speaks
+            </span>
+            <button
+              type="button"
+              onClick={() => setPersona(draftPersona(
+                pet.definition.displayName,
+                pet.definition.description ?? '',
+              ))}
+              className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+            >
+              Draft one
+            </button>
+          </div>
+
+          <textarea
+            data-tails-part="input"
+            rows={4}
+            maxLength={MAX_PERSONA}
+            value={persona}
+            onChange={(event) => setPersona(event.target.value)}
+            placeholder={`How should ${pet.definition.displayName} sound? Or press "Draft one".`}
+            className="w-full resize-none px-2 py-1.5 text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+          />
+
+          <p className="text-[11px] text-muted-foreground">
+            Sent with every message in conversations he lives in, so keep it short. You can also ask
+            in chat — &ldquo;write {pet.definition.displayName} a persona&rdquo; — and it lands here.
+            {!persona.trim() ? ' Left empty, he is played from his name and description.' : ''}
+          </p>
+        </div>
+      ) : null}
 
       <label className="block">
         <span className="block text-[11px] font-medium text-muted-foreground">

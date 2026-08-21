@@ -34,6 +34,7 @@ import {
 import { onDesktopPetDetails, placeDesktopPetAt } from './desktop-handoff';
 import { PetDetailsPanel } from './PetDetailsPanel';
 import { PetPill } from './PetPill';
+import { PetSpeechBubble, usePetRemark } from './PetSpeechBubble';
 import { advanceMotion, type Bounds, type Motion } from './pet-motion';
 import { collisionSoundEnabled, playCollision } from './pet-sfx';
 import { fpsForState } from './sprite-rate';
@@ -348,6 +349,15 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * for. See the hook for why the decision is split between here and the shell.
    */
   useDesktopPetAlerts({ sessionId, activePetId });
+
+  /*
+    What the pet last said, if anything.
+
+    Subscribed here rather than beside the bubble's own render, because this
+    component returns early in several places — a hook below one of those
+    returns is a hook that runs on some renders and not others.
+  */
+  const remark = usePetRemark(sessionId);
 
   // The desktop pet's settings button. The shell has already raised the app.
   useEffect(() => {
@@ -1088,6 +1098,14 @@ export function ChatPet({ sessionId }: ChatPetProps) {
             /* Per state: moments are brisk, resting states breathe. */
             fps={fpsForState(pet.definition.frame.fps, state)}
           />
+          {/*
+            Inside the pet's own box, so it travels with him: he is thrown,
+            dragged and walks around, and a bubble positioned against the chat
+            would have to chase him. `bottom-full` puts it above his head
+            without changing his size — see the component.
+          */}
+          {remark ? <PetSpeechBubble text={remark.text} petWidth={width} /> : null}
+
           <PetPill
             open={hovered && !carrying}
             width={width}

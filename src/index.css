@@ -1221,3 +1221,41 @@
     }
   }
 }
+
+@layer utilities {
+  /**
+   * The pet's speech bubble arriving.
+   *
+   * Stepped rather than smooth: three keyframes at whole numbers instead of an
+   * eased scale, so the bubble pops in two frames like a sprite animation would.
+   * A 300ms cubic-bezier ease would be the wrong idiom next to pixel art — the
+   * bubble is drawn out of blocks precisely so it does not look like a browser
+   * tooltip, and animating it like one would give that away.
+   *
+   * The X translate is repeated in every frame because it is doing layout work,
+   * not motion: the element is centred with `left: 50%`, so losing the -50%
+   * mid-animation would slide the bubble sideways and back.
+   */
+  .pet-bubble {
+    animation: t-pet-bubble-in 160ms steps(2, end) both;
+    transform: translateX(-50%);
+  }
+
+  @keyframes t-pet-bubble-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(3px) scale(0.9);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pet-bubble {
+      animation: none;
+    }
+  }
+}

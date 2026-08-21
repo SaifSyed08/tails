@@ -64,6 +64,9 @@ const ADDED_COLUMNS: { name: string; definition: string }[] = [
   { name: 'last_used_at', definition: 'DATETIME' },
   { name: 'stage_json', definition: 'TEXT' },
   { name: 'voice_json', definition: 'TEXT' },
+  // How much of a personality the pet is allowed to be. See `pet-spec.ts`.
+  { name: 'chat_mode', definition: 'TEXT' },
+  { name: 'persona_prompt', definition: 'TEXT' },
 ];
 
 /** Applies the pets schema to a connection. Idempotent. */
@@ -169,6 +172,16 @@ export type InstalledPetRecord = {
    * validated against it on the way in.
    */
   voice: PetVoiceRecord | null;
+  /**
+   * How much of a personality this pet is allowed to be.
+   *
+   * Null until the user chooses, and read as "none" — a pet that has never been
+   * configured says nothing and changes nothing, which is what every pet did
+   * before this existed. See `pet-spec.ts` for the three modes.
+   */
+  chatMode: string | null;
+  /** The persona text used by `override` mode, or null. */
+  personaPrompt: string | null;
 };
 
 /** Mirrors `petVoiceSchema`. Declared here so the repository owes nothing to zod. */
@@ -202,6 +215,8 @@ type InstalledPetRow = {
   last_used_at: string | null;
   stage_json: string | null;
   voice_json: string | null;
+  chat_mode: string | null;
+  persona_prompt: string | null;
 };
 
 /**
@@ -234,11 +249,13 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   lastUsedAt: row.last_used_at,
   stage: parseJson<PetStage>(row.stage_json),
   voice: parseJson<PetVoiceRecord>(row.voice_json),
+  chatMode: row.chat_mode,
+  personaPrompt: row.persona_prompt,
 });
 
 const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, '
   + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at, stage_json, '
-  + 'voice_json';
+  + 'voice_json, chat_mode, persona_prompt';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -302,12 +319,27 @@ export const petsRepository = {
    */
   savePreferences(
     id: string,
-    input: { assignedTheme?: string | null; thinkingPhrases?: string[] | null },
+    input: {
+      assignedTheme?: string | null;
+      thinkingPhrases?: string[] | null;
+      chatMode?: string | null;
+      personaPrompt?: string | null;
+    },
   ): void {
+    /*
+      Field by field, each guarded by its own "was this supplied" flag.
+
+      `undefined` leaves a column alone and `null` clears it, which is what lets
+      a form that only edits the phrases avoid wiping the theme by omitting it.
+      Four columns now, and the pattern is the reason adding the fifth is a line
+      rather than a decision.
+    */
     db().prepare(`
       UPDATE installed_pets
       SET assigned_theme = CASE WHEN ? THEN ? ELSE assigned_theme END,
           thinking_phrases_json = CASE WHEN ? THEN ? ELSE thinking_phrases_json END,
+          chat_mode = CASE WHEN ? THEN ? ELSE chat_mode END,
+          persona_prompt = CASE WHEN ? THEN ? ELSE persona_prompt END,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -315,6 +347,10 @@ export const petsRepository = {
       input.assignedTheme ?? null,
       input.thinkingPhrases === undefined ? 0 : 1,
       input.thinkingPhrases ? JSON.stringify(input.thinkingPhrases) : null,
+      input.chatMode === undefined ? 0 : 1,
+      input.chatMode ?? null,
+      input.personaPrompt === undefined ? 0 : 1,
+      input.personaPrompt ?? null,
       id,
     );
   },

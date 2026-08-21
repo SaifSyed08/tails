@@ -6,6 +6,10 @@ import { TAILS_HOME } from '@/db/connection.js';
 import { sessionsRepository } from '@/db/sessions.repository.js';
 import {
   assignedThemeSchema,
+  personaPromptSchema,
+  petChatModeSchema,
+  readChatMode,
+  type PetChatMode,
   buildDefaultStates,
   DEFAULT_SPRITESHEET_NAME,
   findOutOfRangeStates,
@@ -114,6 +118,10 @@ export type InstalledPet = {
   assignedTheme: string | null;
   /** What the pet says while it is thinking. Plain text, capped, possibly empty. */
   thinkingPhrases: string[];
+  /** Silent sprite, commentator, or the voice of the reply. See `pet-spec.ts`. */
+  chatMode: PetChatMode;
+  /** The persona text `override` mode sends. Empty when nobody has written one. */
+  personaPrompt: string;
   /** Starred pets lead the carousel. */
   starred: boolean;
   /**
@@ -470,6 +478,10 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     gridBasis,
     preview: describePreviewFrame(grid, states),
     assignedTheme: override?.assignedTheme ?? null,
+    // Null reads as "none": a pet nobody has configured behaves exactly as pets
+    // behaved before this existed.
+    chatMode: readChatMode(override?.chatMode),
+    personaPrompt: override?.personaPrompt ?? '',
     // Null means nobody has chosen, so the pet keeps the voice he is known for.
     // An empty array is a choice, and it wins.
     thinkingPhrases: override?.thinkingPhrases
@@ -1110,11 +1122,34 @@ export const petsService = {
       throw toValidationError('Those thinking phrases are not usable.', phrases.error.issues);
     }
 
+    const mode = input.chatMode === undefined
+      ? undefined
+      : petChatModeSchema.safeParse(input.chatMode);
+    if (mode && !mode.success) {
+      throw toValidationError('That is not one of the three pet modes.', mode.error.issues);
+    }
+
+    /*
+      A persona is cleared by an empty string, not by null.
+
+      The field is a textarea: emptying it is the user saying "no persona", and
+      making that indistinguishable from "leave it alone" would mean the only way
+      to remove one is to switch modes and back.
+    */
+    const persona = input.personaPrompt === undefined
+      ? undefined
+      : personaPromptSchema.safeParse(input.personaPrompt);
+    if (persona && !persona.success) {
+      throw toValidationError('That persona is too long.', persona.error.issues);
+    }
+
     petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
     petsRepository.saveCustomisation(pet.definition.id, { frame: frame?.data, states: states?.data });
     petsRepository.savePreferences(pet.definition.id, {
       assignedTheme: theme && typeof theme === 'object' ? theme.data : theme,
       thinkingPhrases: phrases && typeof phrases === 'object' ? phrases.data : phrases,
+      ...(mode ? { chatMode: mode.data } : {}),
+      ...(persona ? { personaPrompt: persona.data || null } : {}),
     });
 
     return requirePet(id);

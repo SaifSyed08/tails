@@ -32,6 +32,14 @@ export type MessageKind =
   | 'sessions_changed'
   | 'pets_changed'
   | 'appearance_changed'
+  /**
+   * The on-screen pet has something to say. Plain text in `content`.
+   *
+   * Produced by a tool call rather than by the reply, so it never reaches the
+   * transcript — see `pet-voice.tools.ts`. A client that does not know this kind
+   * ignores it, which is the whole reason capabilities arrive as kinds.
+   */
+  | 'pet_remark'
   /** The preview pane should show a URL, or close. Payload is JSON in `content`. */
   | 'preview_changed'
   | 'protocol_error';

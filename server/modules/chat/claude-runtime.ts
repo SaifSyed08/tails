@@ -14,6 +14,13 @@ import { expandLocalCommand } from '@/modules/chat/commands.service.js';
 import { applySpokenSteer } from '@/modules/chat/spoken-turn.js';
 import { DEVSERVER_ALLOWED_TOOLS, devServerMcpServer } from '@/modules/devserver/devserver.tools.js';
 import { PREVIEW_ALLOWED_TOOLS, previewMcpServer } from '@/modules/preview/preview.tools.js';
+import { formatPetVoice, readPetVoice } from '@/modules/pets/pet-persona.js';
+import {
+  createPetVoiceServer,
+  PET_PERSONA_ALLOWED_TOOLS,
+  PET_SAY_TOOL,
+  PET_VOICE_ALLOWED_TOOLS,
+} from '@/modules/pets/pet-voice.tools.js';
 import { localRoutingEnv } from '@/modules/routing/local-model.js';
 import {
   formatConversationInstructions,
@@ -450,6 +457,16 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       return;
     }
 
+    /*
+      Which pet is in this conversation, and what it is allowed to do.
+
+      Read once, here, and used in three places below — the briefing, the tool
+      server and the allowed-tools list. Reading it three times would be three
+      chances for them to disagree, and the disagreement that matters is a model
+      holding a tool it has been told not to use.
+    */
+    const petVoice = readPetVoice(sessionId);
+
     const options: Options = {
       cwd,
       abortController,
@@ -493,6 +510,11 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
           // the append this app has always sent. It stays last; see
           // `formatConversationInstructions` for why that position is what
           // makes carrying the text unescaped safe.
+          // The conversation's pet, when it has one that talks. Above the
+          // user's own instructions, because those go last — see
+          // `formatConversationInstructions` for why that position is load
+          // bearing.
+          formatPetVoice(petVoice),
           formatConversationInstructions(readConversationInstructions()),
         ].filter(Boolean).join('\n\n'),
       },
@@ -513,6 +535,10 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         'tails-appearance': appearanceMcpServer,
         'tails-preview': previewMcpServer,
         'tails-devserver': devServerMcpServer,
+        // Built per turn: the remark tool publishes to *this* run, and it only
+        // exists at all when the conversation's pet is chatty. A tool the model
+        // cannot see is a stronger guarantee than one it is asked not to use.
+        'tails-pet': createPetVoiceServer(sessionId, petVoice.mayRemark),
       },
       // Every appearance tool runs unprompted; see the comment on the constant
       // for why the two that used to be gated no longer are. What guards the
@@ -523,6 +549,11 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         ...APPEARANCE_ALLOWED_TOOLS,
         ...PREVIEW_ALLOWED_TOOLS,
         ...DEVSERVER_ALLOWED_TOOLS,
+        // The persona tool is always allowed — "give Sonic a personality" is a
+        // thing to be able to ask for in any conversation. The remark tool is
+        // in the list only when the pet is chatty, and only registered then
+        // either, so this pairs with the server above.
+        ...(petVoice.mayRemark ? PET_VOICE_ALLOWED_TOOLS : PET_PERSONA_ALLOWED_TOOLS),
       ],
       // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
       // each turn, so any live mode change would be discarded anyway. The same
@@ -584,6 +615,44 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
           && normalized.kind === 'text'
           && normalized.role === 'user';
         if (isPromptEcho) continue;
+
+        /*
+          The pet's remark is not part of the conversation.
+
+          It reaches the user as a `pet_remark` event published by the tool
+          itself, so the tool call and its result have nothing left to add — and
+          showing them would put "pet_say: nice work!" in the transcript, which
+          is both the aside and the machinery behind it. Dropped by tool name,
+          which is the only thing that identifies it at this point.
+
+          Both halves have to go. Suppressing the call and leaving the result is
+          a transcript with an answer to a question nobody asked.
+        */
+        const isToolRow = normalized.kind === 'tool_use' || normalized.kind === 'tool_result';
+        const isPetRemark = isToolRow && normalized.toolName === PET_SAY_TOOL;
+
+        /*
+          And the lookup that fetched it, which was the actual leak.
+
+          MCP tools are *deferred* in this CLI: the model is given their names
+          and has to load the schema with `ToolSearch` before it can call one. So
+          suppressing `pet_say` was not enough — the transcript still showed
+
+              ToolSearch
+              mcp__tails-pet__pet_say
+
+          right above the reply, which is the machinery on display with the
+          decoration hidden. Measured in the running app, not reasoned about.
+
+          Matched on the tool's own name appearing in the query, so a `ToolSearch`
+          the model made for any other reason is left alone. It is the narrowest
+          test available: nothing else in the app is called `tails-pet`.
+        */
+        const isPetLookup = isToolRow
+          && normalized.toolName === 'ToolSearch'
+          && JSON.stringify(normalized.toolInput ?? '').includes('tails-pet');
+
+        if (isPetRemark || isPetLookup) continue;
 
         send(normalized);
       }

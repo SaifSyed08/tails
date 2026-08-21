@@ -18,6 +18,7 @@ import { PetSettingsDialog } from '@/components/petstage/PetSettingsDialog';
 import { onSessionRequested } from '@/components/petstage/session-requests';
 import { FloatingCard } from '@/components/sidebar/FloatingCard';
 import { SessionRow } from '@/components/sidebar/SessionRow';
+import { useUnread } from '@/components/sidebar/unread';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { api, type SessionListItem } from '@/lib/api';
 
@@ -179,6 +180,10 @@ export function Sidebar({
   refreshToken,
 }: SidebarProps) {
   const [query, setQuery] = useState('');
+  // Which conversations finished while the user was elsewhere. One subscription
+  // for the whole list; see `unread.ts`.
+  const unread = useUnread();
+
   /*
     Full-text hits, which arrive after the instant filter.
 
@@ -821,6 +826,7 @@ export function Sidebar({
               onCommitRename={(title) => void commitRename(session, title)}
               onCancelRename={() => setRenamingId(null)}
               pet={pets.get(assignments[session.id] ?? '') ?? null}
+              unread={unread.has(session.id)}
               dropStatus={dropStatus?.id === session.id ? dropStatus : null}
               onAssignPet={(payload) => void assignPet(session.id, payload)}
             />

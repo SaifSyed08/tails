@@ -83,6 +83,26 @@ export async function savePetStage(petId: string, stage: PetStage): Promise<void
 }
 
 /**
+ * Saves how much of a personality a pet is.
+ *
+ * A PATCH rather than a dedicated endpoint, because the pet update route already
+ * takes exactly this shape: fields that are present are written and fields that
+ * are absent are left alone. So changing the mode cannot clear the persona, and
+ * clearing the persona cannot change the mode.
+ */
+export async function savePetPersona(
+  petId: string,
+  next: { chatMode?: string; personaPrompt?: string },
+): Promise<void> {
+  const response = await fetch(`/api/pets/${encodeURIComponent(petId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(next),
+  });
+  if (!response.ok) throw new Error(`That could not be saved (${response.status}).`);
+}
+
+/**
  * Makes this pet the desktop pet.
  *
  * Carrying him out of a chat is a decision about who lives on the desktop, and
