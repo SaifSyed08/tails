@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { TAILS_HOME } from '@/db/connection.js';
 import { sessionsRepository } from '@/db/sessions.repository.js';
+import { generateBank, readBank, type LineBank } from '@/modules/pets/pet-lines.js';
 import {
   assignedThemeSchema,
   personaPromptSchema,
@@ -122,6 +123,8 @@ export type InstalledPet = {
   chatMode: PetChatMode;
   /** The persona text `override` mode sends. Empty when nobody has written one. */
   personaPrompt: string;
+  /** His own lines, by situation. Empty groups until somebody writes them. */
+  lines: LineBank;
   /** Starred pets lead the carousel. */
   starred: boolean;
   /**
@@ -482,6 +485,10 @@ function loadPet(directory: string, source: PetSource): InstalledPet | PetProble
     // behaved before this existed.
     chatMode: readChatMode(override?.chatMode),
     personaPrompt: override?.personaPrompt ?? '',
+    // Normalised into the full shape so every reader can index it without
+    // checking, and so a bank written by an older build gains new groups as
+    // empty rather than as undefined.
+    lines: readBank(override?.lines),
     // Null means nobody has chosen, so the pet keeps the voice he is known for.
     // An empty array is a choice, and it wins.
     thinkingPhrases: override?.thinkingPhrases
@@ -1079,6 +1086,31 @@ export const petsService = {
    * and having one code path means the read side only has to know about one
    * override mechanism.
    */
+  /**
+   * Writes this pet a set of lines, with a cheap model.
+   *
+   * An explicit action, never automatic: it costs a model call and about half a
+   * minute, and a pet that started generating dialogue on its own would be an
+   * app spending the user's usage without being asked. Returns the pet either
+   * way — a failed generation leaves the previous lines alone, which for a pet
+   * that already had some is much better than clearing them.
+   */
+  async writePetLines(id: string): Promise<InstalledPet> {
+    const pet = requirePet(id);
+
+    const bank = await generateBank({
+      name: pet.definition.displayName,
+      description: pet.definition.description ?? '',
+      persona: pet.personaPrompt,
+    });
+    if (!bank) return pet;
+
+    petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
+    petsRepository.savePreferences(pet.definition.id, { lines: bank });
+    publishPetsChanged();
+    return requirePet(id);
+  },
+
   updatePet(id: string, body: unknown): InstalledPet {
     const pet = requirePet(id);
     const input = readRecord(body);
@@ -1143,6 +1175,17 @@ export const petsService = {
       throw toValidationError('That persona is too long.', persona.error.issues);
     }
 
+    /*
+      Edited lines, or `null` to clear them.
+
+      Sanitised through the same reader the generator's output goes through, so
+      a hand-edited bank cannot introduce a group the rest of the app does not
+      know about or a line too long for the bubble.
+    */
+    const lines = input.lines === undefined
+      ? undefined
+      : input.lines === null ? null : readBank(input.lines);
+
     petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
     petsRepository.saveCustomisation(pet.definition.id, { frame: frame?.data, states: states?.data });
     petsRepository.savePreferences(pet.definition.id, {
@@ -1150,6 +1193,7 @@ export const petsService = {
       thinkingPhrases: phrases && typeof phrases === 'object' ? phrases.data : phrases,
       ...(mode ? { chatMode: mode.data } : {}),
       ...(persona ? { personaPrompt: persona.data || null } : {}),
+      ...(lines === undefined ? {} : { lines }),
     });
 
     return requirePet(id);

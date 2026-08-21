@@ -113,6 +113,13 @@ export type InstalledPet = {
   chatMode: 'none' | 'chatty' | 'override';
   /** The persona text `override` sends. Empty when nobody has written one. */
   personaPrompt: string;
+  /**
+   * His own lines, grouped by the situation they suit.
+   *
+   * Written once by a cheap model and used for free after that — see
+   * `pet-lines.ts` on the server for why a bank rather than a call per remark.
+   */
+  lines: Record<string, string[]>;
   /** ISO timestamp of when this pet entered the library, not when it was made. */
   installedAt: string | null;
   removable: boolean;
@@ -340,11 +347,23 @@ export const petsApi = {
     thinkingPhrases?: string[] | null;
     chatMode?: string;
     personaPrompt?: string;
+    lines?: Record<string, string[]> | null;
   }) =>
     writing(request<InstalledPet>(`/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })),
+
+  /**
+   * Has a cheap model write this pet its lines.
+   *
+   * Slow by the standards of everything else here — a model call and about half
+   * a minute — so callers show it as work in progress rather than as a click
+   * that returns. It never clears what is already there: a failed generation
+   * returns the pet unchanged.
+   */
+  writeLines: (id: string) =>
+    writing(request<InstalledPet>(`/${encodeURIComponent(id)}/lines`, { method: 'POST' })),
 
   setActive: (id: string, active: boolean) =>
     writing(request<{ activePetId: string | null }>(`/${encodeURIComponent(id)}/activate`, {

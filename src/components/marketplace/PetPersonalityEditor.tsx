@@ -32,6 +32,27 @@ const MAX_PERSONA = 700;
 
 type PetChatMode = 'none' | 'chatty' | 'override';
 
+/**
+ * The five groups, in the order they are shown.
+ *
+ * Labelled by the moment rather than by the key, because "approve" is a name for
+ * a programmer and "when you ask for something" is a name for whoever is editing
+ * the lines.
+ */
+const LINE_GROUPS: { id: string; label: string; hint: string }[] = [
+  { id: 'approve', label: 'When you ask for something', hint: 'Neat idea!' },
+  { id: 'done', label: 'When it gets done', hint: 'Nailed it.' },
+  { id: 'explain', label: 'When something is explained', hint: 'Huh, got it.' },
+  { id: 'problem', label: 'When something goes wrong', hint: 'Ouch.' },
+  { id: 'idle', label: 'Muttering to himself', hint: 'zzz...' },
+];
+
+/** One line per row in the textarea, which is the only sane way to edit a list. */
+const NEWLINE = String.fromCharCode(10);
+
+const countLines = (lines: Record<string, string[]>): number =>
+  Object.values(lines).reduce((total, group) => total + group.filter((l) => l.trim()).length, 0);
+
 const CHAT_MODES: { id: PetChatMode; label: string; blurb: string }[] = [
   {
     id: 'none',
@@ -80,6 +101,8 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
     pet.thinkingPhrases.length > 0 ? pet.thinkingPhrases : [''],
   );
   const [mode, setMode] = useState<PetChatMode>(pet.chatMode ?? 'none');
+  const [lines, setLines] = useState<Record<string, string[]>>(pet.lines ?? {});
+  const [writing, setWriting] = useState(false);
   const [persona, setPersona] = useState(pet.personaPrompt ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +138,7 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
         assignedTheme: theme === '' ? null : theme,
         thinkingPhrases: cleaned.length > 0 ? cleaned : null,
         chatMode: mode,
+        lines,
         // Only meaningful in `override`, but always sent: a persona written and
         // then parked by switching to "quiet" should still be there when the
         // user switches back, rather than being silently dropped by the save
@@ -170,6 +194,79 @@ export function PetPersonalityEditor({ pet, onSaved }: PetPersonalityEditorProps
           </button>
         ))}
       </div>
+
+      {/*
+        His lines, and the button that writes them.
+
+        Only shown for the mode that uses them. Generation is explicit and says
+        how long it takes, because it spends the user's Claude usage and takes
+        about half a minute — a spinner with no explanation reads as broken.
+      */}
+      {mode === 'chatty' ? (
+        <div className="space-y-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              What he says
+              {countLines(lines) > 0 ? ` — ${countLines(lines)} lines` : ''}
+            </span>
+            <button
+              type="button"
+              disabled={writing || saving}
+              onClick={() => {
+                setWriting(true);
+                setError(null);
+                void petsApi.writeLines(pet.definition.id)
+                  .then((next) => {
+                    setLines(next.lines ?? {});
+                    if (countLines(next.lines ?? {}) === 0) {
+                      setError('Nothing came back. Try again, or write his lines yourself.');
+                    }
+                  })
+                  .catch((failure: unknown) => {
+                    setError(failure instanceof Error ? failure.message : 'That did not work.');
+                  })
+                  .finally(() => setWriting(false));
+              }}
+              className="flex items-center gap-1.5 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground disabled:opacity-40"
+            >
+              {writing
+                ? <><Loader2 className="size-3 animate-spin" aria-hidden="true" /> Writing…</>
+                : <><Sparkles className="size-3" aria-hidden="true" /> Write his lines</>}
+            </button>
+          </div>
+
+          {countLines(lines) === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              He has nothing to say yet. Have them written for him, or type your own below — one per
+              line. He stays quiet until there is something here.
+            </p>
+          ) : null}
+
+          {LINE_GROUPS.map((group) => (
+            <label key={group.id} className="block">
+              <span className="block text-[11px] text-muted-foreground">{group.label}</span>
+              <textarea
+                data-tails-part="input"
+                rows={3}
+                value={(lines[group.id] ?? []).join(NEWLINE)}
+                onChange={(event) => setLines({
+                  ...lines,
+                  // Split on save rather than on every keystroke would lose the
+                  // blank line the user is in the middle of typing.
+                  [group.id]: event.target.value.split(NEWLINE),
+                })}
+                placeholder={group.hint}
+                className="mt-0.5 w-full resize-none px-2 py-1 text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+              />
+            </label>
+          ))}
+
+          <p className="text-[11px] text-muted-foreground">
+            He picks one when it fits what just happened, about seven times in ten, and not twice
+            within a minute. The last group is what he mutters to himself while you read.
+          </p>
+        </div>
+      ) : null}
 
       {mode === 'override' ? (
         <div className="space-y-1.5">

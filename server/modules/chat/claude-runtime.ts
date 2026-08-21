@@ -15,6 +15,7 @@ import { applySpokenSteer } from '@/modules/chat/spoken-turn.js';
 import { DEVSERVER_ALLOWED_TOOLS, devServerMcpServer } from '@/modules/devserver/devserver.tools.js';
 import { PREVIEW_ALLOWED_TOOLS, previewMcpServer } from '@/modules/preview/preview.tools.js';
 import { formatPetVoice, readPetVoice } from '@/modules/pets/pet-persona.js';
+import { pickKind } from '@/modules/pets/pet-lines.js';
 import { composeRemark } from '@/modules/pets/pet-remark.js';
 import {
   createPetVoiceServer,
@@ -400,6 +401,15 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   */
   const petVoice = readPetVoice(sessionId);
 
+  /*
+    The last thing the assistant said, for choosing which kind of line fits.
+
+    Only the tail is kept: the classifier looks for words like "error" or
+    "added", and a whole reply's worth of text makes every category match at
+    once. The end of an answer is also where its outcome usually is.
+  */
+  let lastAssistantText = '';
+
   let drainTimer: NodeJS.Timeout | null = null;
 
   /*
@@ -419,6 +429,9 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
     if (!petVoice.mayRemark || !mayRemark(sessionId)) return;
 
     const remark = composeRemark({
+      // Which group suits what just happened — approval, done, a problem, or
+      // simply having been told something. See `pickKind`.
+      lines: petVoice.lines[pickKind(prompt, lastAssistantText)],
       phrases: petVoice.phrases,
       // The user's own words, not the expanded prompt: matching against a slash
       // command's expansion would score the app's boilerplate, not the request.
@@ -693,6 +706,10 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
           && JSON.stringify(normalized.toolInput ?? '').includes('tails-pet');
 
         if (isPetRemark || isPetLookup) continue;
+
+        if (normalized.kind === 'text' && normalized.role === 'assistant' && normalized.content) {
+          lastAssistantText = normalized.content.slice(-400);
+        }
 
         send(normalized);
       }

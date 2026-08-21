@@ -1,3 +1,4 @@
+import { emptyBank, type LineBank } from '@/modules/pets/pet-lines.js';
 import { remarkDue } from '@/modules/pets/pet-remark.js';
 import { mayRemark } from '@/modules/pets/pet-voice.tools.js';
 import { readChatMode, type PetChatMode } from '@/modules/pets/pet-spec.js';
@@ -30,17 +31,25 @@ export type PetTurnVoice = {
    */
   mayRemark: boolean;
   /**
-   * The pet's own in-character lines.
+   * The pet's own written lines, by situation.
    *
-   * Carried because they are the app's fallback when the model does not supply a
-   * remark — see `pet-remark.ts` for why that fallback exists and why these are
-   * the only words available offline that are genuinely in his voice.
+   * These are what he actually says. The remark tool is still offered, and a
+   * model that uses it wins — but it rarely does, and the bank is why the
+   * feature works anyway. See `pet-lines.ts`.
+   */
+  lines: LineBank;
+  /**
+   * His thinking phrases, as a last resort.
+   *
+   * Older pets have these and no bank. They were written for a spinner rather
+   * than for a reaction, so they read a little oddly as commentary, which is
+   * exactly why they are third in line rather than first.
    */
   phrases: string[];
 };
 
 const SILENT: PetTurnVoice = {
-  mode: 'none', name: '', description: '', persona: '', mayRemark: false, phrases: [],
+  mode: 'none', name: '', description: '', persona: '', mayRemark: false, lines: emptyBank(), phrases: [],
 };
 
 /**
@@ -75,6 +84,7 @@ export function readPetVoice(sessionId: string): PetTurnVoice {
         places would be three different answers to one question.
       */
       mayRemark: mode === 'chatty' && mayRemark(sessionId) && remarkDue(Math.random()),
+      lines: pet.lines,
       phrases: pet.thinkingPhrases ?? [],
     };
   } catch {

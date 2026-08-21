@@ -101,6 +101,18 @@ export function createPetsRouter(): express.Router {
     req.body,
   )));
 
+  /**
+   * Writes this pet a set of lines with a cheap model.
+   *
+   * A POST because it costs something: a model call and about half a minute of
+   * the user's Claude usage. Never automatic, and never on a read — a pet that
+   * generated dialogue the first time it was looked at would be an app spending
+   * on the user's behalf without being asked.
+   */
+  router.post('/:petId/lines', respond((req) => petsService.writePetLines(
+    String(req.params.petId),
+  )));
+
   router.post('/:petId/activate', respond((req) => petsService.setActivePet(
     req.body?.active === false ? null : String(req.params.petId),
   )));

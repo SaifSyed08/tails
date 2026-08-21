@@ -357,7 +357,7 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     component returns early in several places — a hook below one of those
     returns is a hook that runs on some renders and not others.
   */
-  const remark = usePetRemark(sessionId);
+  const remark = usePetRemark(sessionId, pet?.lines?.idle ?? []);
 
   // The desktop pet's settings button. The shell has already raised the app.
   useEffect(() => {

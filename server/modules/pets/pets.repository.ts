@@ -67,6 +67,8 @@ const ADDED_COLUMNS: { name: string; definition: string }[] = [
   // How much of a personality the pet is allowed to be. See `pet-spec.ts`.
   { name: 'chat_mode', definition: 'TEXT' },
   { name: 'persona_prompt', definition: 'TEXT' },
+  // The pet's own written lines. See `pet-lines.ts`.
+  { name: 'lines_json', definition: 'TEXT' },
 ];
 
 /** Applies the pets schema to a connection. Idempotent. */
@@ -182,6 +184,13 @@ export type InstalledPetRecord = {
   chatMode: string | null;
   /** The persona text used by `override` mode, or null. */
   personaPrompt: string | null;
+  /**
+   * The pet's own lines, by situation, or null when none have been written.
+   *
+   * Stored rather than generated per use: writing them costs a model call and
+   * half a minute, and reading them costs nothing. See `pet-lines.ts`.
+   */
+  lines: Record<string, string[]> | null;
 };
 
 /** Mirrors `petVoiceSchema`. Declared here so the repository owes nothing to zod. */
@@ -217,6 +226,7 @@ type InstalledPetRow = {
   voice_json: string | null;
   chat_mode: string | null;
   persona_prompt: string | null;
+  lines_json: string | null;
 };
 
 /**
@@ -251,11 +261,12 @@ const toRecord = (row: InstalledPetRow): InstalledPetRecord => ({
   voice: parseJson<PetVoiceRecord>(row.voice_json),
   chatMode: row.chat_mode,
   personaPrompt: row.persona_prompt,
+  lines: parseJson<Record<string, string[]>>(row.lines_json),
 });
 
 const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, updated_at, '
   + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at, stage_json, '
-  + 'voice_json, chat_mode, persona_prompt';
+  + 'voice_json, chat_mode, persona_prompt, lines_json';
 
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
@@ -324,6 +335,7 @@ export const petsRepository = {
       thinkingPhrases?: string[] | null;
       chatMode?: string | null;
       personaPrompt?: string | null;
+      lines?: Record<string, string[]> | null;
     },
   ): void {
     /*
@@ -340,6 +352,7 @@ export const petsRepository = {
           thinking_phrases_json = CASE WHEN ? THEN ? ELSE thinking_phrases_json END,
           chat_mode = CASE WHEN ? THEN ? ELSE chat_mode END,
           persona_prompt = CASE WHEN ? THEN ? ELSE persona_prompt END,
+          lines_json = CASE WHEN ? THEN ? ELSE lines_json END,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -351,6 +364,8 @@ export const petsRepository = {
       input.chatMode ?? null,
       input.personaPrompt === undefined ? 0 : 1,
       input.personaPrompt ?? null,
+      input.lines === undefined ? 0 : 1,
+      input.lines ? JSON.stringify(input.lines) : null,
       id,
     );
   },

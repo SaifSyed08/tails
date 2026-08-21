@@ -70,6 +70,9 @@ export function relevance(phrase: string, message: string): number {
 }
 
 export type RemarkSource = {
+  /** The pet's written lines for the situation that just occurred. */
+  lines?: string[];
+  /** His thinking phrases, used only when there are no written lines. */
   phrases: string[];
   /** The user's message, for the relevance pass. */
   message: string;
@@ -90,7 +93,19 @@ export type RemarkSource = {
  * not a better one.
  */
 export function composeRemark(source: RemarkSource): string | null {
-  const phrases = source.phrases.map((phrase) => phrase.trim()).filter(Boolean);
+  /*
+    Written lines first, thinking phrases only if there are none.
+
+    Both are in the pet's voice, but the written ones were composed *as
+    reactions* and the phrases were composed for a spinner — "collecting
+    rings..." reads oddly as a comment on a finished answer. So the phrases are
+    the compatibility path for pets nobody has generated lines for yet, not a
+    peer of the bank.
+  */
+  const written = (source.lines ?? []).map((line) => line.trim()).filter(Boolean);
+  const phrases = written.length > 0
+    ? written
+    : source.phrases.map((phrase) => phrase.trim()).filter(Boolean);
   if (phrases.length === 0) return null;
 
   const scored = phrases
