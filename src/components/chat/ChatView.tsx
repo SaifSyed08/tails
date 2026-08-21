@@ -92,11 +92,20 @@ function UserText({ content }: { content: string }) {
   // The token is echoed exactly as it was typed — `/ultracode`, `\ultracode`
   // or the bare word — because the transcript should read back as what the
   // user wrote, not as the canonical spelling of what it meant.
-  const { name, token } = command;
-  const rest = content.trimStart().slice(token.length);
+  /*
+    Split around wherever the command actually sits.
+
+    It used to assume the command was a prefix and slice from the front, which
+    was true while only the first word could be one. Now that a slashed command
+    is read anywhere, the token has an index and the text has two sides.
+  */
+  const { name, token, index } = command;
+  const before = content.slice(0, index);
+  const after = content.slice(index + token.length);
 
   return (
     <>
+      {before}
       {/*
         The chip is a separate element because it has to be: `bg-clip-text`
         clips every background on the token to the glyphs, so the token cannot
@@ -107,7 +116,7 @@ function UserText({ content }: { content: string }) {
       <span className="rounded bg-primary-foreground/90 px-1.5 py-0.5">
         <CommandToken name={name}>{token}</CommandToken>
       </span>
-      {rest}
+      {after}
     </>
   );
 }

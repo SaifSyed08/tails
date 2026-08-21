@@ -1,6 +1,7 @@
-import { Check, FolderOpen, PanelLeftOpen, SquareTerminal, X } from 'lucide-react';
+import { Check, FolderOpen, PanelLeftOpen, PanelRight, SquareTerminal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { reopenPreview, subscribePreview } from '@/components/preview/preview-store';
 import { cn } from '@/lib/utils';
 
 type HeaderProps = {
@@ -116,6 +117,42 @@ function EditableLabel({
 }
 
 /**
+ * Brings the preview pane back after it has been closed.
+ *
+ * Absent until there is something to bring back, which is the whole of its
+ * logic and worth stating: a permanently visible button that does nothing
+ * until an agent happens to start a web server would be a control the user
+ * learns to ignore. It appears the first time a preview exists and stays
+ * available afterwards, because "I closed that by accident" is the case it is
+ * for.
+ *
+ * Hidden while the pane is already open — the pane has its own close button,
+ * and a header control that duplicates it is the same mistake as the second
+ * settings button.
+ */
+function PreviewReopenButton() {
+  const [available, setAvailable] = useState(false);
+
+  useEffect(() => subscribePreview((state) => {
+    setAvailable(state.last !== null && state.current === null);
+  }), []);
+
+  if (!available) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={reopenPreview}
+      aria-label="Reopen preview"
+      title="Reopen the preview panel"
+      className="rounded-md p-1.5 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+    >
+      <PanelRight className="size-4" />
+    </button>
+  );
+}
+
+/**
  * The app's own title bar.
  *
  * With the OS chrome hidden this row is both the header and the window drag
@@ -177,6 +214,8 @@ export function Header({
           className="max-w-[22rem] font-mono text-xs text-muted-foreground"
           inputClassName="w-[22rem] font-mono text-xs"
         />
+
+        <PreviewReopenButton />
 
         <button
           type="button"

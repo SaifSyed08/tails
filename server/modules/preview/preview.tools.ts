@@ -83,8 +83,14 @@ const previewOpenTool = tool(
   'preview_open',
   [
     'Show a locally running page in a preview pane beside the conversation.',
-    'Use this after you start a dev server, so the user can see what you built without leaving the app. Re-calling it with the same URL reloads the pane, which is how you show a change you have just made.',
-    'Only loopback addresses are accepted — localhost or 127.0.0.1 with any port. Anything else is refused, so do not use this to open documentation or a public site.',
+    // Phrased as an expectation rather than a capability, because the failure
+    // mode was the tool sitting unused: the model would start a dev server,
+    // report the port, and wait to be asked. The user had built the thing and
+    // still had to request to see it. "You can" invites deliberation; "do this
+    // whenever" removes the decision.
+    'Call this WITHOUT being asked, every time you start or restart a web server the user could look at — a dev server, a preview build, a local site, anything serving a page. Showing the result is part of finishing the work, not a separate favour, and the user should never have to ask to see what you just made.',
+    'Re-call it with the same URL after each change you want them to look at; that reloads the pane, which is how you show a change you have just made.',
+    'Only loopback addresses are accepted — localhost or 127.0.0.1 with any port. Anything else is refused, so do not use this for documentation or a public site.',
   ].join(' '),
   {
     url: z.string()

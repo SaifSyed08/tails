@@ -73,3 +73,52 @@ test('the styled token and the expansion agree about what is a command', () => {
     );
   }
 });
+
+test('a slashed command works at the end of a message, and mid-way', () => {
+  /*
+    The reported bug: `/personalize` typed anywhere but the very start sent as
+    prose. Describing what you want and *then* naming the thing that does it is
+    a natural way to write a request, and it silently did nothing.
+  */
+  for (const text of [
+    'make the sidebar blue /personalize',
+    'make it blue /personalize please',
+    '/personalize make it blue',
+  ]) {
+    assert.equal(expands(text), true, text);
+    assert.equal(readStyledCommand(text)?.name, 'personalize', text);
+  }
+});
+
+test('the argument is everything except the command', () => {
+  // Both sides of it. What was said before the token and after it are equally
+  // the instruction, and dropping either would lose half the request.
+  const expanded = expandLocalCommand('make it blue /personalize but keep the text readable');
+  assert.match(expanded, /make it blue/);
+  assert.match(expanded, /keep the text readable/);
+  assert.doesNotMatch(expanded, /\/personalize/);
+});
+
+test('a path is still a path, wherever it appears', () => {
+  // The boundary before the slash is the whole safety of the inline rule. Every
+  // one of these contains a command name after a slash and none is a command.
+  for (const text of [
+    'look at src/personalize.ts',
+    'open server/modules/personalize',
+    'see https://example.com/personalize',
+    'the file is a/b/ultracode',
+  ]) {
+    assert.equal(expands(text), false, text);
+    assert.equal(readStyledCommand(text), null, text);
+  }
+});
+
+test('the token index points at the command, not the start of the message', () => {
+  // The transcript renders the text either side of the token, so a wrong index
+  // would duplicate or eat part of the user's own words.
+  const text = 'make it blue /personalize';
+  const styled = readStyledCommand(text);
+  assert.ok(styled);
+  assert.equal(text.slice(styled.index, styled.index + styled.token.length), '/personalize');
+  assert.equal(text.slice(0, styled.index), 'make it blue ');
+});

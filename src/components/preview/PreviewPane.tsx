@@ -2,6 +2,12 @@ import { RotateCw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { useWebSocket } from '@/contexts/WebSocketContext';
+import {
+  closePreview,
+  openPreview,
+  subscribePreview,
+  type PreviewTarget,
+} from '@/components/preview/preview-store';
 
 /**
  * A browser for the thing the agent just built, beside the conversation.
@@ -30,11 +36,9 @@ import { useWebSocket } from '@/contexts/WebSocketContext';
  * page from the internet.
  */
 
-type Target = { url: string; title: string } | null;
-
 export function PreviewPane() {
   const { subscribe } = useWebSocket();
-  const [target, setTarget] = useState<Target>(null);
+  const [target, setTarget] = useState<PreviewTarget | null>(null);
   /*
     Bumped to force the iframe to remount, which is how a reload happens.
 
@@ -45,16 +49,23 @@ export function PreviewPane() {
   */
   const [reloadKey, setReloadKey] = useState(0);
 
+  // The store is the single source of what is showing, so the header's reopen
+  // button and the agent's tool cannot disagree about it.
+  useEffect(() => subscribePreview((state) => {
+    setTarget(state.current);
+    // A repeat of the same URL is the agent saying "look again", so it has to
+    // reload rather than no-op on an unchanged `src`.
+    setReloadKey((current) => current + 1);
+  }), []);
+
   useEffect(() => subscribe((message) => {
     if (message.kind !== 'preview_changed') return;
     try {
-      const next = JSON.parse(message.content ?? 'null') as Target;
-      setTarget(next);
-      // A repeat of the same URL is the agent saying "look again", so it has to
-      // reload rather than no-op on an unchanged src.
-      setReloadKey((current) => current + 1);
+      const next = JSON.parse(message.content ?? 'null') as PreviewTarget | null;
+      if (next) openPreview(next);
+      else closePreview();
     } catch {
-      setTarget(null);
+      closePreview();
     }
   }), [subscribe]);
 
@@ -86,7 +97,7 @@ export function PreviewPane() {
         </button>
         <button
           type="button"
-          onClick={() => setTarget(null)}
+          onClick={closePreview}
           aria-label="Close preview"
           title="Close preview"
           className="rounded p-1 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"

@@ -176,13 +176,46 @@ const BARE_TRIGGERS = new Set(['ultracode']);
  */
 export function expandLocalCommand(content: string): string {
   const trimmed = content.trim();
-  const match = /^([/\\]?)([a-z][\w-]*)\s*([\s\S]*)$/i.exec(trimmed);
-  if (!match) return content;
 
-  const [, prefix, rawName, args = ''] = match;
-  const name = rawName.toLowerCase();
-  if (prefix !== '/' && !BARE_TRIGGERS.has(name)) return content;
+  const leading = /^([/\\]?)([a-z][\w-]*)\s*([\s\S]*)$/i.exec(trimmed);
+  if (leading) {
+    const [, prefix, rawName, args = ''] = leading;
+    const name = rawName.toLowerCase();
+    if (prefix === '/' || BARE_TRIGGERS.has(name)) {
+      const command = LOCAL_COMMANDS[name];
+      if (command) return command.expand(args);
+    }
+  }
 
+  /*
+    A slashed command further into the message, with everything else as its
+    argument.
+
+    `/personalize make it blue` and `make it blue /personalize` are the same
+    instruction, and only the first expanded — the second sent as prose, which
+    is why typing the command at the end appeared to do nothing. Naming the
+    thing that does the work *after* describing what you want is a perfectly
+    natural way to write it.
+
+    The boundary before the slash carries the whole safety of this. A path like
+    `src/personalize.ts` has a letter in front of the slash and stays a path;
+    without that, every file path in a conversation about this codebase would
+    arm a command. Bare words remain start-only for the same reason — "can you
+    ultracode this" is a sentence, and only the slash turns a word into an
+    instruction.
+  */
+  const inline = /(?:^|\s)\/([a-z][\w-]*)/i.exec(trimmed);
+  if (!inline) return content;
+
+  const name = inline[1].toLowerCase();
   const command = LOCAL_COMMANDS[name];
-  return command ? command.expand(args) : content;
+  if (!command) return content;
+
+  // The argument is the message with the command taken out of it, from both
+  // sides — what was said before it and after it are equally the instruction.
+  const args = `${trimmed.slice(0, inline.index)} ${trimmed.slice(inline.index + inline[0].length)}`
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return command.expand(args);
 }
