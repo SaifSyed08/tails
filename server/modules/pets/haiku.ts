@@ -1,5 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+import { sessionsRepository } from '@/db/sessions.repository.js';
 import { resolveClaudeCli } from '@/modules/chat/claude-cli.js';
 
 /**
@@ -78,6 +79,18 @@ export type AskOptions = {
  * that did not say anything, which is a state the feature already handles, and
  * turning it into an error would make a broken CLI break the chat as well.
  */
+/** Once per session id, and never fatal — a visible extra chat beats a failure. */
+const hidden = new Set<string>();
+function hide(sessionId: string): void {
+  if (hidden.has(sessionId)) return;
+  hidden.add(sessionId);
+  try {
+    sessionsRepository.hideProviderSession(sessionId);
+  } catch {
+    // Worst case the user sees one conversation they did not start.
+  }
+}
+
 export async function askHaiku(
   { system, prompt, limit, timeoutMs, clean = true }: AskOptions,
 ): Promise<string | null> {
@@ -99,10 +112,17 @@ export async function askHaiku(
         // A plain string, which *replaces* the Claude Code preset rather than
         // extending it. See the note above: the preset is the wrong instrument.
         systemPrompt: system,
-        // Belt and braces on the same point. Nothing here should be able to
-        // touch the filesystem or the network on the user's behalf.
+        /*
+          No tools at all, and this is the line that makes it cheap.
+
+          `allowedTools: []` gates tool *use*; the schemas still travel with
+          every request. Measured on "say the word ok": 22,457 tokens of
+          cache-creation and $0.0458 a call, seventy-seven times the cost of the
+          actual work. With the tool list emptied it is 684 tokens, no cache
+          write, and $0.0012 — a thirty-nine-fold difference for one field.
+        */
+        tools: [] as never,
         allowedTools: [],
-        disallowedTools: ['Bash', 'Read', 'Write', 'Edit', 'WebFetch', 'WebSearch'],
         maxTurns: 1,
         // No project settings, no CLAUDE.md, no MCP servers. This is not the
         // user's agent; it is a sentence generator.
@@ -117,7 +137,29 @@ export async function askHaiku(
 
     let text = '';
     for await (const message of instance) {
-      const event = message as { type?: string; message?: { content?: unknown } };
+      const event = message as {
+        type?: string;
+        session_id?: string;
+        message?: { content?: unknown };
+      };
+
+      /*
+        Hide the session this call is creating.
+
+        Every `query()` is a real Claude Code session, and Claude Code's own
+        history is half of what the sidebar lists — so each pet whose lines were
+        written left a conversation called "Write dialogue for Sonic pet
+        character" sitting in the user's list. Eleven of them, after an
+        afternoon's testing.
+
+        Hidden rather than avoided, because there is no way to ask the CLI not to
+        persist. The app already has this mechanism for the twin of an owned
+        conversation; this is the same problem with a different cause. Done on
+        the first event that carries the id, so a call that dies partway has
+        still hidden what it made.
+      */
+      if (event.session_id) hide(event.session_id);
+
       if (event.type !== 'assistant') continue;
 
       const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
@@ -145,24 +187,50 @@ export async function askHaiku(
  * None of these are failures worth discarding the answer over, and all of them
  * look wrong in a speech bubble two inches wide.
  */
+/**
+ * A line that introduces the answer rather than being it.
+ *
+ * Narrow deliberately: a false positive here deletes the pet's actual line, so
+ * this matches an opener followed by nothing much, or a line ending in a colon,
+ * and not merely a line that happens to begin with "sure".
+ */
+const SCAFFOLDING = /^(sure|okay|ok|of course|here (you go|are|is)|certainly|got it)\b.{0,24}$|:$/i;
+
 export function tidy(text: string): string {
   let out = text.trim();
 
-  // Only the first line. "Here you go:" followed by the actual line is the
-  // most common shape of an over-helpful answer.
+  /*
+    One line out of several, and picking it by *length* was wrong.
+
+    The first version took the longest line on the theory that the short ones are
+    scaffolding. "Sure! Here you go:" is eighteen characters and "Gotta go fast!"
+    is fourteen, so it reliably returned the preamble and discarded the answer.
+
+    Scaffolding is recognisable by shape rather than by size — it opens with an
+    acknowledgement, or it ends in a colon — so those lines are dropped and the
+    content is taken from the end, which is where an answer that was introduced
+    ends up.
+  */
   const lines = out.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length > 1) {
-    // The longest line is the content; the short ones are scaffolding.
-    out = lines.reduce((best, line) => (line.length > best.length ? line : best), '');
-  } else {
-    out = lines[0] ?? '';
-  }
+  const content = lines.filter((line) => !SCAFFOLDING.test(line));
+  out = content[content.length - 1] ?? lines[lines.length - 1] ?? '';
 
   out = out
+    /*
+      Stage directions, whole.
+
+      Stripping asterisks from the ends was worse than leaving them: asked for a
+      line in character, the model offered `*perks up and curls into a happy
+      little ball* Ooh, changes` — and trimming the edge asterisks turned a
+      recognisable stage direction into prose the pet appeared to be saying.
+      Removed as a span, so what is left is the dialogue.
+    */
+    .replace(/\*[^*]{0,80}\*/g, ' ')
     .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
     .replace(/^\*+|\*+$/g, '')
     // A leading label the model added to itself, e.g. `Sonic: gotta go fast`.
     .replace(/^[A-Z][A-Za-z .'-]{0,20}:\s*/, '')
+    .replace(/\s+/g, ' ')
     .trim();
 
   return out;
