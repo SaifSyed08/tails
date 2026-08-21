@@ -4,6 +4,7 @@ import { listSlashCommands } from '@/modules/chat/commands.service.js';
 import { readSessionModels } from '@/modules/chat/model.service.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { readString } from '@/shared/utils.js';
+import { searchConversations } from '@/modules/sessions/search.service.js';
 
 /** Thin transport around the sessions service: parse, call, format. */
 export function createSessionsRouter(): express.Router {
@@ -30,6 +31,17 @@ export function createSessionsRouter(): express.Router {
 
   // Above `/:sessionId`, or Express matches "draft" as an id.
   router.get('/draft', respond(() => sessionsService.draftSession()));
+
+  /*
+    Full-text search across what was said.
+
+    Before `/:sessionId`, or Express would read "search" as a session id and
+    this would never be reached — the kind of ordering bug that presents as a
+    404 for a route that plainly exists.
+  */
+  router.get('/search', respond((req) => searchConversations(
+    typeof req.query.q === 'string' ? req.query.q : '',
+  )));
 
   router.get('/:sessionId', respond((req) => sessionsService.getSession(String(req.params.sessionId))));
 

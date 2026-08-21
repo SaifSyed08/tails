@@ -1,6 +1,6 @@
 import {
-  Archive, ArchiveRestore, ArrowDownUp, ChevronDown, PanelLeftClose, PawPrint, Pencil, Pin, PinOff,
-  Plus, Search, Settings, Store, Trash2, X,
+  Archive, ArchiveRestore, ArrowDownUp, ChevronDown, Loader2, PanelLeftClose, PawPrint, Pencil, Pin,
+  PinOff, Plus, Search, Settings, Store, Trash2, X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -20,9 +20,103 @@ import { FloatingCard } from '@/components/sidebar/FloatingCard';
 import { SessionRow } from '@/components/sidebar/SessionRow';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { api, type SessionListItem } from '@/lib/api';
+
+/**
+ * One conversation whose *text* matched, as the search endpoint returns it.
+ *
+ * Declared here rather than imported from the server module: the renderer must
+ * not pull in server code, and the shape is small enough that restating it is
+ * cheaper than a shared package. `search.service.ts` owns the contract.
+ */
+type SearchHit = {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  role: 'user' | 'assistant' | 'other';
+  snippet: string;
+  count: number;
+};
 import { cn } from '@/lib/utils';
 
 export type SessionOrdering = 'recent' | 'oldest' | 'alphabetical';
+
+/**
+ * The half of a search that had to read transcripts.
+ *
+ * Separate from the title matches, and labelled, because they are answers to
+ * different questions. It also has to say when it is still looking and when it
+ * stopped early: "no matches" and "I did not read everything" call for opposite
+ * next actions, and a search that reports the first as though it meant the
+ * second is worse than a slow one.
+ */
+function TextMatches({ hits, searching, truncated, activeSessionId, onOpen }: {
+  hits: SearchHit[];
+  searching: boolean;
+  truncated: boolean;
+  activeSessionId: string | null;
+  onOpen: (sessionId: string) => void;
+}) {
+  if (!searching && hits.length === 0) return null;
+
+  return (
+    <div className="mt-2 border-t border-border pt-2">
+      <p className="flex items-center gap-1.5 px-2.5 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+        In conversations
+        {searching ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : null}
+      </p>
+
+      {hits.map((hit) => (
+        <button
+          key={hit.sessionId}
+          type="button"
+          onClick={() => onOpen(hit.sessionId)}
+          className={cn(
+            'block w-full rounded-sm px-2.5 py-1.5 text-left transition-colors duration-quick',
+            hit.sessionId === activeSessionId ? 'bg-accent' : 'hover:bg-accent/50',
+          )}
+        >
+          <span className="flex items-baseline gap-1.5">
+            <span className="min-w-0 flex-1 truncate text-sm text-foreground">{hit.title}</span>
+            {/* Only when there is more than the one shown, so the number means
+                "there is more here" rather than decorating every row. */}
+            {hit.count > 1 ? (
+              <span className="shrink-0 text-[10px] text-muted-foreground">{hit.count}</span>
+            ) : null}
+          </span>
+          <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+            <Snippet text={hit.snippet} />
+          </span>
+        </button>
+      ))}
+
+      {truncated && !searching ? (
+        <p className="px-2.5 py-1 text-[11px] text-muted-foreground/70">
+          Older conversations were not searched.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A snippet with the matched words emphasised.
+ *
+ * The server marks the hit with guillemets rather than HTML, so nothing it
+ * returns can be rendered as markup — a conversation containing `<script>` is
+ * a perfectly ordinary conversation about code, and it must stay text.
+ */
+function Snippet({ text }: { text: string }) {
+  const parts = text.split(/«([^»]*)»/);
+  return (
+    <>
+      {parts.map((part, index) => (
+        index % 2 === 1
+          ? <mark key={index} className="bg-primary/25 text-foreground">{part}</mark>
+          : <span key={index}>{part}</span>
+      ))}
+    </>
+  );
+}
 
 type SidebarProps = {
   activeSessionId: string | null;
@@ -85,6 +179,22 @@ export function Sidebar({
   refreshToken,
 }: SidebarProps) {
   const [query, setQuery] = useState('');
+  /*
+    Full-text hits, which arrive after the instant filter.
+
+    Two searches on purpose. Matching titles and folders happens locally and
+    costs nothing, so it stays instant; matching what was *said* means reading
+    transcripts off disk, and pretending that is instant would mean showing
+    nothing until it finished. So the local matches appear immediately and the
+    content matches join them.
+  */
+  const [textSearch, setTextSearch] = useState<{
+    /** The query these hits answer, so a stale result is never shown. */
+    query: string;
+    hits: SearchHit[];
+    truncated: boolean;
+  }>({ query: '', hits: [], truncated: false });
+  const [searching, setSearching] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(true);
   const [ordering, setOrdering] = useState<SessionOrdering>('recent');
@@ -436,6 +546,43 @@ export function Sidebar({
     );
   }, []);
 
+  useEffect(() => {
+    const needle = query.trim();
+    // Nothing to do, and nothing to clear: the result carries the query it
+    // answers, so anything stale is filtered out at render rather than reset
+    // from here — which would be a synchronous setState in an effect body.
+    if (needle.length < 3) return undefined;
+
+    let cancelled = false;
+
+    // Debounced, because this reads transcripts: a request per keystroke would
+    // be dozens of file reads for a query nobody finished typing.
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      void fetch(`/api/sessions/search?q=${encodeURIComponent(needle)}`)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body: { hits?: SearchHit[]; truncated?: boolean } | null) => {
+          if (cancelled) return;
+          setTextSearch({
+            query: needle,
+            hits: body?.hits ?? [],
+            truncated: body?.truncated === true,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setTextSearch({ query: needle, hits: [], truncated: false });
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 280);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const filtered = needle
@@ -678,6 +825,26 @@ export function Sidebar({
               onAssignPet={(payload) => void assignPet(session.id, payload)}
             />
           ))}
+          {/*
+            Conversations whose *text* matched, minus the ones already listed
+            by title. Grouped and labelled rather than merged in, because "this
+            chat is called that" and "this chat mentioned that" are different
+            claims and a snippet is the evidence for the second one.
+          */}
+          {query.trim().length >= 3 ? (
+            <TextMatches
+              hits={textSearch.query === query.trim()
+                ? textSearch.hits.filter((hit) => !visible.some((session) => session.id === hit.sessionId))
+                : []}
+              searching={searching}
+              truncated={textSearch.query === query.trim() && textSearch.truncated}
+              activeSessionId={activeSessionId}
+              onOpen={(sessionId) => {
+                const known = sessions.find((session) => session.id === sessionId);
+                if (known) onSelect(known);
+              }}
+            />
+          ) : null}
         </div>
       ) : (
         <div className="flex-1" />
