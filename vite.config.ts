@@ -17,11 +17,24 @@ export default defineConfig({
     // Bound to IPv4 loopback explicitly: Vite's default also binds `::1`, which
     // Windows refuses with EACCES on some machines.
     host: '127.0.0.1',
-    // Not Vite's usual 5173 — that port falls inside a Windows reserved range
-    // (Hyper-V/WSL claim 5161-5260), where bind fails with EACCES even though
-    // netstat reports the port free. Check with:
-    //   netsh interface ipv4 show excludedportrange protocol=tcp
-    port: Number(process.env.TAILS_CLIENT_PORT || 7317),
+    /*
+      Not Vite's usual 5173, and no longer 7317 either.
+
+      Windows reserves blocks of ports for Hyper-V and WSL, and a bind inside
+      one fails with `EACCES: permission denied` while `netstat` reports the
+      port free — which reads as a broken dev server rather than a taken port.
+      5173 was inside such a block, so this moved to 7317; then a reboot
+      reshuffled the ranges, 7311-7410 became excluded, and 7317 started
+      failing the same way.
+
+      That is the real lesson and the reason for this comment: the ranges are
+      **not stable across reboots**, so any hardcoded port is a port that will
+      eventually be reserved. 8317 is outside every current block. When it
+      breaks, the diagnosis is one command and the fix is `TAILS_CLIENT_PORT`:
+
+        netsh interface ipv4 show excludedportrange protocol=tcp
+    */
+    port: Number(process.env.TAILS_CLIENT_PORT || 8317),
     strictPort: true,
     proxy: {
       // Proxied rather than called cross-origin so the browser and the packaged

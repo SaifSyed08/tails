@@ -11,7 +11,7 @@
     "dev": "concurrently --kill-others --names \"server,client\" \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "tsx watch --tsconfig server/tsconfig.json server/index.ts",
     "dev:client": "vite",
-    "desktop": "cross-env TAILS_DEV_URL=http://127.0.0.1:7317 electron electron/main.js",
+    "desktop": "cross-env TAILS_DEV_URL=http://127.0.0.1:8317 electron electron/main.js",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json",
