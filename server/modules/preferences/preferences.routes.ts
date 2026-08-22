@@ -5,6 +5,7 @@ import {
   readConversationInstructions,
   writeConversationInstructions,
 } from '@/modules/chat/conversation-instructions.js';
+import { trustRepository } from '@/db/trust.repository.js';
 import { readDefaultVoice, writeDefaultVoice } from '@/modules/preferences/default-voice.js';
 
 /**
@@ -61,6 +62,37 @@ export function createPreferencesRouter(): express.Router {
   router.get('/default-voice', respond(() => ({ voice: readDefaultVoice() })));
 
   router.put('/default-voice', respond((req) => ({ voice: writeDefaultVoice(req.body?.voice) })));
+
+  /*
+    Standing tool permissions.
+
+    A setting by this module's own test — you would expect it to survive into a
+    brand new chat — and the only one here that widens what the agent may do
+    without asking. Which is exactly why it is reachable: it used to live in a
+    Map that died with the process, and a grant nobody can list is a grant
+    nobody can take back.
+
+    Every write answers with the whole remaining list, so the panel can never
+    show a permission that is no longer in force.
+  */
+  const trusted = () => ({ tools: trustRepository.list() });
+
+  router.get('/trusted-tools', respond(trusted));
+
+  router.post('/trusted-tools/revoke', respond((req) => {
+    const toolName = typeof req.body?.toolName === 'string' ? req.body.toolName : '';
+    const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd : '';
+    // Both or neither. A half-specified revoke could only be answered by
+    // guessing which grant was meant, and guessing wrong here leaves a standing
+    // permission the user believes they have removed.
+    if (toolName && cwd) trustRepository.revoke(toolName, cwd);
+    return trusted();
+  }));
+
+  router.post('/trusted-tools/revoke-all', respond(() => {
+    trustRepository.revokeAll();
+    return trusted();
+  }));
 
   return router;
 }

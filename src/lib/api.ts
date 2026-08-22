@@ -180,6 +180,26 @@ export const api = {
       body: JSON.stringify({ instructions }),
     }),
 
+  /**
+   * The tools the agent may run in a given folder without asking again.
+   *
+   * Listed and revoked from one place because the grant is durable now: it
+   * survives a restart, which is what makes it useful and what makes being able
+   * to see it necessary.
+   */
+  getTrustedTools: () => request<{ tools: TrustedTool[] }>('/preferences/trusted-tools'),
+
+  revokeTrustedTool: (toolName: string, cwd: string) =>
+    request<{ tools: TrustedTool[] }>('/preferences/trusted-tools/revoke', {
+      method: 'POST',
+      body: JSON.stringify({ toolName, cwd }),
+    }),
+
+  revokeAllTrustedTools: () =>
+    request<{ tools: TrustedTool[] }>('/preferences/trusted-tools/revoke-all', {
+      method: 'POST',
+    }),
+
   listThemes: () => request<ThemeSummary[]>('/appearance/themes'),
 
   /** Shows a look without saving or binding it. Reverted by re-resolving. */
@@ -209,6 +229,14 @@ export const api = {
 
   deleteTheme: (themeId: string) =>
     request<{ id: string }>(`/appearance/themes/${encodeURIComponent(themeId)}`, { method: 'DELETE' }),
+};
+
+/** One standing "stop asking me about this", as the settings panel shows it. */
+export type TrustedTool = {
+  toolName: string;
+  /** The folder it applies to. A grant is about a project, not about the app. */
+  cwd: string;
+  createdAt: string;
 };
 
 export type ConversationInstructions = {

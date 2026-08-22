@@ -33,6 +33,7 @@ import {
 } from '@/modules/chat/normalize.js';
 import { peekSessionModels } from '@/modules/chat/model.service.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
+import { trustRepository } from '@/db/trust.repository.js';
 import { resolveTurnSettings, type TurnSettings } from '@/modules/chat/turn-settings.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { publishSessionsChanged } from '@/shared/broadcast.js';
@@ -140,8 +141,6 @@ type ParkedPermission = {
 
 const parkedPermissions = new Map<string, ParkedPermission>();
 
-/** Tools the user chose to remember, per app session. */
-const rememberedTools = new Map<string, Set<string>>();
 
 /**
  * Resolves a pending permission prompt.
@@ -611,7 +610,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       ...(permissionMode ? { permissionMode } : {}),
       ...(settings.model ? { model: settings.model } : {}),
       ...(settings.effort ? { effort: settings.effort } : {}),
-      canUseTool: createPermissionGate(sessionId),
+      canUseTool: createPermissionGate(sessionId, session.cwd),
       ...(session.providerSessionId ? { resume: session.providerSessionId } : {}),
       // Always supplied, never left to the SDK's own lookup. That lookup only
       // knows about the optional platform package, which the installer does
@@ -730,10 +729,19 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
  * added later, interactive tools must move to a `PermissionRequest` hook,
  * which runs ahead of the mode check.
  */
-function createPermissionGate(sessionId: string): CanUseTool {
+/**
+ * The gate every tool call that is not pre-allowed passes through.
+ *
+ * `cwd` is part of the signature because trust is: "stop asking me about the
+ * tests" is a statement about a project, and a grant that ignored the folder
+ * would answer for every other project the app is ever opened on.
+ */
+function createPermissionGate(sessionId: string, cwd: string): CanUseTool {
   return async (toolName, toolInput, context) => {
-    const remembered = rememberedTools.get(sessionId);
-    if (remembered?.has(toolName) && !INTERACTIVE_TOOLS.has(toolName)) {
+    // Interactive tools carry the user's own decision as their payload, so a
+    // standing grant would answer a question the user never saw. They are
+    // excluded here and again where trust is recorded.
+    if (!INTERACTIVE_TOOLS.has(toolName) && trustRepository.isTrusted(toolName, cwd)) {
       return { behavior: 'allow', updatedInput: toolInput } satisfies PermissionResult;
     }
 
@@ -795,10 +803,8 @@ function createPermissionGate(sessionId: string): CanUseTool {
       }, { once: true });
     });
 
-    if (decision.allow && decision.remember) {
-      const set = rememberedTools.get(sessionId) ?? new Set<string>();
-      set.add(toolName);
-      rememberedTools.set(sessionId, set);
+    if (decision.allow && decision.remember && !INTERACTIVE_TOOLS.has(toolName)) {
+      trustRepository.grant(toolName, cwd);
     }
 
     if (!decision.allow) {

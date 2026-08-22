@@ -22,7 +22,7 @@ import {
   collisionSoundEnabled,
   setCollisionSoundEnabled,
 } from '@/components/petstage/pet-sfx';
-import { api, type ThemeSummary } from '@/lib/api';
+import { api, type ThemeSummary, type TrustedTool } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Reveal, Stagger, useReducedMotion } from '@/shared/ui/Motion';
 
@@ -46,6 +46,7 @@ const SECTIONS = [
   { id: 'settings-appearance', label: 'Appearance' },
   { id: 'settings-colour-mode', label: 'Colour mode' },
   { id: 'settings-instructions', label: 'Instructions' },
+  { id: 'settings-trusted-tools', label: 'Standing permissions' },
   // The two halves of voice, adjacent and named apart: the voice module's
   // section is the machine listening, this module's is the machine speaking.
   // They share a word and nothing else, which is exactly the case an index has
@@ -532,6 +533,115 @@ function DefaultVoiceControl() {
  * linked by hash, because a `#fragment` in an app with no router is a URL
  * change that means nothing and does not survive a reload.
  */
+/**
+ * The tools the agent may run without asking, and where.
+ *
+ * This exists because the grant became durable. It used to live in a Map that
+ * died with the process, so "always allow" meant "until you quit" and the
+ * interruption count reset to maximum on every launch — useless to anyone who
+ * has walked away from the machine. Surviving a restart is what makes it worth
+ * having and is exactly what makes showing it here non-optional: a standing
+ * permission nobody can list is a standing permission nobody can take back.
+ */
+function TrustedTools() {
+  const [tools, setTools] = useState<TrustedTool[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.getTrustedTools()
+      .then((result) => { if (!cancelled) setTools(result.tools); })
+      .catch((loadError: unknown) => {
+        if (cancelled) return;
+        setError(loadError instanceof Error ? loadError.message : 'Could not read your permissions.');
+      });
+
+    return () => { cancelled = true; };
+  }, []);
+
+  // Every revoke answers with the whole remaining list rather than editing the
+  // one on screen, so the panel cannot end up showing a permission that is no
+  // longer in force — or hiding one that is.
+  const run = async (operation: () => Promise<{ tools: TrustedTool[] }>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setTools((await operation()).tools);
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : 'Could not change that.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section id="settings-trusted-tools" className="space-y-2 border-t border-border pt-5">
+      <div>
+        <h3 className="text-sm font-semibold">Standing permissions</h3>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Tools you told T.A.I.L.S. to stop asking about, and the folder each answer applies
+          to. Granted by choosing “Always allow” on a request — by hand, or out loud in voice
+          mode, where it takes a second yes. They last until you take them back here.
+        </p>
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+
+      {tools === null ? (
+        <p className="text-sm text-muted-foreground">Reading…</p>
+      ) : tools.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Nothing standing. Every tool call is being asked about.
+        </p>
+      ) : (
+        <>
+          <ul className="space-y-1.5">
+            {tools.map((tool) => (
+              <li
+                key={`${tool.toolName}@${tool.cwd}`}
+                data-tails-part="card"
+                className="flex items-center justify-between gap-3 px-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{tool.toolName}</span>
+                  {/* The folder wraps rather than truncates: which project a
+                      standing permission applies to is the whole of what the
+                      user is deciding about, and an ellipsis in the middle of a
+                      path is where two sibling checkouts look identical. */}
+                  <span className="block break-all text-xs text-muted-foreground">{tool.cwd}</span>
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void run(() => api.revokeTrustedTool(tool.toolName, tool.cwd))}
+                  className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs transition-transform duration-instant ease-emphasis active:scale-95 disabled:opacity-50"
+                >
+                  Ask again
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void run(() => api.revokeAllTrustedTools())}
+            className="rounded-md border border-border px-2.5 py-1.5 text-xs transition-transform duration-instant ease-emphasis active:scale-95 disabled:opacity-50"
+          >
+            Ask again about everything
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+
 function SectionIndex() {
   const reduced = useReducedMotion();
 
@@ -836,6 +946,8 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
             <ColorModeControl />
 
             <ConversationInstructions />
+
+            <TrustedTools />
 
             {/* The voice module's own section, mounted whole — it owns its
                 fetching, its state and its copy, including licence wording that

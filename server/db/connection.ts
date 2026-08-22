@@ -81,6 +81,23 @@ CREATE TABLE IF NOT EXISTS app_preferences (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Tools the user chose to stop being asked about, per folder.
+--
+-- Keyed by folder rather than by conversation, because that is the shape of the
+-- decision people actually make: "yes, run the tests in this project" is about
+-- the project, and it was previously forgotten the moment the app restarted —
+-- so the interruption count reset to maximum on every launch, which is the
+-- opposite of what someone who is walking away from the machine needs.
+--
+-- Not keyed globally either. A tool trusted everywhere is trusted in folders the
+-- user has not thought about, including ones a future conversation opens.
+CREATE TABLE IF NOT EXISTS trusted_tools (
+  tool_name TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (tool_name, cwd)
+);
+
 CREATE TABLE IF NOT EXISTS theme_bindings (
   scope TEXT NOT NULL CHECK (scope IN ('global', 'project', 'session')),
   scope_key TEXT NOT NULL DEFAULT '',
