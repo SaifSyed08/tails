@@ -21,6 +21,7 @@ import { attachVoiceGateway } from '@/modules/voice/voice-gateway.js';
 import { AppError } from '@/shared/utils.js';
 import { stopAllDevServers } from '@/modules/devserver/dev-servers.js';
 import { stopAllWatchers } from '@/modules/surface/bindings.js';
+import { surfaceService } from '@/modules/surface/surface.service.js';
 
 const PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
 const HOST = '127.0.0.1';
@@ -130,6 +131,19 @@ sessionsService.sweepEmptySessions();
 
 server.listen(PORT, HOST, () => {
   console.log(`T.A.I.L.S. server listening on http://${HOST}:${PORT}`);
+
+  /*
+    Panels come back, and so do their watchers.
+
+    After the port is open rather than before it, because restoring a watcher
+    starts a request against this machine — including, quite possibly, against
+    this very server — and doing that while it is still binding would fail every
+    restored monitor once for no reason.
+  */
+  const restored = surfaceService.restore();
+  if (restored.panels > 0 || restored.pruned > 0) {
+    console.log(`Restored ${restored.panels} panel(s), pruned ${restored.pruned}.`);
+  }
 });
 
 const shutdown = () => {

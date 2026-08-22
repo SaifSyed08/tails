@@ -81,6 +81,27 @@ CREATE TABLE IF NOT EXISTS app_preferences (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- The generated panel beside a conversation.
+--
+-- Stored whole, as a validated JSON array on one row, because a surface is
+-- always read and written whole and the widget union will change faster than a
+-- relational schema comfortably can. The revision column is what lets a client
+-- tell a redraw from a repeat.
+--
+-- No foreign key to the sessions table: a panel can belong to a conversation Claude Code
+-- owns that this app has no row for, and losing the panel because the chat is
+-- only half ours would be the wrong failure. Rows for conversations that have
+-- genuinely gone are pruned at startup instead.
+CREATE TABLE IF NOT EXISTS surfaces (
+  session_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  widgets_json TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  -- Set when the user asks a panel to follow them out of its own conversation.
+  pinned_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Tools the user chose to stop being asked about, per folder.
 --
 -- Keyed by folder rather than by conversation, because that is the shape of the
