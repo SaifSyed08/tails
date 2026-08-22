@@ -341,7 +341,7 @@ export function renderDesktopWindowHtml(options: DesktopWindowOptions = {}): str
 </style>
 </head>
 <body>
-<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="bubble"><button id="bubble-open" type="button"></button><span id="bubble-more" hidden></span><button id="bubble-close" type="button" aria-label="Dismiss">×</button></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
+<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="bubble"><button id="bubble-open" type="button"></button><span id="bubble-more" hidden></span><button id="bubble-close" type="button" aria-label="Dismiss">×</button></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-dock" type="button" aria-label="Send back into the chat" title="Send back into the chat" hidden><svg id="pill-dock-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
 <script type="module" nonce="${nonce}">
 const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
@@ -357,9 +357,9 @@ const RESTING_RATES = ${JSON.stringify(RESTING_RATES)};
 
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
-  openDetails() {}, hidePet() {},
+  openDetails() {}, hidePet() {}, dockPet() {},
   onFacing() {}, onRefresh() {}, onCarry() {}, onResync() {}, onProbe() {},
-  onAlert() {}, openAlert() {}, dismissAlert() {},
+  onAlert() {}, openAlert() {}, dismissAlert() {}, onDock() {},
 };
 
 /**
@@ -394,12 +394,22 @@ const bubbleOpen = document.getElementById('bubble-open');
 const bubbleMore = document.getElementById('bubble-more');
 const bubbleClose = document.getElementById('bubble-close');
 const pillSettings = document.getElementById('pill-settings');
+const pillDock = document.getElementById('pill-dock');
+const pillDockArrow = document.getElementById('pill-dock-arrow');
 const pillHide = document.getElementById('pill-hide');
 
-/** The pill's two sizes, in CSS pixels: a sliver, and two buttons. */
+/**
+ * The pill's sizes, in CSS pixels.
+ *
+ * Two widths, because the middle button is conditional: it only exists while the
+ * app is showing a conversation this pet belongs to, and a pill sized for three
+ * buttons with two in it has a dead third of itself that still swallows clicks —
+ * the hit test counts the open pill as part of the animal.
+ */
 const PILL_CLOSED_H = 5;
 const PILL_OPEN_H = 22;
 const PILL_OPEN_W = 56;
+const PILL_OPEN_W_DOCK = 78;
 
 let current = null;      // the pet payload currently rendered
 let box = null;          // its cell geometry
@@ -413,6 +423,15 @@ let facing = 'right';
 let scale = 1;           // the user's own size for this pet
 let alert = null;        // the chat waiting to be read, or null
 let alertJumpTimer = null;
+/**
+ * Whether the app is showing a conversation this pet lives in.
+ *
+ * Only the app can answer it — it means comparing the pet on screen against the
+ * conversation's assignment — so it is pushed here rather than worked out. The
+ * button is hidden otherwise, because "go back into the chat" has nowhere to go
+ * when the chat on screen is not his.
+ */
+let dockable = false;
 
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -770,7 +789,7 @@ function placePill(rect, stageRect, minX, maxX, maxY) {
   const open = pill.classList.contains('open');
   const height = open ? PILL_OPEN_H : PILL_CLOSED_H;
   const artworkWidth = (maxX - minX + 1) * box.scale;
-  const width = open ? PILL_OPEN_W : Math.max(18, artworkWidth * 0.45);
+  const width = open ? (dockable ? PILL_OPEN_W_DOCK : PILL_OPEN_W) : Math.max(18, artworkWidth * 0.45);
 
   const centre = rect.left - stageRect.left + (minX * box.scale) + artworkWidth / 2;
   const feet = rect.top - stageRect.top + (maxY + 1) * box.scale;
@@ -1133,6 +1152,35 @@ bubbleClose.addEventListener('click', (event) => {
  * This is a poll, so it is the slower of the two: the mousemove path answers
  * immediately and this one catches what it misses.
  */
+/**
+ * The app is showing a chat this pet belongs to, and roughly where it is.
+ *
+ * 'bearing' is the angle from this window to the app's, in degrees, and the arrow
+ * is rotated by it — so the button points at the place the pet is being sent
+ * rather than generically rightwards. It updates as either window moves, which
+ * is the shell's business: a page cannot see another window.
+ */
+bridge.onDock((state) => {
+  dockable = Boolean(state && state.dockable);
+  pillDock.hidden = !dockable;
+
+  if (state && Number.isFinite(state.bearing)) {
+    // The glyph points right at rest, so the rotation is the bearing itself.
+    pillDockArrow.style.transform = 'rotate(' + state.bearing + 'deg)';
+  }
+
+  // The pill is part of the hit test, so its size has to be re-derived whenever
+  // its contents change or the extra button is unreachable.
+  if (mask) placeFurniture();
+  publishState();
+});
+
+pillDock.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (current) bridge.dockPet(current.definition.id);
+});
+
 bridge.onProbe((point) => {
   if (dragging || !point) return;
   // Authoritative, not a change report -- see 'setPointerOver'. This is the one

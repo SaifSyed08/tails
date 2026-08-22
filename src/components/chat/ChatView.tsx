@@ -14,6 +14,7 @@ import { PlanCard } from '@/components/chat/PlanCard';
 import { QuestionCard } from '@/components/chat/QuestionCard';
 import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
 import { TurnFooter } from '@/components/chat/TurnFooter';
+import { PetSprite, type InstalledPet } from '@/components/marketplace';
 import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/utils';
 import { ToolRow } from '@/components/chat/ToolRow';
@@ -125,7 +126,11 @@ function UserText({ content }: { content: string }) {
   );
 }
 
-function Row({ row }: { row: ChatRow }) {
+function Row({ row, voice }: {
+  row: ChatRow;
+  /** The pet voicing the replies, when one is. Drawn beside the assistant's. */
+  voice?: InstalledPet | null;
+}) {
   switch (row.type) {
     case 'user':
       return (
@@ -173,6 +178,30 @@ function Row({ row }: { row: ChatRow }) {
 
     case 'assistant':
       return (
+        <div className="flex items-start gap-2">
+          {/*
+            Who is speaking, when it is not the assistant's own voice.
+
+            `sticky` rather than pinned to the top of the message: a long reply
+            scrolls past the top of the viewport, and an avatar that scrolls away
+            with it stops answering the question it is there to answer. Stuck to
+            the top of the scroll container, it stays beside whichever part of
+            the reply is being read.
+
+            In its own gutter rather than floated inside the bubble, because the
+            bubble is what a theme paints — an absolutely positioned child would
+            be clipped by a theme that sets `overflow`, and a floated one would
+            reflow the text around it.
+          */}
+          {voice ? (
+            <span
+              className="sticky top-1 shrink-0 pt-4 opacity-80"
+              title={`Voiced by ${voice.definition.displayName}`}
+            >
+              <PetSprite pet={voice} size={18} state="idle" facing="right" fps={0} />
+            </span>
+          ) : null}
+
         <div
           data-tails-part="bubbleAssistant"
           /*
@@ -207,6 +236,7 @@ function Row({ row }: { row: ChatRow }) {
           {row.streaming ? (
             <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-foreground align-middle" />
           ) : null}
+        </div>
         </div>
       );
 
@@ -351,6 +381,14 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   }, [voice.intent, spokenReply]);
   const [petPickerOpen, setPetPickerOpen] = useState(false);
   const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);
+  /**
+   * The pet whose voice these replies are in, or null.
+   *
+   * Only set for `override`: the avatar beside a reply is a claim about who is
+   * speaking, so it appears exactly when that claim is true. A chatty pet
+   * comments from the sidelines and is not the author of anything.
+   */
+  const [voicedBy, setVoicedBy] = useState<InstalledPet | null>(null);
   /*
     Starts as "still reading" rather than "nothing": the badge holds its place
     from the first frame, so the name arriving is a text swap and not a jolt.
@@ -385,6 +423,7 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
 
     void (async () => {
       let resolved: { id: string; name: string; phrases: string[] } | null = null;
+      let nextVoicedBy: InstalledPet | null = null;
       try {
         if (sessionId) {
           const session = await api.getSession(sessionId);
@@ -415,6 +454,10 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
                 }).catch(() => {});
               }
 
+              // See the note on the state: the avatar is a claim about
+              // authorship, so only the mode that changes the reply earns one.
+              nextVoicedBy = match.chatMode === 'override' ? match : null;
+
               resolved = {
                 id: match.definition.id,
                 // Both of these live where the pets module actually puts them,
@@ -435,7 +478,9 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
         // A chat with no row yet, or an unreadable pet library. Either way the
         // menu simply shows no assignment.
       }
-      if (!cancelled) setPet(resolved);
+      if (cancelled) return;
+      setPet(resolved);
+      setVoicedBy(nextVoicedBy);
     })();
 
     return () => {
@@ -534,7 +579,7 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
             ) : null}
 
             {rows.map((row) => (
-              <Row key={row.id} row={row} />
+              <Row key={row.id} row={row} voice={voicedBy} />
             ))}
 
             {/* Only while nothing is streaming — once tokens are arriving the

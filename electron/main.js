@@ -14,6 +14,7 @@ import {
   placePetFromWindow,
   refreshPetWindow,
   resetPetPosition,
+  setPetDockable,
   setPetHidden,
   setPetSuppressed,
 } from './pet-window.js';
@@ -436,6 +437,16 @@ function createMainWindow() {
   // right-click is deliberately suppressed, since the pill is the way in there.
   installContextMenu(mainWindow.webContents);
 
+  /*
+    The pet's arrow points at this window, so this window moving moves the arrow.
+
+    `undefined` for the flag: whether the button applies is the renderer's answer
+    and nothing here has a newer one. Only the geometry is being refreshed.
+  */
+  for (const event of ['move', 'resize', 'restore']) {
+    mainWindow.on(event, () => setPetDockable(undefined, mainWindow?.getBounds() ?? null));
+  }
+
   // Belt and braces around the grant: whatever the renderer believes, a window
   // that is not in front of the user is not one they are dictating into.
   for (const event of ['blur', 'hide', 'minimize']) {
@@ -535,6 +546,23 @@ function startPetWindow() {
       mainWindow.webContents.send('tails:open-session', sessionId);
     },
 
+    /*
+      The pill's arrow was pressed: tell the app.
+
+      The shell has no opinion about where a pet lives — that is the renderer's,
+      and it owns the desktop claim — so this only carries the press across. The
+      window is raised first for the same reason the settings button raises it:
+      the result of the press is something happening *in the app*, and a change
+      behind a window the user cannot see reads as nothing happening.
+    */
+    onDockPet: (petId) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('tails:pet-dock', petId);
+    },
+
     onOpenPetDetails: (petId) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -577,6 +605,19 @@ function installPetBridge() {
     if (action === 'suppress') setPetSuppressed(payload?.value !== false);
     else if (action === 'hide') setPetHidden(payload?.value !== false);
     else if (action === 'refresh') refreshPetWindow();
+    /*
+      Whether the pet could go back into the chat on screen.
+
+      The renderer answers the question and the shell supplies the geometry: the
+      arrow points at the app's window, and a page cannot see another window's
+      position. Sent together so the page never has one without the other.
+    */
+    else if (action === 'dockable') {
+      setPetDockable(
+        payload?.value === true,
+        mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null,
+      );
+    }
     else if (action === 'reset') resetPetPosition();
     // The handoff: the app is carrying an in-window pet past its own edge. The
     // point is in the app page's coordinates, and only the shell can turn those

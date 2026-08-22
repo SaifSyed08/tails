@@ -93,6 +93,19 @@ let readState = () => ({});
 let writeState = () => {};
 let onOpenPetDetails = () => {};
 let onOpenSession = () => {};
+let onDockPet = () => {};
+
+/**
+ * Whether the app is showing a conversation this pet lives in.
+ *
+ * Reported by the renderer, because only it can answer: the question is whether
+ * the pet on the desktop is the one assigned to the chat on screen. Held here so
+ * the pet page can be told, and re-told whenever either window moves.
+ */
+let dockable = false;
+
+/** Where the app's window is, for pointing the arrow at it. */
+let appBounds = null;
 
 /**
  * Conversations that finished while the user was elsewhere.
@@ -1048,6 +1061,17 @@ function installIpc() {
   ipcMain.on('pet:hide', () => hideFromPill());
 
   /*
+   * The pill's arrow: hand the pet back to the chat.
+   *
+   * The shell does not decide what that means — the app owns where a pet lives —
+   * so this only forwards. What it *does* own is that the button was reachable
+   * at all, which is `dockable`, and the app told it that too.
+   */
+  ipcMain.on('pet:dock', (_event, payload) => onDockPet(
+    typeof payload?.petId === 'string' ? payload.petId : '',
+  ));
+
+  /*
    * The bubble was clicked: go to that conversation.
    *
    * The obvious action, and the one that also clears the alert — an alert whose
@@ -1092,6 +1116,7 @@ export function createPetWindow(options) {
   writeState = options.writeState;
   onOpenPetDetails = options.onOpenPetDetails ?? (() => {});
   onOpenSession = options.onOpenSession ?? (() => {});
+  onDockPet = options.onDockPet ?? (() => {});
 
   // On by default while the drift is unexplained. It is a bounded, buffered
   // append to userData; the cost is far smaller than another round of guessing
@@ -1208,6 +1233,8 @@ export function createPetWindow(options) {
 
     trackedPosition = { x, y };
     onCarried(x, y);
+    // The arrow points at the app, so carrying the pet changes where that is.
+    pushDockState();
   });
 
   petWindow.on('closed', () => {
@@ -1228,6 +1255,44 @@ export function createPetWindow(options) {
 }
 
 /** Called when the app takes the pet in-window, and when it gives it back. */
+/**
+ * Tells the page whether the arrow applies, and which way it points.
+ *
+ * The bearing is measured centre to centre, in degrees, with zero pointing right
+ * — which is how the glyph is drawn, so the page can rotate it by exactly this
+ * number. Sent on every change of either window's position, which is why it is
+ * cheap: two rectangles and an `atan2`.
+ */
+function pushDockState() {
+  if (!isAlive()) return;
+
+  let bearing = 0;
+  if (appBounds) {
+    const from = petWindow.getBounds();
+    const dx = (appBounds.x + appBounds.width / 2) - (from.x + from.width / 2);
+    const dy = (appBounds.y + appBounds.height / 2) - (from.y + from.height / 2);
+    bearing = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
+  }
+
+  petWindow.webContents.send('pet:dock-state', { dockable, bearing });
+}
+
+/**
+ * The app says whether the pet could go back into the chat on screen.
+ *
+ * Two separate facts arriving together: the renderer knows whether this pet
+ * belongs to the conversation being viewed, and the shell knows where the app's
+ * window is. Neither is any use without the other — the button needs to know it
+ * applies, and the arrow needs to know where to point.
+ */
+export function setPetDockable(next, bounds) {
+  // `undefined` leaves the flag alone, so the app window moving can refresh the
+  // bearing without claiming to know whether the button still applies.
+  if (next !== undefined) dockable = Boolean(next);
+  if (bounds) appBounds = bounds;
+  pushDockState();
+}
+
 export function setPetSuppressed(next) {
   suppressed = Boolean(next);
   traceState(next ? 'suppress-on' : 'suppress-off');

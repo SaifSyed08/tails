@@ -90,6 +90,8 @@ export type { PetDragLayerProps } from './PetDragLayer';
 export {
   hasDesktopPet,
   hideDesktopPet,
+  onDesktopPetDock,
+  setDesktopPetDockable,
   refreshDesktopPet,
   resetDesktopPetPosition,
   suppressDesktopPet,

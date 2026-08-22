@@ -52,6 +52,15 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
    */
   desktopPet: {
     suppress: (value) => ipcRenderer.send('tails:desktop-pet', { action: 'suppress', value }),
+
+    /**
+     * Whether the pet on the desktop could go back into the chat on screen.
+     *
+     * The app's answer to a question the shell cannot ask: it means comparing the
+     * pet the desktop window is showing against the conversation's assignment.
+     * Drives whether the pill offers an arrow at all.
+     */
+    dockable: (value) => ipcRenderer.send('tails:desktop-pet', { action: 'dockable', value }),
     hide: (value) => ipcRenderer.send('tails:desktop-pet', { action: 'hide', value }),
     refresh: () => ipcRenderer.send('tails:desktop-pet', { action: 'refresh' }),
 
@@ -103,6 +112,16 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
    */
   onOpenPetDetails: (handler) => {
     ipcRenderer.on('tails:open-pet-details', (_event, petId) => handler(String(petId || '')));
+  },
+
+  /**
+   * The pill's arrow was pressed: put this pet back in the chat.
+   *
+   * The shell only carries the press; where a pet lives is the app's own state,
+   * so the handler is registered on this side.
+   */
+  onPetDock: (handler) => {
+    ipcRenderer.on('tails:pet-dock', (_event, petId) => handler(String(petId || '')));
   },
 
   /** Fires when the pet's notification bubble is clicked. Carries the chat to open. */

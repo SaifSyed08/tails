@@ -20,6 +20,7 @@
 
 type DesktopPetBridge = {
   suppress: (value: boolean) => void;
+  dockable?: (value: boolean) => void;
   hide: (value: boolean) => void;
   refresh: () => void;
   resetPosition: () => void;
@@ -29,6 +30,7 @@ type DesktopPetBridge = {
 type TailsDesktop = {
   isDesktop?: boolean;
   desktopPet?: DesktopPetBridge;
+  onPetDock?: (handler: (petId: string) => void) => void;
 };
 
 function bridge(): DesktopPetBridge | null {
@@ -41,6 +43,26 @@ export const hasDesktopPet = (): boolean => bridge() !== null;
 
 /** Steps the desktop pet aside for an in-window one. Reversible, and not persisted. */
 export const suppressDesktopPet = (value: boolean): void => bridge()?.suppress(value);
+
+/**
+ * Tells the shell whether the desktop pet could step back into this chat.
+ *
+ * Only the app can answer it — the question is whether the pet the desktop
+ * window is showing is the one this conversation was given — and the shell needs
+ * the answer to decide whether the pill offers an arrow at all.
+ */
+export const setDesktopPetDockable = (value: boolean): void => bridge()?.dockable?.(value);
+
+/**
+ * The pill's arrow was pressed.
+ *
+ * Registered once, high up. The shell has already raised the window by the time
+ * this fires, because the result of the press is a pet appearing *in* the app.
+ */
+export function onDesktopPetDock(handler: (petId: string) => void): void {
+  const desktop = (window as unknown as { tailsDesktop?: TailsDesktop }).tailsDesktop;
+  desktop?.onPetDock?.(handler);
+}
 
 /** The user's own hide, as set by the pet's context menu. Persisted by the shell. */
 export const hideDesktopPet = (value: boolean): void => bridge()?.hide(value);

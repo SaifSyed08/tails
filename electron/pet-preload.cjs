@@ -34,6 +34,14 @@ contextBridge.exposeInMainWorld('petBridge', {
   hidePet: () => ipcRenderer.send('pet:hide'),
 
   /**
+   * The pill's arrow: go back into the chat.
+   *
+   * Only reachable while the app is showing a conversation this pet belongs to —
+   * see `onDock` — so there is always somewhere for it to land.
+   */
+  dockPet: (petId) => ipcRenderer.send('pet:dock', { petId }),
+
+  /**
    * The shell tells the page it is being carried.
    *
    * There is no mousedown to listen for: the OS performs the window move from a
@@ -78,6 +86,15 @@ contextBridge.exposeInMainWorld('petBridge', {
    * finished" — late to appear, and still up after you have dealt with it.
    */
   onAlert: (handler) => ipcRenderer.on('pet:alert', (_event, alert) => handler(alert)),
+
+  /**
+   * Whether the arrow applies, and which way it points.
+   *
+   * Both are facts only the shell has: whether the app is showing this pet's
+   * conversation is something the app reports to it, and the bearing between two
+   * windows is not visible from inside either of them.
+   */
+  onDock: (handler) => ipcRenderer.on('pet:dock-state', (_event, state) => handler(state)),
 
   /** The bubble was clicked: go to that conversation. */
   openAlert: (sessionId) => ipcRenderer.send('pet:alert-open', { sessionId }),

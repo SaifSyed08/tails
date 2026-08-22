@@ -5,11 +5,13 @@ import {
   claimDesktop,
   claimsDesktop,
   hideDesktopPet,
+  onDesktopPetDock,
   PetSprite,
   readPetDragFrame,
   refreshDesktopPet,
   releaseDesktopClaim,
   resolveCellBox,
+  setDesktopPetDockable,
   SPRITE_KEYFRAMES,
   suppressDesktopPet,
   usePetDragState,
@@ -878,6 +880,46 @@ export function ChatPet({ sessionId }: ChatPetProps) {
    * Activating somebody else releases this too, because then he is no longer
    * the pet the window would show.
    */
+  /*
+    Whether the pill should offer to send him back in here.
+
+    Three things at once, and the shell can answer none of them: this
+    conversation has a pet, that pet is the one the desktop window is showing,
+    and he is not already standing in the chat. The last is what stops the arrow
+    appearing beside a pet who is visibly already where it would send him.
+  */
+  useEffect(() => {
+    /*
+      Three conditions, and the third is not the durable claim — which is what I
+      reached for first and had to take back out.
+
+      The claim is released the moment the pet is drawn in this conversation, by
+      design: "coming back to that chat brings him in" is the existing rule. So
+      in every state where the claim is still set, he is already standing here and
+      the arrow would be offering to send him where he is. `handedOff` and
+      `outside` are the states that actually mean "not in this chat", and they are
+      exactly the two the carry-out produces.
+    */
+    setDesktopPetDockable(
+      Boolean(pet) && activePetId === pet?.definition.id && (handedOff || outside),
+    );
+  }, [pet, activePetId, handedOff, outside]);
+
+  /*
+    And the press itself: he walks back in.
+
+    Two things to undo, which are the two things carrying him out did. The claim
+    is what keeps a chat's pet on the desktop after you navigate away, and the
+    handoff is what stops this conversation drawing him — clearing one without
+    the other leaves him either invisible or straight back outside.
+  */
+  useEffect(() => {
+    onDesktopPetDock((petId) => {
+      releaseDesktopClaim(petId);
+      setHandedOffArrival(null);
+    });
+  }, []);
+
   useEffect(() => {
     const homedInAChat = activePetId !== null
       && activePetId === lastInChatPetRef.current

@@ -8,6 +8,7 @@ import { PointerLayer } from '@/components/appearance/PointerLayer';
 import { refreshPointerTracking, startPointerTokens } from '@/components/appearance/pointerTokens';
 import { ThemeProposal } from '@/components/appearance/ThemeProposal';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { applyTheme, clearTheme } from '@/theme/applyTheme';
 
@@ -75,6 +76,9 @@ const tokenValue = (control: AppearanceControl, value: number | boolean | string
 
 const controlDefaults = (controls: AppearanceControl[]): Record<string, number | boolean | string> =>
   Object.fromEntries(controls.map((control) => [control.id, control.value]));
+
+/** How long the "already saved" name stays up before fading. */
+const SAVED_LABEL_MS = 4000;
 
 type AppearancePanelProps = { sessionId: string | null };
 
@@ -302,13 +306,51 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
    * the same reason. Any of those and the look on screen is genuinely different
    * from the one with the name, so keeping it is a real thing to offer.
    */
-  const alreadySaved = (() => {
+  const savedLook = (() => {
     const match = known.find((theme) => theme.id === state.themeId);
     if (!match) return null;
     if (state.freeformCss.trim()) return null;
     if (Object.keys(state.controlValues ?? {}).length > 0) return null;
     return match;
   })();
+
+  /*
+    The label says its piece and then gets out of the way.
+
+    It is an answer to "can I keep this look" and that answer does not change
+    while you sit there, so a line of text holding the space forever is a line
+    nobody reads twice. It shows when the look changes to a saved one and fades
+    after a few seconds; the row it sits in keeps the undo and reset buttons, so
+    nothing moves when it goes.
+
+    Keyed on the id rather than a boolean, so switching from one saved look to
+    another shows the new name rather than staying hidden.
+  */
+  const [plate, setPlate] = useState<{ id: string | null; shown: boolean }>(
+    { id: null, shown: false },
+  );
+
+  /*
+    Raised during render, lowered on a timer.
+
+    Render-time rather than in an effect: which look is on screen is already
+    known while rendering, and an effect that calls setState in its body is a
+    second render for a value the first one had — the thing this codebase's lint
+    rule exists to catch. The timer's own setState is inside a callback, so it is
+    asynchronous and fine.
+  */
+  if (savedLook && plate.id !== savedLook.id) setPlate({ id: savedLook.id, shown: true });
+
+  useEffect(() => {
+    if (!plate.shown) return undefined;
+    const timer = window.setTimeout(
+      () => setPlate((current) => ({ ...current, shown: false })),
+      SAVED_LABEL_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [plate.shown, plate.id]);
+
+  const showNamePlate = savedLook !== null && plate.shown && plate.id === savedLook.id;
 
   const proposal = (
     <ThemeProposal
@@ -406,9 +448,19 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
                   not. In that case the space says what it is instead, which is
                   the more useful thing to know anyway.
                 */}
-                {alreadySaved ? (
-                  <p className="flex-1 truncate px-2 py-1 text-muted-foreground">
-                    Saved as &ldquo;{alreadySaved.name}&rdquo;
+                {savedLook ? (
+                  /*
+                    The space is held whether or not the name is in it, so the
+                    undo and reset buttons do not jump sideways when it fades.
+                  */
+                  <p
+                    className={cn(
+                      'flex-1 truncate px-2 py-1 text-muted-foreground transition-opacity',
+                      showNamePlate ? 'opacity-100 duration-quick' : 'opacity-0 duration-500',
+                    )}
+                    aria-hidden={!showNamePlate}
+                  >
+                    Saved as &ldquo;{savedLook.name}&rdquo;
                   </p>
                 ) : (
                   <button
