@@ -3,6 +3,7 @@ import {
   AudioLines,
   ImagePlus,
   Loader2,
+  MessageCircleQuestion,
   Mic,
   MicOff,
   Paperclip,
@@ -1050,6 +1051,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             <AudioLines className="relative size-4" />
           ) : voiceControl.glyph === 'speaking' ? (
             <Volume2 className="relative size-4" />
+          ) : voiceControl.glyph === 'asking' ? (
+            <MessageCircleQuestion className="relative size-4" />
           ) : (
             <Mic className="relative size-4" />
           )}

@@ -63,7 +63,20 @@ export type VoiceMode =
   /** Capture finished, turning audio into text. */
   | 'transcribing'
   /** Reading a reply back. */
-  | 'speaking';
+  | 'speaking'
+  /**
+   * Putting a permission request to the user out loud, and waiting to be
+   * answered.
+   *
+   * Its own mode rather than a flavour of `speaking` and `listening`, because
+   * the words spoken here do something entirely different with what they hear:
+   * every other open microphone in this app is composing a message, and this
+   * one is answering "may I run this". A control that looked the same in both
+   * would be a control that lets an utterance meant for the composer approve a
+   * shell command. It outranks `speaking` and `listening` in the derivation for
+   * the same reason.
+   */
+  | 'asking';
 
 export type VoiceModeState = {
   /** What the user asked for. `mode` is where that intent currently stands. */
@@ -103,6 +116,15 @@ export type VoiceModeState = {
    * cannot miss two detections in a row or need clearing afterwards.
    */
   wakeCount: number;
+  /**
+   * The request being put to the user out loud, when there is one.
+   *
+   * `awaiting` separates the half of it where the app is talking from the half
+   * where the microphone is open, which is the distinction the indicator has to
+   * draw — the same "is my microphone on" question the rest of this type exists
+   * to answer, asked in the one state where the answer changes mid-prompt.
+   */
+  asking?: { prompt: string; awaiting: boolean };
   /** Opens the microphone with a declared intent. */
   start: (intent: 'dictation' | 'voice') => void;
   /** Closes the microphone, whatever it was doing. */
@@ -119,7 +141,19 @@ export type VoiceModeState = {
 export type VoiceAction = 'dictate' | 'disable' | 'capture' | 'endCapture' | 'hush' | 'none';
 
 /** The icon to draw. Named by meaning so the shape is part of the contract. */
-export type VoiceGlyph = 'muted' | 'mic' | 'armed' | 'capturing' | 'working' | 'speaking';
+export type VoiceGlyph =
+  | 'muted' | 'mic' | 'armed' | 'capturing' | 'working' | 'speaking'
+  /**
+   * A request is on the table and has not been answered.
+   *
+   * Its own shape rather than a reuse of `speaking`. The contract tests hold
+   * every mode to a distinct glyph, which is the design already written down: a
+   * mode that looks like another mode is a mode the user cannot identify. While
+   * the answer is actually being captured the glyph becomes `capturing` — the
+   * microphone being open is the one fact that must always be carried by shape,
+   * whatever the microphone happens to be open for.
+   */
+  | 'asking';
 
 export type VoiceControl = {
   mode: VoiceMode;
@@ -214,6 +248,35 @@ export function describeVoiceControl(voice: VoiceModeState | undefined): VoiceCo
         glyph: 'working',
         action: 'none',
       };
+
+    case 'asking': {
+      const awaiting = voice?.asking?.awaiting ?? false;
+      return {
+        mode,
+        intent,
+        // Names the consequence rather than the mechanism, like `listening`
+        // does: the user needs to know that what they say next is an answer to
+        // a request and not the start of a message.
+        label: awaiting
+          ? 'Answer out loud — say approve, deny, or explain'
+          : 'Reading you something to approve',
+        title: voice?.asking?.prompt
+          ? `${voice.asking.prompt} Press to turn voice off and answer on screen.`
+          : 'Waiting for your answer. Press to turn voice off and answer on screen.',
+        disabled: false,
+        pressed: true,
+        // Only while the microphone is actually open. Half of this mode is the
+        // app talking, and claiming a live microphone through both halves is
+        // the lie this whole contract is arranged to prevent.
+        live: awaiting,
+        glyph: awaiting ? 'capturing' : 'asking',
+        // Pressing is the escape hatch, not an answer: it ends voice mode and
+        // leaves the card on screen. Nothing here can approve by touch, because
+        // a button whose meaning depends on an unheard question is a button
+        // that will eventually approve the wrong thing.
+        action: 'disable',
+      };
+    }
 
     case 'speaking':
       return {

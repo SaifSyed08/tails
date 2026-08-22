@@ -13,7 +13,7 @@ import {
 } from '../../../../src/components/chat/voice-contract.js';
 
 const ALL_MODES: VoiceMode[] = [
-  'unavailable', 'off', 'waiting', 'listening', 'transcribing', 'speaking',
+  'unavailable', 'off', 'waiting', 'listening', 'transcribing', 'speaking', 'asking',
 ];
 
 function state(mode: VoiceMode, extra: Partial<VoiceModeState> = {}): VoiceModeState {
@@ -203,4 +203,63 @@ test('the button can never start voice mode by accident', () => {
 test('a press with no voice module does nothing rather than throwing', () => {
   assert.doesNotThrow(() => runVoiceAction(undefined, 'dictate'));
   assert.doesNotThrow(() => runVoiceAction(state('off'), 'none'));
+});
+
+/*
+  Answering a permission request out loud.
+
+  `asking` is the one mode whose microphone opens and closes partway through —
+  the app reads the request, then listens for the answer — so it is the one mode
+  where "is my microphone on" cannot be answered by the mode alone.
+*/
+
+test('asking does not look or read like speaking', () => {
+  // The failure this guards: a request to run a shell command that renders like
+  // a reply being read back, so the user does not know an answer is expected.
+  const asking = describeVoiceControl(state('asking'));
+  const speaking = describeVoiceControl(state('speaking'));
+
+  assert.notEqual(asking.label, speaking.label);
+  assert.notEqual(asking.glyph, speaking.glyph);
+});
+
+test('asking reports the microphone as live only once it is listening', () => {
+  const reading = describeVoiceControl(state('asking', {
+    asking: { prompt: 'run npm test. Approve, deny, or explain?', awaiting: false },
+  }));
+  const listening = describeVoiceControl(state('asking', {
+    asking: { prompt: 'run npm test. Approve, deny, or explain?', awaiting: true },
+  }));
+
+  assert.equal(reading.live, false, 'the app is talking; the microphone is not capturing');
+  assert.equal(listening.live, true, 'now it is');
+  // Shape carries the open microphone, in this mode as in every other.
+  assert.notEqual(reading.glyph, listening.glyph);
+  assert.equal(listening.glyph, 'capturing');
+});
+
+test('the name for asking says what to say', () => {
+  const listening = describeVoiceControl(state('asking', {
+    asking: { prompt: 'anything', awaiting: true },
+  }));
+  assert.match(listening.label, /approve/i);
+  assert.match(listening.label, /deny/i);
+});
+
+test('the request being asked about is on the control itself', () => {
+  const prompt = 'run rm -rf build. Approve, deny, or explain?';
+  const described = describeVoiceControl(state('asking', { asking: { prompt, awaiting: true } }));
+  assert.ok(described.title.includes(prompt), described.title);
+});
+
+test('pressing during a request escapes to the screen rather than answering', () => {
+  // Nothing here may approve by touch: the button's meaning would depend on a
+  // question the presser may not have heard.
+  for (const awaiting of [false, true]) {
+    const described = describeVoiceControl(state('asking', {
+      asking: { prompt: 'anything', awaiting },
+    }));
+    assert.equal(described.action, 'disable', `awaiting: ${awaiting}`);
+    assert.equal(described.disabled, false, 'the escape hatch is never disabled');
+  }
 });

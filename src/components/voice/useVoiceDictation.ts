@@ -61,6 +61,15 @@ type Options = {
    * whether it is currently talking.
    */
   speech?: { speaking: boolean; hush: () => void };
+  /**
+   * A permission request currently being put to the user out loud.
+   *
+   * Folded in here rather than resolved by the component so the control stays
+   * one state machine — the same reason `speech` is passed in. Owned by
+   * `useSpokenApproval`, which decides what is being asked and when the
+   * microphone should be open for the answer.
+   */
+  asking?: { prompt: string; awaiting: boolean } | null;
 };
 
 /** Stable empty default, so callers that never arm do not restart the effect. */
@@ -92,7 +101,7 @@ function declareVoiceIntent(wanted: boolean): void {
 const LEVEL_INTERVAL_MS = 120;
 
 export function useVoiceDictation({
-  onText, onSpokenTurn, onWake, cwd, armed = NONE, speech,
+  onText, onSpokenTurn, onWake, cwd, armed = NONE, speech, asking,
 }: Options): VoiceModeState {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [reason, setReason] = useState<string | undefined>(undefined);
@@ -427,12 +436,19 @@ export function useVoiceDictation({
 
   const hush = useCallback(() => speech?.hush(), [speech]);
 
+  /*
+    `asking` outranks everything but an unusable microphone, because it is the
+    one state where the words being captured are not a message. Below it the
+    order is unchanged, and it is still the consequence that decides: speaking
+    over listening because the user cannot answer what is still being said.
+  */
   const mode: VoiceMode = available === false ? 'unavailable'
-    : speech?.speaking ? 'speaking'
-      : transcribing ? 'transcribing'
-        : capturing ? 'listening'
-          : intent !== 'off' ? 'waiting'
-            : 'off';
+    : asking ? 'asking'
+      : speech?.speaking ? 'speaking'
+        : transcribing ? 'transcribing'
+          : capturing ? 'listening'
+            : intent !== 'off' ? 'waiting'
+              : 'off';
 
   return {
     intent,
@@ -447,6 +463,7 @@ export function useVoiceDictation({
     // imply a device that is closed.
     level: intent !== 'off' ? level : 0,
     wakeCount,
+    ...(asking ? { asking } : {}),
     start,
     disable,
     capture,

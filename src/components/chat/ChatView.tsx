@@ -22,6 +22,7 @@ import { useChatSession } from '@/components/chat/useChatSession';
 import { useArmedWakeWords } from '@/components/voice/useArmedWakeWords';
 import { chimeArmed, chimeOff, chimeWake } from '@/components/voice/voice-chime';
 import { useSpeech } from '@/components/voice/useSpeech';
+import { useSpokenApproval } from '@/components/voice/useSpokenApproval';
 import { useSpokenReply } from '@/components/voice/useSpokenReply';
 import { useVoiceDictation } from '@/components/voice/useVoiceDictation';
 import { VoiceGlow } from '@/components/voice/VoiceGlow';
@@ -350,17 +351,67 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     busy,
     speak: speech,
   });
+  /*
+    Approvals, answered out loud.
+
+    Armed off a mirror of the intent rather than off `voice.intent` directly,
+    because the two hooks need each other: this one decides when the microphone
+    should open for an answer, and the microphone decides what the control says.
+    One render of lag is free here — voice mode is turned on long before any
+    permission request arrives.
+  */
+  const [voiceArmed, setVoiceArmed] = useState(false);
+  const approval = useSpokenApproval({
+    armed: voiceArmed,
+    pendingPermissions,
+    pendingPrompts,
+    speech,
+    answerPermission,
+    answerQuestion,
+    answerPlan,
+  });
   const voice = useVoiceDictation({
-    onText: (text) => composerRef.current?.append(text),
+    /*
+      An answer is not a message. While a request is being put to the user, the
+      words come back here first and stop here — putting "approve" in the
+      composer would leave it to be sent as the next thing the user said.
+    */
+    onText: (text) => {
+      if (approval.hear(text)) return;
+      composerRef.current?.append(text);
+    },
     // The auto-send, and the one behaviour that separates voice mode from
     // dictation. `sendSpoken` reads the draft synchronously, so the words that
     // arrived a moment ago in `onText` are in the message.
-    onSpokenTurn: () => composerRef.current?.sendSpoken(),
-    onWake: () => chimeWake(),
+    onSpokenTurn: () => {
+      if (approval.swallowTurn()) return;
+      composerRef.current?.sendSpoken();
+    },
+    onWake: () => {
+      chimeWake();
+      /*
+        Barge-in. Saying the wake word while the app is talking should stop it
+        talking — otherwise the only way to interrupt a reply being read back is
+        the button, which is the thing voice mode exists to not need. Safe when
+        nothing is playing, so it needs no guard.
+      */
+      speech.hush();
+    },
     cwd,
     armed: armedWakeWords,
     speech,
+    asking: approval.asking,
   });
+
+  /*
+    The microphone opens for an answer only once the question has finished being
+    asked. Capturing while the app is still talking would record the app.
+  */
+  const awaitingAnswer = approval.asking?.awaiting ?? false;
+  const startCapture = voice.capture;
+  useEffect(() => {
+    if (awaitingAnswer) startCapture();
+  }, [awaitingAnswer, startCapture]);
 
   /*
     The two chimes that are not the wake word. Driven off the intent rather
@@ -373,6 +424,7 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     const on = voice.intent === 'voice';
     if (on === voiceOnRef.current) return;
     voiceOnRef.current = on;
+    setVoiceArmed(on);
     if (on) chimeArmed();
     else {
       chimeOff();
