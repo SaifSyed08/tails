@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, clipboard, Menu, ipcMain, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, clipboard, Menu, ipcMain, nativeImage, Notification, shell } from 'electron';
 
 import {
   createPetWindow,
@@ -594,6 +594,37 @@ function appIsInFront() {
   return mainWindow.isFocused() && mainWindow.isVisible() && !mainWindow.isMinimized();
 }
 
+/**
+ * Tells the operating system a turn has finished.
+ *
+ * Only reached when the pet could not, and only when the app is not in front,
+ * so it cannot become a second announcement of something already announced.
+ *
+ * Clicking it raises the window and nothing more. Opening the conversation it
+ * came from would be better and is not free — the renderer owns routing — and a
+ * notification that focuses the wrong chat is worse than one that focuses the
+ * app and lets the unread dot say where to go.
+ */
+function announceCompletion(title) {
+  if (!Notification.isSupported()) return;
+
+  const notification = new Notification({
+    title: 'T.A.I.L.S.',
+    body: title ? `${title} is ready.` : 'A conversation finished.',
+    icon: readAppIcon(),
+    silent: false,
+  });
+
+  notification.on('click', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  notification.show();
+}
+
 function installPetBridge() {
   // The one thing that opens the microphone gate. Registered here with the
   // other renderer channels rather than beside the permission handlers,
@@ -677,7 +708,14 @@ function installPetBridge() {
       // He is looking right at the app. Whatever finished, he watched it
       // finish, and a pet jumping about to tell him so is noise.
       if (appIsInFront()) return;
-      notifyPetOfCompletion({ sessionId, title: String(payload?.title || ''), at: Date.now() });
+      const title = String(payload?.title || '');
+      // The pet first, because he is the better messenger: he can say which
+      // chat, and clicking him goes there. The operating system is the fallback
+      // for the case he cannot cover — put away, suppressed, or no pet at all —
+      // which until now was silence at exactly the moment the news mattered.
+      if (!notifyPetOfCompletion({ sessionId, title, at: Date.now() })) {
+        announceCompletion(title);
+      }
       return;
     }
 

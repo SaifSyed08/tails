@@ -961,12 +961,18 @@ function pushAlerts() {
  * hidden him: putting him back to deliver a notification would override a
  * deliberate choice, which is the whole reason his hide and the app's
  * suppression are two different switches.
+ *
+ * Returns whether he took it. A refusal used to end the matter, which left the
+ * one case nothing covered: away from the machine, pet put away, turn finished,
+ * silence. The caller sends that case to the operating system instead — see
+ * `main.js`. Only one of the two ever announces a given turn.
  */
 export function notifyPetOfCompletion({ sessionId, title, at }) {
-  if (!sessionId || !shouldShow()) return;
+  if (!sessionId || !shouldShow()) return false;
 
   alerts = addAlert(alerts, { sessionId, title, at: at || Date.now() });
   pushAlerts();
+  return true;
 }
 
 /** The user has looked at that conversation, so he has nothing left to say about it. */
