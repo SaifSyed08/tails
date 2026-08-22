@@ -56,6 +56,13 @@ export type Widget =
     status: MonitorStatus;
     detail?: string;
     matches?: string[];
+    /*
+      A monitor may also carry a `watch`, which is what keeps it updating after
+      the turn ends. It is deliberately not declared here: the client never
+      renders it and never sends it, and a field in this type is a claim that
+      something on this side reads it. The server owns watching entirely — what
+      arrives here is only ever the result.
+    */
   };
 
 /** A widget once the server has given it an identity. Ids are never generated here. */

@@ -85,6 +85,8 @@ export type Tone = typeof TONES[number];
 export const MONITOR_STATUSES = ['idle', 'watching', 'match', 'error'] as const;
 
 export const LIMITS = {
+  /** Watchers one panel may run. Each is a timer that outlives its turn. */
+  watchers: 4,
   widgets: 12,
   title: 60,
   label: 80,
@@ -191,6 +193,49 @@ const noteWidget = z.object({
   tone,
 });
 
+/**
+ * How often a watcher may look, in milliseconds.
+ *
+ * The floor is not politeness. A binding runs on a timer nobody is watching,
+ * against a service on this machine, potentially for hours after the
+ * conversation that created it ended — the difference between two seconds and
+ * two hundred milliseconds is the difference between a monitor and a load test
+ * the user did not ask for. The ceiling exists so "check every day" is refused
+ * rather than silently becoming a timer nothing will ever fire.
+ */
+export const WATCH_INTERVAL = { min: 2_000, max: 300_000, fallback: 5_000 } as const;
+
+/**
+ * What a monitor may watch on its own, after the turn ends.
+ *
+ * A closed set of two, both read-only, and the omission is the important part:
+ * **there is no `command` source.** A shell command on a repeating timer is a
+ * standing grant to execute, and there is no turn for it to be approved in —
+ * `canUseTool` only exists while the agent is running. Inventing an approval
+ * mechanism on the side of a widget feature is exactly how a permission model
+ * gets routed around by accident, so the powerful source waits for that
+ * question to be answered on its own terms.
+ */
+const watchSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('http'),
+    /** Vetted as loopback by the service, the same way the preview pane is. */
+    url: z.string(),
+    /** Reported as a match when the response body contains it. */
+    expect: text(LIMITS.label).optional(),
+    everyMs: z.number().int().min(WATCH_INTERVAL.min).max(WATCH_INTERVAL.max)
+      .default(WATCH_INTERVAL.fallback),
+  }),
+  z.object({
+    source: z.literal('file'),
+    path: z.string().max(400),
+    everyMs: z.number().int().min(WATCH_INTERVAL.min).max(WATCH_INTERVAL.max)
+      .default(WATCH_INTERVAL.fallback),
+  }),
+]);
+
+export type Watch = z.infer<typeof watchSchema>;
+
 const monitorWidget = z.object({
   kind: z.literal('monitor'),
   label: text(LIMITS.label),
@@ -198,6 +243,15 @@ const monitorWidget = z.object({
   detail: text(LIMITS.text).optional(),
   /** What it has found so far. Newest first is the caller's business. */
   matches: z.array(text(LIMITS.text)).max(LIMITS.items).optional(),
+  /**
+   * Keeps this monitor updating itself after the turn ends.
+   *
+   * Without it a monitor is a label: the agent can only redraw a panel while it
+   * is running, so "keep an eye on this while I get on with something else"
+   * would freeze the moment the reply finished — which is precisely when the
+   * user walked away.
+   */
+  watch: watchSchema.optional(),
 });
 
 const widgetSchema = z.discriminatedUnion('kind', [

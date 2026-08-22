@@ -82,23 +82,29 @@ export function SurfacePane({ sessionId }: { sessionId: string | null }) {
   /*
     The one widget that raises its voice.
 
-    Keyed on the revision rather than on the status, because two consecutive
-    matches are two events: a monitor that finds something, gets rebuilt, and
-    finds something again would otherwise chime once. Skipped on the first
-    render of a panel that arrived already matching — the client that reloads
-    into an old match should not be told it just happened.
+    Keyed on *what* is matching rather than on the revision. A watching monitor
+    revises itself every few seconds for as long as it runs, and a match that is
+    simply still true is not a new event — chiming on the revision would turn the
+    concept's "make a sound when you find one" into a metronome. The signature
+    changes when a monitor starts matching, stops, or finds something it had not
+    found before, which is exactly the set of moments worth a sound.
+
+    The first signature is recorded silently: a client that reloads into a match
+    from an hour ago should not be told it just happened.
   */
-  const matched = surface?.widgets.some(
-    (widget) => widget.kind === 'monitor' && widget.status === 'match',
-  ) ?? false;
-  const lastAnnounced = useRef<number | null>(null);
+  const matchSignature = surface?.widgets
+    .filter((widget) => widget.kind === 'monitor' && widget.status === 'match')
+    .map((widget) => `${widget.id}:${widget.kind === 'monitor' ? widget.matches?.[0] ?? '' : ''}`)
+    .join('|') ?? '';
+  const matched = matchSignature !== '';
+
+  const announced = useRef<string | null>(null);
   useEffect(() => {
-    if (!surface || !matched) return;
-    if (lastAnnounced.current === null) { lastAnnounced.current = surface.revision; return; }
-    if (lastAnnounced.current === surface.revision) return;
-    lastAnnounced.current = surface.revision;
-    chimeMatch();
-  }, [surface, matched]);
+    if (announced.current === null) { announced.current = matchSignature; return; }
+    if (announced.current === matchSignature) return;
+    announced.current = matchSignature;
+    if (matchSignature !== '') chimeMatch();
+  }, [matchSignature]);
 
   const dismiss = useCallback(() => setDismissed(true), []);
 
@@ -125,7 +131,7 @@ export function SurfacePane({ sessionId }: { sessionId: string | null }) {
 
       {/* The pulse wraps the list rather than the pane, so the header and its
           close button stay still while the content announces itself. */}
-      <AttentionPulse trigger={matched ? surface.revision : 'quiet'} className="min-h-0 flex-1">
+      <AttentionPulse trigger={matched ? matchSignature : 'quiet'} className="min-h-0 flex-1">
         <div className="h-full space-y-2 overflow-y-auto p-3">
           {surface.widgets.map((widget) => (
             <WidgetView key={widget.id} widget={widget} />

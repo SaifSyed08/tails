@@ -13,9 +13,11 @@ import { AppError } from '@/shared/utils.js';
  * makes — and the failure mode it names applies twice over here: a capability
  * the model is not told the shape of is a capability it will answer with prose.
  *
- * These are read-only panels. Nothing here can start a turn, run a command, or
- * fetch anything; a surface is data the app already knows how to draw. See
- * `widget-spec.ts` for why there is no freeform widget and never will be one.
+ * Nothing here can start a turn or run a command. A surface is data the app
+ * already knows how to draw — see `widget-spec.ts` for why there is no freeform
+ * widget and never will be one. The single exception to "it only draws" is a
+ * monitor's `watch`, which polls a loopback address or a file on a timer; both
+ * are read-only, and `bindings.ts` says why the obvious third source is absent.
  */
 
 const textResult = (payload: unknown, isError = false) => ({
@@ -110,7 +112,20 @@ const widget = z.discriminatedUnion('kind', [
     status: z.enum(MONITOR_STATUSES).describe('idle before you start, watching while you look, match when you find something — which flashes the panel and chimes — and error when you cannot carry on.'),
     detail: z.string().optional().describe('Where the search has got to, e.g. "checked 40 of 120".'),
     matches: z.array(z.string()).optional().describe('What you have found so far.'),
-  }).describe('The one widget that raises its voice. Use it for anything the user asked you to keep an eye on while they do something else.'),
+    watch: z.discriminatedUnion('source', [
+      z.object({
+        source: z.literal('http'),
+        url: z.string().describe('A loopback address only — localhost or 127.0.0.1. Anything else is refused, the same as the preview pane.'),
+        expect: z.string().optional().describe('A phrase to look for in the response. Finding it flips the monitor to "match", which flashes the panel and chimes.'),
+        everyMs: z.number().optional().describe('How often to look, 2000 to 300000. Defaults to 5000.'),
+      }),
+      z.object({
+        source: z.literal('file'),
+        path: z.string().describe('A file or folder. It matches when the thing changes, not merely because it exists.'),
+        everyMs: z.number().optional().describe('How often to look, 2000 to 300000. Defaults to 5000.'),
+      }),
+    ]).optional().describe('Keeps this monitor updating itself after your turn ends. Without it you can only redraw the panel while you are running, so a monitor would freeze at exactly the moment the user walked away. Two sources, both read-only: there is no way to run a command on a timer, so do not try to express one as a URL.'),
+  }).describe('The one widget that raises its voice. Use it for anything the user asked you to keep an eye on while they do something else — and give it a `watch` if the answer can be found by looking at a local address or a file, so it keeps working once you have stopped.'),
 ]);
 
 const surfaceShape = {

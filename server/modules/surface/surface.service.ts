@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
-import { appBroadcast } from '@/shared/broadcast.js';
-import { createMessage } from '@/shared/utils.js';
+import { startWatchers, stopWatchers, type MonitorPatch } from '@/modules/surface/bindings.js';
 import {
+  LIMITS,
   readSurfaceSpec,
   type IdentifiedWidget,
   type Surface,
 } from '@/modules/surface/widget-spec.js';
+import { appBroadcast } from '@/shared/broadcast.js';
+import { createMessage } from '@/shared/utils.js';
 
 /**
  * What each conversation currently has on its surface.
@@ -33,6 +35,33 @@ function publish(sessionId: string, surface: Surface | null): void {
     // purpose, and a closed surface has to be expressible.
     content: JSON.stringify({ sessionId, surface }),
   }));
+}
+
+/**
+ * Folds a watcher's result into the monitor it belongs to.
+ *
+ * Returns whether anything actually moved. A watcher that reports the same
+ * thing every five seconds is the normal case — nothing has happened yet — and
+ * republishing it would re-render every open window on a timer, replay the
+ * entrance animation, and re-announce a match that is simply still true.
+ */
+function applyPatch(surface: Surface, widgetId: string, patch: MonitorPatch): boolean {
+  const widget = surface.widgets.find((entry) => entry.id === widgetId);
+  if (!widget || widget.kind !== 'monitor') return false;
+
+  const matches = widget.matches ?? [];
+  // Only a genuinely new finding is kept. A file that keeps changing appends;
+  // one reported twice with the same stamp does not.
+  const isNew = patch.match !== undefined && patch.match !== matches[0];
+  const nextMatches = isNew ? [patch.match as string, ...matches].slice(0, LIMITS.items) : matches;
+
+  if (widget.status === patch.status && widget.detail === patch.detail && !isNew) return false;
+
+  widget.status = patch.status;
+  widget.detail = patch.detail;
+  if (nextMatches.length > 0) widget.matches = nextMatches;
+  surface.revision += 1;
+  return true;
 }
 
 export const surfaceService = {
@@ -62,18 +91,35 @@ export const surfaceService = {
     };
 
     surfaces.set(sessionId, surface);
+
+    /*
+      A rebuilt panel is a fresh statement of what to watch, so the previous
+      watchers stop — `startWatchers` does that first. Leaving them would mean a
+      monitor nobody can see still polling, and two generations of the same
+      watcher writing into one widget.
+    */
+    startWatchers(sessionId, surface.widgets, (widgetId, patch) => {
+      const current = surfaces.get(sessionId);
+      // Only if this is still the panel that started the watcher. A tick that
+      // lands after a redraw belongs to a widget that no longer exists.
+      if (current !== surface) return;
+      if (applyPatch(current, widgetId, patch)) publish(sessionId, current);
+    });
+
     publish(sessionId, surface);
     return surface;
   },
 
   /** Takes the surface down. Idempotent: closing a closed surface is fine. */
   close(sessionId: string): void {
+    stopWatchers(sessionId);
     if (!surfaces.delete(sessionId)) return;
     publish(sessionId, null);
   },
 
   /** Everything about a conversation goes when the conversation does. */
   forget(sessionId: string): void {
+    stopWatchers(sessionId);
     surfaces.delete(sessionId);
   },
 };
