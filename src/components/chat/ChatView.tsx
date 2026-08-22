@@ -1,4 +1,4 @@
-import { Brain, Check, Copy, Paperclip } from 'lucide-react';
+import { Brain, Check, Copy, Paperclip, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -14,6 +14,8 @@ import { PlanCard } from '@/components/chat/PlanCard';
 import { QuestionCard } from '@/components/chat/QuestionCard';
 import { ThinkingIndicator } from '@/components/chat/ThinkingIndicator';
 import { TurnFooter } from '@/components/chat/TurnFooter';
+import { copyText } from '@/lib/clipboard';
+import { cn } from '@/lib/utils';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
 import { useArmedWakeWords } from '@/components/voice/useArmedWakeWords';
@@ -250,26 +252,42 @@ const isStreaming = (row: ChatRow | undefined): boolean =>
  * re-render every message.
  */
 function CopyMessageButton({ content }: { content: string }) {
-  const [copied, setCopied] = useState(false);
+  /*
+    Three states, because two of them are lies.
+
+    The first version set "copied" on a resolved promise and swallowed the
+    rejection — so when Electron's permission handler refused the write, the tick
+    never appeared and neither did anything else. Silence reads as a dead button,
+    and a tick that appears regardless reads as a working one. So a failure says
+    so.
+  */
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  const label = state === 'copied' ? 'Copied'
+    : state === 'failed' ? 'Could not copy' : 'Copy message';
 
   return (
     <button
       type="button"
-      aria-label={copied ? 'Copied' : 'Copy message'}
-      title={copied ? 'Copied' : 'Copy message'}
+      aria-label={label}
+      title={label}
       onClick={() => {
-        void navigator.clipboard.writeText(content)
-          .then(() => setCopied(true))
-          // A refused clipboard is not worth a dialog; the icon simply does not
-          // change, which is the honest signal that nothing was copied.
-          .catch(() => {});
-        window.setTimeout(() => setCopied(false), 1200);
+        void copyText(content).then((ok) => {
+          setState(ok ? 'copied' : 'failed');
+          // Cleared on a timer rather than on blur: the button is inside a
+          // hover-revealed group, so a pointer leaving takes the whole thing
+          // with it and there would be nothing to clear.
+          window.setTimeout(() => setState('idle'), ok ? 1200 : 2000);
+        });
       }}
-      className="rounded p-0.5 text-muted-foreground transition-colors duration-quick hover:bg-accent hover:text-foreground"
+      className={cn(
+        'rounded p-0.5 transition-colors duration-quick hover:bg-accent hover:text-foreground',
+        state === 'failed' ? 'text-destructive' : 'text-muted-foreground',
+      )}
     >
-      {copied
-        ? <Check className="size-3" aria-hidden="true" />
-        : <Copy className="size-3" aria-hidden="true" />}
+      {state === 'copied' ? <Check className="size-3" aria-hidden="true" />
+        : state === 'failed' ? <X className="size-3" aria-hidden="true" />
+          : <Copy className="size-3" aria-hidden="true" />}
     </button>
   );
 }

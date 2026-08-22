@@ -7,6 +7,7 @@ import { setLiveToken } from '@/components/appearance/liveTokens';
 import { PointerLayer } from '@/components/appearance/PointerLayer';
 import { refreshPointerTracking, startPointerTokens } from '@/components/appearance/pointerTokens';
 import { ThemeProposal } from '@/components/appearance/ThemeProposal';
+import { api } from '@/lib/api';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { applyTheme, clearTheme } from '@/theme/applyTheme';
 
@@ -89,6 +90,16 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
   const [name, setName] = useState('');
   const [note, setNote] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  /**
+   * Every look that already has a name, built-in or saved.
+   *
+   * Read so the panel can tell "a look somebody made" from "a look that exists"
+   * — see `alreadySaved` below, which is what decides whether saving is on offer
+   * at all. An empty list on failure means the button stays visible, which is the
+   * right way to fail: offering a save that turns out to be a duplicate is a
+   * smaller problem than hiding the only way to keep a look.
+   */
+  const [known, setKnown] = useState<{ id: string; name: string }[]>([]);
 
   // The stack is a ref, not state: pushing to it must not re-render, and the
   // only thing the UI needs from it is its depth, which is tracked separately.
@@ -198,6 +209,60 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
       .catch(() => setNote('Could not reach the server to reset.'));
   }, [sessionId]);
 
+  /*
+    Refreshed rather than fetched once.
+
+    A look saved a moment ago has to join this list immediately, or the button
+    stays offered for the very thing it just created. Re-read after a save and
+    whenever the appearance changes, both of which are rare enough that the cost
+    is a small request nobody waits for.
+  */
+  const refreshKnown = useCallback(() => {
+    void api.listThemes()
+      .then((themes) => setKnown(themes.map(({ id, name: themeName }) => ({ id, name: themeName }))))
+      .catch(() => { /* Left as it was; see the note on the state. */ });
+  }, []);
+
+  useEffect(refreshKnown, [refreshKnown]);
+
+  /*
+    Re-read the bound look when the conversation changes.
+
+    The panel's state was only ever fed by `appearance_changed` broadcasts, which
+    arrive when something *changes* — so switching to a chat with a different look,
+    or none at all, left the panel describing the previous one. That was invisible
+    until the panel started naming the look ("Saved as Bloom" on a conversation
+    with no theme bound), which is the sort of wrong that is worse than saying
+    nothing.
+
+    Only the fields a resolve can answer for. Controls, freeform CSS and
+    proposals belong to a live session with the agent; a stored binding has none
+    of them, so they reset — which is correct, and is what makes the save offer
+    reappear for a look that has genuinely been tuned since.
+  */
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetch(`/api/appearance/resolve${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((resolved: { themeId?: string; name?: string; css?: string; pinnedMode?: 'light' | 'dark' | null } | null) => {
+        if (cancelled) return;
+
+        setState(resolved?.css
+          ? {
+            ...EMPTY_APPEARANCE_STATE,
+            themeCss: resolved.css,
+            themeId: resolved.themeId ?? EMPTY_APPEARANCE_STATE.themeId,
+            themeName: resolved.name ?? EMPTY_APPEARANCE_STATE.themeName,
+            pinnedMode: resolved.pinnedMode ?? null,
+          }
+          : EMPTY_APPEARANCE_STATE);
+      })
+      .catch(() => undefined);
+
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
   const save = useCallback(async () => {
     try {
       const response = await fetch('/api/appearance/keep', {
@@ -222,10 +287,28 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
       setNaming(false);
       setName('');
       setNote(`Saved as "${body?.name ?? name}".`);
+      refreshKnown();
     } catch (error) {
       setNote(error instanceof Error ? error.message : 'Could not save that look.');
     }
-  }, [name, sessionId]);
+  }, [name, sessionId, refreshKnown]);
+
+  /**
+   * The saved look this one *is*, or null when it is something new.
+   *
+   * Three things have to hold. The id has to name a look that already exists;
+   * no knob may have been dragged, because a dragged value is a change the saved
+   * spec does not contain; and there must be no freeform CSS layered on top, for
+   * the same reason. Any of those and the look on screen is genuinely different
+   * from the one with the name, so keeping it is a real thing to offer.
+   */
+  const alreadySaved = (() => {
+    const match = known.find((theme) => theme.id === state.themeId);
+    if (!match) return null;
+    if (state.freeformCss.trim()) return null;
+    if (Object.keys(state.controlValues ?? {}).length > 0) return null;
+    return match;
+  })();
 
   const proposal = (
     <ThemeProposal
@@ -312,13 +395,30 @@ export function AppearancePanel({ sessionId }: AppearancePanelProps) {
               </div>
             ) : (
               <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setNaming(true)}
-                  className="flex-1 rounded border border-border px-2 py-1 transition-colors duration-quick hover:bg-muted/50"
-                >
-                  Save as preset
-                </button>
+                {/*
+                  Offered only when there is something new to keep.
+
+                  A conversation whose look came from a saved preset was still
+                  being offered "Save as preset", which would have made a second
+                  copy of a look that already had a name. So the offer is gated on
+                  the look actually differing from the saved one — dragged knobs or
+                  layered CSS mean it does, and an untouched preset means it does
+                  not. In that case the space says what it is instead, which is
+                  the more useful thing to know anyway.
+                */}
+                {alreadySaved ? (
+                  <p className="flex-1 truncate px-2 py-1 text-muted-foreground">
+                    Saved as &ldquo;{alreadySaved.name}&rdquo;
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setNaming(true)}
+                    className="flex-1 rounded border border-border px-2 py-1 transition-colors duration-quick hover:bg-muted/50"
+                  >
+                    Save as preset
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={undo}

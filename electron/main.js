@@ -338,17 +338,39 @@ let voiceIntent = false;
  * screen capture together under a single `media` permission. Left alone, code
  * in the renderer could open the microphone with no prompt and no indicator.
  *
- * Nothing here is enabled yet — dictation is not built. This is the default
- * being corrected rather than a feature being prepared, which is why it denies
- * everything: when the microphone is wanted, the grant should be added
- * deliberately and narrowly, and be visible while it is held.
+ * Denied by default, and granted one capability at a time. The microphone is
+ * held only while the user is dictating; writing to the clipboard is allowed
+ * outright. Everything else — location, notifications, reading the clipboard,
+ * anything added to the platform later — is refused without being enumerated,
+ * which is the point of the shape.
  *
  * `setPermissionCheckHandler` matters as much as the request handler. Some APIs
  * consult it synchronously and never raise a request at all, so handling only
  * requests leaves a second door open.
  */
 function installPermissionHandlers(session) {
-  const allow = (permission) => permission === 'media' && voiceIntent;
+  /*
+    Two grants, and they are not the same kind of thing.
+
+    `media` is the microphone, held only while the user is actually dictating —
+    see `voiceIntent`.
+
+    `clipboard-sanitized-write` is writing text to the clipboard, and it is
+    allowed outright. That needed adding rather than reasoning about: the copy
+    button on a message did nothing at all, because this handler denied
+    everything and `navigator.clipboard.writeText` was refused before it reached
+    the OS. Writing is the safe half of the clipboard — it moves the app's own
+    text out, on a press the user made — and the sanitized variant is the one
+    that cannot smuggle arbitrary formats.
+
+    `clipboard-read` stays denied. A page that can read the clipboard can read
+    whatever the user last copied somewhere else, which is a different thing
+    entirely and nothing here needs it.
+  */
+  const allow = (permission) => (
+    (permission === 'media' && voiceIntent)
+    || permission === 'clipboard-sanitized-write'
+  );
 
   session.setPermissionRequestHandler((_contents, permission, callback) => callback(allow(permission)));
   session.setPermissionCheckHandler((_contents, permission) => allow(permission));
