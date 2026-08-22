@@ -4,6 +4,7 @@ import { AppearancePanel } from '@/components/appearance/AppearancePanel';
 import { ChatView } from '@/components/chat/ChatView';
 import { ChatPet } from '@/components/petstage/ChatPet';
 import { PreviewPane } from '@/components/preview/PreviewPane';
+import { SurfacePane } from '@/components/surface/SurfacePane';
 import { Intro } from '@/components/intro/Intro';
 import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
@@ -238,6 +239,14 @@ export default function App() {
                 when unused.
               */}
               <PreviewPane sessionId={sessionId} />
+
+              {/*
+                The generated panel, beside the conversation for the same reason
+                the preview is. Both can be open at once: one is a page the agent
+                started and the other is a panel it composed, and a run that
+                produces both should not have to choose which the user sees.
+              */}
+              <SurfacePane key={sessionId ?? 'no-session'} sessionId={sessionId} />
             </div>
           </main>
         </div>

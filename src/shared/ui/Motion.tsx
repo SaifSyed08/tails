@@ -46,6 +46,15 @@ type RevealProps = {
    * entrance gesture on two different boxes.
    */
   part?: string;
+  /**
+   * An accessible name for the revealed element.
+   *
+   * Declared rather than left to `aria-label`, which is a trap on a component:
+   * TypeScript skips excess-property checking for hyphenated JSX attributes, so
+   * passing one compiles, renders nothing, and the region ends up unnamed with
+   * no error anywhere.
+   */
+  label?: string;
 };
 
 /**
@@ -61,11 +70,13 @@ export function Reveal({
   className,
   as: Element = 'div',
   part,
+  label,
 }: RevealProps) {
   const reduced = useReducedMotion();
 
   return (
     <Element
+      aria-label={label}
       data-tails-part={part}
       className={cn(!reduced && REVEAL_ANIMATIONS[variant], className)}
       style={reduced || delayMs === 0 ? undefined : { animationDelay: `${delayMs}ms` }}

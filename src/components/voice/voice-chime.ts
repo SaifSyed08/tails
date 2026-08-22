@@ -110,6 +110,26 @@ export function chimeWake(): void {
   ]);
 }
 
+/**
+ * A monitor widget found what it was watching for.
+ *
+ * Three rising tones rather than the wake word's two, and spaced a little wider
+ * so it reads as an announcement rather than an acknowledgement. This is the
+ * only sound in the app that fires when nobody asked for anything just now —
+ * the user set something watching and walked off — so it has to be recognisable
+ * from another room while still obeying the volume rule above.
+ *
+ * Lives here with the others because "synthesised, no files, no licence" is a
+ * property of the module rather than of voice mode.
+ */
+export function chimeMatch(): void {
+  play([
+    { frequency: 587.33, at: 0, duration: 0.09, peak: 0.06 },
+    { frequency: 783.99, at: 0.1, duration: 0.09, peak: 0.065 },
+    { frequency: 1046.5, at: 0.2, duration: 0.16, peak: 0.07 },
+  ]);
+}
+
 /** Voice mode is off. The rising pair, reversed. */
 export function chimeOff(): void {
   play([

@@ -34,6 +34,7 @@ import {
 import { peekSessionModels } from '@/modules/chat/model.service.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import { trustRepository } from '@/db/trust.repository.js';
+import { createSurfaceServer, SURFACE_ALLOWED_TOOLS } from '@/modules/surface/surface.tools.js';
 import { resolveTurnSettings, type TurnSettings } from '@/modules/chat/turn-settings.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { publishSessionsChanged } from '@/shared/broadcast.js';
@@ -565,6 +566,15 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
           // user's own instructions, because those go last — see
           // `formatConversationInstructions` for why that position is load
           // bearing.
+          // Same bet as the appearance briefing above, and the same failure it
+          // was written to fix: a capability the model is not told the shape of
+          // is a capability answered in prose. Naming the two extremes — the
+          // structured result and the thing being watched — is what stops this
+          // being read as "a nicer way to print a table".
+          [
+            'You can build a small panel beside this conversation with mcp__tails-surface__surface_show: figures, charts, tables, checklists, timelines, progress and monitors, composed from parts the app draws. It is for the part of an answer worth looking at rather than reading, and for anything the user asked you to keep an eye on while they get on with something else — a monitor widget set to "match" flashes the panel and chimes.',
+            'Sending it again replaces the whole panel, which is how you update one. There is no HTML, CSS or code in it, and no widget for "anything else": if a kind is genuinely missing, say which rather than approximating it.',
+          ].join(' '),
           formatPetVoice(petVoice),
           formatConversationInstructions(readConversationInstructions()),
         ].filter(Boolean).join('\n\n'),
@@ -592,6 +602,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         // a `ToolSearch` round trip it reasonably declined, and a canned
         // fallback read as canned. See `pet-reaction.ts`.
         'tails-pet': createPetVoiceServer(sessionId),
+        'tails-surface': createSurfaceServer(sessionId),
       },
       // Every appearance tool runs unprompted; see the comment on the constant
       // for why the two that used to be gated no longer are. What guards the
@@ -603,6 +614,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         ...PREVIEW_ALLOWED_TOOLS,
         ...DEVSERVER_ALLOWED_TOOLS,
         ...PET_PERSONA_ALLOWED_TOOLS,
+        ...SURFACE_ALLOWED_TOOLS,
       ],
       // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
       // each turn, so any live mode change would be discarded anyway. The same

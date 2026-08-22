@@ -42,6 +42,8 @@ export type MessageKind =
   | 'pet_remark'
   /** The preview pane should show a URL, or close. Payload is JSON in `content`. */
   | 'preview_changed'
+  /** The generated panel beside a conversation changed, or closed. JSON in `content`. */
+  | 'surface_changed'
   | 'protocol_error';
 
 /**
