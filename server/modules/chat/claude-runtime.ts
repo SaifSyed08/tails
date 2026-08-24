@@ -34,6 +34,7 @@ import {
 import { peekSessionModels } from '@/modules/chat/model.service.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import { trustRepository } from '@/db/trust.repository.js';
+import { petsRepository } from '@/modules/pets/pets.repository.js';
 import { createSurfaceServer, SURFACE_ALLOWED_TOOLS } from '@/modules/surface/surface.tools.js';
 import { createSceneServer, SCENE_ALLOWED_TOOLS } from '@/modules/scene/scene.tools.js';
 import { resolveTurnSettings, type TurnSettings } from '@/modules/chat/turn-settings.js';
@@ -436,6 +437,16 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
       prompt,
     ).then((remark) => {
       if (!remark) return;
+      /*
+        Counted here rather than inside `reactTo`, because that function is
+        handed a *character* — a name, a look, a persona — and has no idea which
+        installed pet it belongs to. Giving it an id to carry a counter would
+        widen a type whose narrowness is the point.
+
+        Only for lines that survived generation and the script check: a remark
+        that was discarded was never said.
+      */
+      if (petVoice.petId) petsRepository.countPetEvent(petVoice.petId, 'lines');
       send({
         id: `pet-remark-${randomUUID()}`,
         sessionId,

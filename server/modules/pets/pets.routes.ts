@@ -118,6 +118,24 @@ export function createPetsRouter(): express.Router {
   )));
 
   /** Starring, which decides where a pet sits in the carousel. */
+  /*
+    What a pet has done.
+
+    A POST that returns the totals, so the panel showing them never has to ask
+    twice — and a pat and its number cannot end up disagreeing about what just
+    happened.
+  */
+  router.get('/:petId/stats', respond((req) => ({
+    stats: petsService.readPetStats(String(req.params.petId)),
+  })));
+
+  router.post('/:petId/stats', respond((req) => ({
+    stats: petsService.countPetEvent(
+      String(req.params.petId),
+      String(req.body?.event ?? ''),
+    ),
+  })));
+
   router.post('/:petId/starred', respond((req) => petsService.setPetStarred(
     String(req.params.petId),
     req.body?.starred !== false,

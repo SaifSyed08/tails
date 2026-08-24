@@ -1,3 +1,4 @@
+import { Heart } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -35,10 +36,11 @@ import {
 } from './chat-pet-api';
 import { onDesktopPetDetails, placeDesktopPetAt } from './desktop-handoff';
 import { PetDetailsPanel } from './PetDetailsPanel';
+import { countPetEvent } from './chat-pet-api';
 import { PetPill } from './PetPill';
 import { PetSpeechBubble, usePetRemark } from './PetSpeechBubble';
 import { advanceMotion, type Bounds, type Motion } from './pet-motion';
-import { collisionSoundEnabled, playCollision, playFootstep } from './pet-sfx';
+import { collisionSoundEnabled, playCollision, playFootstep, playPat } from './pet-sfx';
 import { fpsForState } from './sprite-rate';
 import { useChatActivity } from './useChatActivity';
 import { useDesktopPetAlerts } from './useDesktopPetAlerts';
@@ -134,6 +136,19 @@ const GREETING_MS = 900;
 
 /** How long a click's jump lasts before he settles again. */
 const REACTION_MS = 1200;
+
+/**
+ * How long the pointer has to rest on him before it is a pat.
+ *
+ * Long enough that it cannot be reached by accident on the way to picking him
+ * up, short enough that nobody wonders whether it worked. A press that turns
+ * into a drag before this cancels it — the gesture that starts a carry and the
+ * gesture that makes a fuss of him are the same press until one of them moves.
+ */
+const PAT_MS = 420;
+
+/** How long the pat gesture and its heart last. */
+const PAT_REACTION_MS = 1400;
 
 /** The fastest a throw can leave the hand, in px/s. */
 const MAX_THROW = 2400;
@@ -947,8 +962,74 @@ export function ChatPet({ sessionId }: ChatPetProps) {
         vy: reduced ? 0 : Math.max(-MAX_THROW, Math.min(MAX_THROW, velocity.y)),
         squash: reduced,
       } : current));
+
+      /*
+        Counted here rather than on release, because a release is not a throw.
+
+        Putting him down gently is the common case and the one that should not
+        register; the speed the hand was moving at is the only thing that tells
+        the two apart, and it is only known at this moment.
+      */
+      const speed = Math.hypot(velocity.x, velocity.y);
+      if (!reduced && speed > MAX_THROW * 0.15 && pet) {
+        void countPetEvent(pet.definition.id, 'thrown');
+      }
     },
   });
+
+  /*
+    Making a fuss of him.
+
+    The same press that picks him up, until one of them moves: the timer is
+    started on pointer-down and cancelled by a carry beginning or the pointer
+    lifting early, so a pat is a press that stayed put. Nothing here interferes
+    with the drag — it only watches it.
+
+    `carrying` is read through a ref because the timer outlives the render that
+    scheduled it, and the question at the moment it fires is whether he is being
+    carried *now*.
+  */
+  const [patted, setPatted] = useState(0);
+  const patTimerRef = useRef<number | undefined>(undefined);
+  const carryingRef = useRef(false);
+  useEffect(() => { carryingRef.current = carrying; }, [carrying]);
+
+  const cancelPat = useCallback(() => {
+    if (patTimerRef.current === undefined) return;
+    window.clearTimeout(patTimerRef.current);
+    patTimerRef.current = undefined;
+  }, []);
+
+  const beginPat = useCallback(() => {
+    cancelPat();
+    patTimerRef.current = window.setTimeout(() => {
+      patTimerRef.current = undefined;
+      if (carryingRef.current || !pet) return;
+
+      // Whatever pleased looks like on this sheet. A pet drawn without either
+      // is patted silently rather than holding a frame that means nothing.
+      const happy = (['waving', 'jumping'] as const)
+        .find((name) => pet.definition.states[name]);
+      if (happy) gesture(happy, PAT_REACTION_MS);
+
+      if (collisionSoundEnabled()) playPat();
+      setPatted((count) => count + 1);
+      void countPetEvent(pet.definition.id, 'petted');
+    }, PAT_MS);
+  }, [cancelPat, gesture, pet]);
+
+  // A carry beginning is a press that turned into a pick-up, so it is no
+  // longer a pat.
+  useEffect(() => { if (carrying) cancelPat(); }, [carrying, cancelPat]);
+  useEffect(() => cancelPat, [cancelPat]);
+
+  /** The heart, cleared on its own so a second pat replays it. */
+  useEffect(() => {
+    if (patted === 0) return undefined;
+    const timer = window.setTimeout(() => setPatted(0), PAT_REACTION_MS);
+    return () => window.clearTimeout(timer);
+  }, [patted]);
+
 
   // Declared before the suppression effect below, which reads it: effects run
   // in order, so this is what makes "the pet we were just showing" true by the
@@ -1209,10 +1290,11 @@ export function ChatPet({ sessionId }: ChatPetProps) {
 
       {createPortal(
         <div
-          onPointerDown={onPointerDown}
+          onPointerDown={(event) => { beginPat(); onPointerDown(event); }}
+          onPointerUp={cancelPat}
           onClickCapture={onClickCapture}
           onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
+          onPointerLeave={() => { setHovered(false); cancelPat(); }}
           onClick={() => gesture('jumping', REACTION_MS)}
           // No right-click on the pet, here or on the desktop: the pill is the
           // way in, and one way in is the point of having made it visible.
@@ -1254,6 +1336,23 @@ export function ChatPet({ sessionId }: ChatPetProps) {
             /* Per state: moments are brisk, resting states breathe. */
             fps={fpsForState(pet.definition.frame.fps, state)}
           />
+          {/*
+            The fuss, made visible.
+
+            Inside his box like the bubble below, so it goes where he goes, and
+            `aria-hidden` because it is a reaction rather than information: the
+            gesture and the sound already happened, and a screen reader
+            announcing a heart every time somebody rests a pointer on a sprite
+            would be noise.
+          */}
+          {patted > 0 && !reduced ? (
+            <Heart
+              key={patted}
+              aria-hidden="true"
+              className="pointer-events-none absolute -top-3 left-1/2 size-4 -translate-x-1/2 animate-attention-pulse fill-current text-destructive"
+            />
+          ) : null}
+
           {/*
             Inside the pet's own box, so it travels with him: he is thrown,
             dragged and walks around, and a bubble positioned against the chat

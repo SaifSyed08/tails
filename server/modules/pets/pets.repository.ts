@@ -41,6 +41,26 @@ CREATE TABLE IF NOT EXISTS installed_pets (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- What a pet has actually done, and how much.
+--
+-- Counters rather than an event log. The questions worth answering are "have I
+-- used this one" and "which of these is actually my companion", and both are
+-- totals — a row per throw would be a table that grows for the life of the
+-- install to answer them by counting.
+--
+-- No foreign key, and none of these ever block: a stat that fails to record is
+-- a number slightly low, and losing a pet because a counter could not be
+-- written would be absurd.
+CREATE TABLE IF NOT EXISTS pet_stats (
+  pet_id TEXT PRIMARY KEY,
+  petted INTEGER NOT NULL DEFAULT 0,
+  thrown INTEGER NOT NULL DEFAULT 0,
+  lines INTEGER NOT NULL DEFAULT 0,
+  conversations INTEGER NOT NULL DEFAULT 0,
+  first_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS active_pet (
   scope TEXT PRIMARY KEY CHECK (scope IN ('global')),
   pet_id TEXT,
@@ -268,6 +288,27 @@ const COLUMNS = 'id, source, directory, frame_json, states_json, installed_at, u
   + 'hidden_at, assigned_theme, thinking_phrases_json, starred_at, last_used_at, stage_json, '
   + 'voice_json, chat_mode, persona_prompt, lines_json';
 
+/** The things a pet's counters record. A closed set; see `countPetEvent`. */
+export const PET_STAT_EVENTS = ['petted', 'thrown', 'lines', 'conversations'] as const;
+export type PetStatEvent = typeof PET_STAT_EVENTS[number];
+
+const STAT_COLUMNS: Record<PetStatEvent, string> = {
+  petted: 'petted',
+  thrown: 'thrown',
+  lines: 'lines',
+  conversations: 'conversations',
+};
+
+export type PetStats = {
+  pet_id: string;
+  petted: number;
+  thrown: number;
+  lines: number;
+  conversations: number;
+  first_at?: string;
+  last_at?: string;
+};
+
 export const petsRepository = {
   listRecords(): InstalledPetRecord[] {
     const rows = db()
@@ -423,6 +464,40 @@ export const petsRepository = {
       SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(id);
+  },
+
+  /**
+   * Adds one to something a pet did.
+   *
+   * The column is chosen from a closed set here rather than passed through, so
+   * a caller cannot name one — this is string interpolation into SQL, and the
+   * union is what makes that safe rather than a habit worth copying.
+   *
+   * Silent on failure. A companion is not worth an error dialog about a
+   * counter, and every caller is a gesture in the middle of something else.
+   */
+  countPetEvent(id: string, event: PetStatEvent, by = 1): void {
+    if (!id) return;
+    const column = STAT_COLUMNS[event];
+    try {
+      db().prepare(`
+        INSERT INTO pet_stats (pet_id, ${column}, first_at, last_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(pet_id) DO UPDATE SET
+          ${column} = ${column} + excluded.${column},
+          last_at = CURRENT_TIMESTAMP
+      `).run(id, Math.max(0, Math.trunc(by)));
+    } catch {
+      // See above.
+    }
+  },
+
+  readPetStats(id: string): PetStats {
+    const row = db()
+      .prepare('SELECT * FROM pet_stats WHERE pet_id = ?')
+      .get(id) as PetStats | undefined;
+
+    return row ?? { pet_id: id, petted: 0, thrown: 0, lines: 0, conversations: 0 };
   },
 
   /**

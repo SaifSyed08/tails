@@ -1,10 +1,11 @@
-import { EyeOff, MessageSquare, Monitor, Volume2, X } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { EyeOff, Hand, MessageCircle, MessageSquare, Monitor, Volume2, Wind, X } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { PetSprite, type InstalledPet, type PetStateName } from '@/components/marketplace';
 import { PetPersonalityEditor } from '@/components/marketplace/PetPersonalityEditor';
 import { describeGrid, formatAdded, SOURCE_LABEL } from '@/components/marketplace/pet-filters';
+import { readPetStats, type PetStats } from '@/components/petstage/chat-pet-api';
 import { resolvePetVoice } from '@/components/voice/pet-voice';
 import { useSpeech } from '@/components/voice/useSpeech';
 import { cn } from '@/lib/utils';
@@ -69,6 +70,51 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
       </dt>
       <dd className="min-w-0 flex-1 break-words text-xs">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * What this pet has actually done.
+ *
+ * Here rather than in the marketplace grid, because it answers a question you
+ * only ask about a pet you already have: not "which of these do I want" but
+ * "is this one mine". A companion you have patted forty times is a different
+ * thing from one you installed and never touched, and nothing on screen said so.
+ *
+ * Nothing is shown until there is something to show. A row of zeroes beside a
+ * new pet reads as a scoreboard he is losing.
+ */
+function PetStatsRow({ petId }: { petId: string }) {
+  const [stats, setStats] = useState<PetStats | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readPetStats(petId).then((next) => { if (!cancelled) setStats(next); });
+    return () => { cancelled = true; };
+  }, [petId]);
+
+  if (!stats) return null;
+
+  const entries = [
+    { icon: Hand, label: 'patted', value: stats.petted },
+    { icon: Wind, label: 'thrown', value: stats.thrown },
+    { icon: MessageCircle, label: 'said', value: stats.lines },
+    { icon: MessageSquare, label: 'chats', value: stats.conversations },
+  ].filter((entry) => entry.value > 0);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+      {entries.map((entry) => (
+        <div key={entry.label} className="flex items-center gap-1.5">
+          <entry.icon className="size-3.5" aria-hidden="true" />
+          <dt className="sr-only">{entry.label}</dt>
+          <dd className="tabular-nums text-foreground">{entry.value}</dd>
+          <span>{entry.label}</span>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -365,6 +411,8 @@ export function PetDetailsPanel({
             ) : null}
 
           </div>
+
+          <PetStatsRow petId={pet.definition.id} />
 
           <button
             type="button"

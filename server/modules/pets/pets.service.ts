@@ -30,7 +30,10 @@ import {
   type PetStates,
 } from '@/modules/pets/pet-spec.js';
 import { CODEX_FPS, isCodexGrid } from '@/modules/pets/codex-layout.js';
-import { petsRepository, type PetSource, type PetStage } from '@/modules/pets/pets.repository.js';
+import {
+  PET_STAT_EVENTS,
+  type PetStatEvent,
+  type PetStats, petsRepository, type PetSource, type PetStage } from '@/modules/pets/pets.repository.js';
 import { seededThinkingPhrases } from '@/modules/pets/thinking-seeds.js';
 import {
   createRemoteCatalogue,
@@ -1322,6 +1325,29 @@ export const petsService = {
   },
 
   /** Stars a pet, or unstars it. */
+  /**
+   * Records something a pet did, and hands back the totals.
+   *
+   * Returning them rather than nothing so the panel that shows them does not
+   * need a second request after every pat — and so a gesture and its number
+   * cannot disagree about what just happened.
+   */
+  countPetEvent(petId: string, event: string, by = 1): PetStats {
+    const known = (PET_STAT_EVENTS as readonly string[]).includes(event);
+    if (!known) {
+      throw new AppError('That is not something a pet does.', {
+        code: 'PET_STAT_UNKNOWN',
+        statusCode: 400,
+      });
+    }
+    petsRepository.countPetEvent(petId, event as PetStatEvent, by);
+    return petsRepository.readPetStats(petId);
+  },
+
+  readPetStats(petId: string): PetStats {
+    return petsRepository.readPetStats(petId);
+  },
+
   setPetStarred(id: string, starred: boolean): InstalledPet {
     const pet = requirePet(id);
     petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
@@ -1341,6 +1367,10 @@ export const petsService = {
     const pet = requirePet(id);
     petsRepository.rememberPet({ id: pet.definition.id, source: pet.source, directory: pet.directory });
     petsRepository.markUsed(pet.definition.id);
+    // Counted here and not on activation: this is the call that means "given to
+    // a conversation", which is the thing worth knowing a total of. Putting him
+    // on the desktop is not a chat.
+    petsRepository.countPetEvent(pet.definition.id, 'conversations');
     // Assigning a pet to a conversation is the one pet-facing write that lands
     // in another module's table, so this is the only announcement of it. The
     // pet who walks out into that chat is listening.

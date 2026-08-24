@@ -210,3 +210,52 @@ export async function savePetVoice(petId: string, voice: PetVoice | null): Promi
   });
   if (!response.ok) throw new Error(`That voice could not be saved (${response.status}).`);
 }
+
+/** What a pet's counters record. Mirrors `PET_STAT_EVENTS` on the server. */
+export type PetStatEvent = 'petted' | 'thrown' | 'lines' | 'conversations';
+
+export type PetStats = {
+  petted: number;
+  thrown: number;
+  lines: number;
+  conversations: number;
+  first_at?: string;
+  last_at?: string;
+};
+
+/**
+ * Records something a pet did.
+ *
+ * Fire-and-forget, and silent on failure. Every caller is a gesture in the
+ * middle of something else — a pat, a throw — and none of them has anything
+ * useful to do about a counter that did not save. Resolves to the new totals
+ * when they are wanted, so a panel showing them does not need a second request.
+ */
+export async function countPetEvent(
+  petId: string,
+  event: PetStatEvent,
+): Promise<PetStats | null> {
+  if (!petId) return null;
+  try {
+    const response = await fetch(`/api/pets/${encodeURIComponent(petId)}/stats`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ event }),
+    });
+    if (!response.ok) return null;
+    return (await response.json() as { stats: PetStats }).stats;
+  } catch {
+    return null;
+  }
+}
+
+export async function readPetStats(petId: string): Promise<PetStats | null> {
+  if (!petId) return null;
+  try {
+    const response = await fetch(`/api/pets/${encodeURIComponent(petId)}/stats`);
+    if (!response.ok) return null;
+    return (await response.json() as { stats: PetStats }).stats;
+  } catch {
+    return null;
+  }
+}

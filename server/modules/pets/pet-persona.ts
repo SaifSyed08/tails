@@ -15,6 +15,15 @@ import { petsService } from '@/modules/pets/pets.service.js';
 
 export type PetTurnVoice = {
   mode: PetChatMode;
+  /**
+   * Which installed pet this is, when there is one.
+   *
+   * Everything else here is *character* — a name, a look, a persona — and the
+   * briefing is built from that alone. The id is carried separately because
+   * counters are about the pet rather than the character, and empty when the
+   * conversation has no pet.
+   */
+  petId: string;
   /** The pet's own name, for the briefing. */
   name: string;
   /** The pet's description, which is the only characterisation most pets have. */
@@ -39,7 +48,7 @@ export type PetTurnVoice = {
 };
 
 const SILENT: PetTurnVoice = {
-  mode: 'none', name: '', description: '', persona: '', mayRemark: false, lines: emptyBank(),
+  mode: 'none', petId: '', name: '', description: '', persona: '', mayRemark: false, lines: emptyBank(),
 };
 
 /**
@@ -65,6 +74,7 @@ export function readPetVoice(sessionId: string): PetTurnVoice {
 
     return {
       mode,
+      petId: pet.definition.id,
       name: pet.definition.displayName,
       description: pet.definition.description ?? '',
       persona: pet.personaPrompt ?? '',

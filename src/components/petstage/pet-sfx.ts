@@ -154,3 +154,39 @@ export function playFootstep(variation = Math.random()): void {
   source.start(now);
   source.stop(now + duration + 0.01);
 }
+
+/**
+ * The sound of a pet being made a fuss of.
+ *
+ * Two soft rising tones with a wobble on the second, which is as close to
+ * "pleased" as an oscillator gets without sounding like a menu confirmation.
+ * Quieter than the thud and shorter than the wake chime: this fires because
+ * somebody deliberately held the pointer on him, so it should feel like a
+ * response rather than an announcement.
+ */
+export function playPat(): void {
+  const ctx = audio();
+  if (!ctx) return;
+
+  const now = ctx.currentTime;
+  for (const [index, frequency] of [523.25, 659.25].entries()) {
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = 'triangle';
+
+    const start = now + index * 0.07;
+    const duration = 0.12;
+    oscillator.frequency.setValueAtTime(frequency, start);
+    // The second tone bends up a little. A fixed pair reads as two beeps; the
+    // bend is what makes it one gesture.
+    if (index === 1) oscillator.frequency.linearRampToValueAtTime(frequency * 1.06, start + duration);
+
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.045, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0005, start + duration);
+
+    oscillator.connect(gain).connect(ctx.destination);
+    oscillator.start(start);
+    oscillator.stop(start + duration + 0.02);
+  }
+}
