@@ -5,6 +5,7 @@ import { ChatView } from '@/components/chat/ChatView';
 import { ChatPet } from '@/components/petstage/ChatPet';
 import { PreviewPane } from '@/components/preview/PreviewPane';
 import { SceneBackdrop, SceneCorner } from '@/components/scene/SceneHost';
+import { SetupPanel } from '@/components/setup/SetupPanel';
 import { SurfacePane } from '@/components/surface/SurfacePane';
 import { Intro } from '@/components/intro/Intro';
 import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
@@ -266,6 +267,13 @@ export default function App() {
             </div>
           </main>
         </div>
+
+        {/*
+          First run, when the CLI this app drives is not installed. Renders
+          nothing in the ordinary case, and mounts above everything in the one
+          case where nothing else in the app is going to work.
+        */}
+        <SetupPanel onOpenTerminal={() => setTerminalOpen(true)} />
 
         {settingsOpen ? (
           <SettingsPanel sessionId={sessionId} onClose={() => setSettingsOpen(false)} />

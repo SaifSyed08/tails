@@ -389,9 +389,35 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
   */
   const startedAt = Date.now();
 
+  /*
+    Whether anything the user would call a reply has been produced.
+
+    A turn can end having said nothing at all — the model answers with a tool
+    call and stops, the CLI exits on a transient error the SDK reports as an
+    ordinary finish, a resumed session comes back with nothing to add. On screen
+    that is indistinguishable from the app being broken: the spinner stops and
+    the conversation simply does not move.
+
+    Tracked over text rather than over any event, because a turn that only ran
+    tools also has nothing to show for itself as far as anyone reading it is
+    concerned.
+  */
+  let saidSomething = false;
+  let reportedError = false;
+
   const finishTurn = () => {
     if (completed) return;
     completed = true;
+
+    // Said before the completion, so it lands in the transcript as part of the
+    // turn rather than after it. Never on top of an error: an error already
+    // explains the silence, and two explanations read as two problems.
+    if (!saidSomething && !reportedError) {
+      send(createMessage('status', sessionId, {
+        content: 'That turn finished without a reply. Send the message again, or ask what happened.',
+      }));
+    }
+
     send(createCompleteMessage(sessionId, exitCode, Date.now() - startedAt));
     sessionsRepository.touchSession(sessionId);
     publishSessionsChanged(sessionId);
@@ -523,6 +549,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
     // another message is enough; nothing has to be restarted.
     const cli = resolveClaudeCli();
     if (!cli.found) {
+      reportedError = true;
       send(createMessage('error', sessionId, {
         errorCode: 'claude_cli_missing',
         content: cli.reason,
@@ -712,6 +739,11 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
           Both halves have to go. Suppressing the call and leaving the result is
           a transcript with an answer to a question nobody asked.
         */
+        // Anything the user would read as an answer. Tool calls and their
+        // results deliberately do not count — see `saidSomething`.
+        if (normalized.kind === 'text' || normalized.kind === 'stream_delta') {
+          saidSomething = true;
+        }
         send(normalized);
       }
 
@@ -726,6 +758,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
     // An abort is a user action, not a failure, and the client already knows.
     if (!abortController.signal.aborted) {
       exitCode = 1;
+      reportedError = true;
       send(createMessage('error', sessionId, {
         errorCode: 'runtime_error',
         content: error instanceof Error ? error.message : String(error),

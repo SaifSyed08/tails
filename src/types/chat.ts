@@ -39,6 +39,8 @@ export type MessageKind =
   | 'surface_changed'
   /** The scenery behind a conversation changed, or cleared. JSON in `content`. */
   | 'scene_changed'
+  /** Output from the first-run install, line by line. JSON in `content`. */
+  | 'setup_progress'
   | 'protocol_error';
 
 /**

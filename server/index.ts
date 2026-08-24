@@ -23,6 +23,7 @@ import { stopAllDevServers } from '@/modules/devserver/dev-servers.js';
 import { stopAllWatchers } from '@/modules/surface/bindings.js';
 import { surfaceService } from '@/modules/surface/surface.service.js';
 import { createSceneRouter } from '@/modules/scene/scene.routes.js';
+import { createSetupRouter } from '@/modules/setup/setup.routes.js';
 import { sceneService } from '@/modules/scene/scene.service.js';
 
 const PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
@@ -73,6 +74,7 @@ app.use('/api/voice', createVoiceRouter());
 app.use('/api/routing', createRoutingRouter());
 app.use('/api/surface', createSurfaceRouter());
 app.use('/api/scene', createSceneRouter());
+app.use('/api/setup', createSetupRouter());
 
 // In production the built client is served from the same origin, so the app
 // and its API share cookies, websockets, and CSP with no special casing.
