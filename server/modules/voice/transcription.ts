@@ -10,6 +10,7 @@ import {
   transcribeInCloud,
   type CloudModelId,
 } from '@/modules/voice/cloud-transcribe.js';
+import { hasKey as assemblyReady, keyHint as assemblyHint } from '@/modules/voice/assemblyai.js';
 import { buildInitialPrompt } from '@/modules/voice/vocabulary.js';
 import { readStatus as readLocalStatus, transcribe as transcribeLocally } from '@/modules/voice/whisper.js';
 
@@ -41,7 +42,7 @@ import { readStatus as readLocalStatus, transcribe as transcribeLocally } from '
  * unavailable.
  */
 
-export type ProviderId = 'local' | 'openai';
+export type ProviderId = 'local' | 'openai' | 'assemblyai';
 
 export type TranscriptionSettings = {
   provider: ProviderId;
@@ -59,7 +60,9 @@ export function readSettings(): TranscriptionSettings {
     if (!raw || typeof raw !== 'object') return DEFAULTS;
 
     const record = raw as Record<string, unknown>;
-    const provider = record.provider === 'openai' ? 'openai' : 'local';
+    const provider: ProviderId = record.provider === 'openai' ? 'openai'
+      : record.provider === 'assemblyai' ? 'assemblyai'
+        : 'local';
     const model = typeof record.cloudModel === 'string' && isCloudModel(record.cloudModel)
       ? record.cloudModel
       : DEFAULTS.cloudModel;
@@ -75,7 +78,18 @@ export function readSettings(): TranscriptionSettings {
 export function writeSettings(next: Partial<TranscriptionSettings>): TranscriptionSettings {
   const merged: TranscriptionSettings = { ...readSettings(), ...next };
   const clean: TranscriptionSettings = {
-    provider: merged.provider === 'openai' ? 'openai' : 'local',
+    /*
+      Normalised against the union rather than a pair.
+
+      This clamp is the last gate before the file, and it silently rewrote
+      anything it did not recognise to `local` — which was right when there were
+      two providers and became a bug the moment there were three: choosing the
+      streaming one appeared to work, wrote `local`, and left the settings panel
+      arguing with the file.
+    */
+    provider: (['local', 'openai', 'assemblyai'] as const).includes(merged.provider)
+      ? merged.provider
+      : 'local',
     cloudModel: isCloudModel(merged.cloudModel) ? merged.cloudModel : DEFAULTS.cloudModel,
   };
 
@@ -101,6 +115,28 @@ export type ActiveProvider = {
 /** Which provider is in effect, and whether it can actually run. */
 export function activeProvider(): ActiveProvider {
   const settings = readSettings();
+
+  if (settings.provider === 'assemblyai') {
+    /*
+      The only provider that is both live and hosted.
+
+      `supportsPartials` is true here where it is false for the other cloud
+      path, and the difference is the transport rather than the vendor: a live
+      pass re-transcribes the same audio and would bill for one sentence several
+      times, while a stream sends it once and the partials come back for free.
+
+      The gateway reads this to decide whether to run its own live passes. It
+      must stay false for anything that is not a stream.
+    */
+    return assemblyReady()
+      ? { id: 'assemblyai', ready: true, supportsPartials: true }
+      : {
+        id: 'assemblyai',
+        ready: false,
+        reason: 'Streaming dictation is selected but no AssemblyAI key is saved. Add one in Settings.',
+        supportsPartials: true,
+      };
+  }
 
   if (settings.provider === 'openai') {
     return hasKey()
@@ -137,6 +173,10 @@ export function readTranscriptionStatus() {
   return {
     provider: settings.provider,
     cloudModel: settings.cloudModel,
+    // Whether the streaming key is saved. Never the key itself — see the
+    // write-only route it is set through.
+    streamingConfigured: assemblyReady(),
+    streamingKeyHint: assemblyHint(),
     models: CLOUD_MODELS,
     keySaved: hasKey(),
     keyHint: keyHint(),

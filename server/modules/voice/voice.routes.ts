@@ -2,6 +2,7 @@ import express from 'express';
 
 import { downloadVoice, readSpeechStatus, synthesise } from '@/modules/voice/piper.js';
 import { writeKey } from '@/modules/voice/cloud-transcribe.js';
+import * as assembly from '@/modules/voice/assemblyai.js';
 import * as eleven from '@/modules/voice/elevenlabs.js';
 import { activeProvider, readTranscriptionStatus, writeSettings } from '@/modules/voice/transcription.js';
 import { downloadModel, MODEL_MIB } from '@/modules/voice/whisper.js';
@@ -61,7 +62,10 @@ export function createVoiceRouter(): express.Router {
     try {
       const body = req.body as { provider?: unknown; cloudModel?: unknown };
       const next_ = writeSettings({
-        provider: body.provider === 'openai' ? 'openai' : body.provider === 'local' ? 'local' : undefined,
+        provider: body.provider === 'openai' ? 'openai'
+          : body.provider === 'assemblyai' ? 'assemblyai'
+            : body.provider === 'local' ? 'local'
+              : undefined,
         cloudModel: typeof body.cloudModel === 'string' ? body.cloudModel as never : undefined,
       });
       res.json({ ...readTranscriptionStatus(), provider: next_.provider });
@@ -92,6 +96,24 @@ export function createVoiceRouter(): express.Router {
       }
 
       writeKey(key);
+      res.json(readTranscriptionStatus());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * The streaming provider's key.
+   *
+   * Its own route rather than a field on the one above, because the two keys
+   * belong to different vendors and a single endpoint that decided which by
+   * looking at the string is a way to send one vendor's credential to the
+   * other. Write-only, like its neighbour.
+   */
+  router.post('/transcription/streaming-key', (req, res, next) => {
+    try {
+      const body = req.body as { key?: unknown };
+      assembly.writeKey(typeof body.key === 'string' ? body.key : '');
       res.json(readTranscriptionStatus());
     } catch (error) {
       next(error);

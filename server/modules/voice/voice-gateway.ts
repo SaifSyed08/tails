@@ -12,6 +12,7 @@ import {
 } from '@/modules/voice/pcm.js';
 import { cleanTranscript } from '@/modules/voice/cleanup.js';
 import { MIN_PASS_INTERVAL_MS, StableTranscript } from '@/modules/voice/live-transcript.js';
+import { openRealtime, type RealtimeSession } from '@/modules/voice/assemblyai.js';
 import { activeProvider, transcribeUtterance } from '@/modules/voice/transcription.js';
 import { readRecord, readString } from '@/shared/utils.js';
 
@@ -88,6 +89,14 @@ type Capture = {
   lastPassAt: number;
   /** True while a live pass is running; passes are strictly serial. */
   passing: boolean;
+  /**
+   * The live transcription stream, when one is running.
+   *
+   * Null for every other provider, which is what keeps their path byte for byte
+   * what it was. See `assemblyai.ts` for why every failure here ends by leaving
+   * this null and letting the buffered path answer.
+   */
+  stream: RealtimeSession | null;
 };
 
 function append(capture: Capture, samples: Int16Array): void {
@@ -124,6 +133,7 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
       live: new StableTranscript(),
       lastPassAt: 0,
       passing: false,
+      stream: null,
     };
 
     const send = (frame: ServerFrame) => {
@@ -207,11 +217,25 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
 
       capture.busy = true;
       try {
+        /*
+          Where the closing text comes from.
+
+          A stream has already been sent this audio, so asking it is both faster
+          and cheaper than transcribing the buffer again. An empty answer is not
+          "they said nothing" — it is a stream that failed, was cut off, or
+          never sent a transcript — so it falls through to the buffered path,
+          which still holds every sample.
+        */
+        const streamed = capture.stream ? await capture.stream.finish() : '';
+        capture.stream = null;
+
         // The last pass sees all the audio and is the most accurate one, but
         // whatever was already shown cannot be taken back — so `flush` returns
         // only the part that has not been sent, re-anchored if this pass
         // disagrees with what the user is already looking at.
-        const tail = capture.live.flush(await transcribeUtterance(samples, capture.cwd));
+        const tail = capture.live.flush(
+          streamed || await transcribeUtterance(samples, capture.cwd),
+        );
         const text = cleanTranscript(tail);
         if (text) send({ type: 'transcript', text });
       } catch (error) {
@@ -222,7 +246,7 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
       }
     };
 
-    socket.on('message', (data: Buffer, isBinary: boolean) => {
+    socket.on('message', async (data: Buffer, isBinary: boolean) => {
       if (isBinary) {
         // Carry any odd tail across chunk boundaries so a sample is never split
         // in half by the network, which would shift every sample after it.
@@ -237,7 +261,12 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
 
         for (const frame of frames) {
           const event = capture.gate.feed(frame);
-          if (capture.gate.active || event?.type === 'speech-end') append(capture, frame);
+          if (capture.gate.active || event?.type === 'speech-end') {
+            append(capture, frame);
+            // Only speech goes over the wire. The gate is what stops a stream
+            // provider being billed for a quiet room.
+            capture.stream?.push(frame);
+          }
 
           if (event?.type === 'speech-start') send({ type: 'state', listening: true });
           else if (event?.type === 'speech-end') void finish();
@@ -245,7 +274,11 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
 
         // Text should arrive while the sentence is still being spoken, not
         // after it ends. Rate-limiting lives inside the pass itself.
-        if (capture.gate.active) void runLivePass();
+        //
+        // Never while a stream is running: its partials arrive on their own, and
+        // a local pass on top of them would be two engines writing to one
+        // transcript with different opinions about what was said.
+        if (capture.gate.active && !capture.stream) void runLivePass();
         return;
       }
 
@@ -268,6 +301,27 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
         capture.buffer = null;
         capture.used = 0;
         capture.remainder = new Int16Array(0);
+
+        /*
+          A stream, only when one is the selected provider.
+
+          Opened here rather than per utterance so the connection is already up
+          when the first word arrives — a handshake in the middle of somebody
+          speaking is a lost opening syllable. A session that will not open
+          resolves to null and everything downstream behaves like the buffered
+          cloud path, which is the whole failure plan for this provider.
+
+          The audio is still buffered alongside, and that is not redundant: it is
+          what the fallback transcribes if the stream dies mid-sentence.
+        */
+        void capture.stream?.finish();
+        capture.stream = null;
+        if (provider.id === 'assemblyai') {
+          capture.stream = await openRealtime((text) => {
+            const settled = capture.live.advance(text);
+            if (settled) send({ type: 'partial', text: cleanTranscript(settled) });
+          });
+        }
         return;
       }
 
@@ -282,6 +336,10 @@ export function attachVoiceGateway(server: Server): WebSocketServer {
       // text nobody will ever see.
       capture.buffer = null;
       capture.gate.reset();
+      // The one thing a closed socket must still do: a stream left open is a
+      // paid connection to a vendor with nobody on this end of it.
+      void capture.stream?.finish();
+      capture.stream = null;
     });
   });
 

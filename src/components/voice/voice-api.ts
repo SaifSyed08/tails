@@ -19,7 +19,7 @@ export type DictationStatus = {
   downloadMiB: number;
 };
 
-export type TranscriptionProvider = 'local' | 'openai';
+export type TranscriptionProvider = 'local' | 'openai' | 'assemblyai';
 
 export type CloudModel = { id: string; label: string; note: string };
 
@@ -36,6 +36,9 @@ export type TranscriptionStatus = {
   models: CloudModel[];
   keySaved: boolean;
   keyHint: string | null;
+  /** Whether the streaming provider's key is saved. Never the key. */
+  streamingConfigured: boolean;
+  streamingKeyHint: string | null;
   ready: boolean;
   reason?: string;
   supportsPartials: boolean;
@@ -118,6 +121,17 @@ export const voiceApi = {
    */
   async saveKey(key: string) {
     return post<TranscriptionStatus>('/api/voice/transcription/key', { key });
+  },
+
+  /**
+   * The streaming provider's key.
+   *
+   * Its own call rather than a flag on `saveKey`, because the two keys belong to
+   * different vendors — one endpoint deciding which by looking at the string is
+   * a way to send one vendor's credential to the other.
+   */
+  async setStreamingKey(key: string) {
+    return post<TranscriptionStatus>('/api/voice/transcription/streaming-key', { key });
   },
 
   /** Fetches the dictation model. Only ever called from an explicit press. */

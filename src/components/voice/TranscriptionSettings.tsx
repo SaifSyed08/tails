@@ -1,4 +1,4 @@
-import { Check, Cloud, HardDrive, Loader2 } from 'lucide-react';
+import { Check, Cloud, HardDrive, Radio, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { voiceApi, type TranscriptionStatus } from '@/components/voice/voice-api';
@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 export function TranscriptionSettings() {
   const [status, setStatus] = useState<TranscriptionStatus | null>(null);
   const [key, setKey] = useState('');
+  const [streamingKey, setStreamingKey] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -57,6 +58,8 @@ export function TranscriptionSettings() {
   if (!status) return null;
 
   const cloud = status.provider === 'openai';
+  const streaming = status.provider === 'assemblyai';
+  const local = !cloud && !streaming;
 
   return (
     <section className="space-y-3">
@@ -68,7 +71,7 @@ export function TranscriptionSettings() {
         </p>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 sm:grid-cols-3">
         {/*
           Presented as a pair, each carrying its own trade-off. A checkbox
           labelled "better accuracy" would be the same switch with the cost
@@ -80,13 +83,13 @@ export function TranscriptionSettings() {
           onClick={() => void run('provider', () => voiceApi.setTranscription({ provider: 'local' }))}
           className={cn(
             'rounded-lg border p-3 text-left transition-colors duration-quick',
-            !cloud ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent',
+            local ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent',
           )}
         >
           <span className="flex items-center gap-2 text-sm font-medium">
             <HardDrive className="size-4" aria-hidden="true" />
             On this machine
-            {!cloud ? <Check className="size-3.5 text-primary" aria-hidden="true" /> : null}
+            {local ? <Check className="size-3.5 text-primary" aria-hidden="true" /> : null}
           </span>
           <span className="mt-1 block text-xs text-muted-foreground">
             Nothing is sent anywhere, and it is free. Words appear as you speak. Less accurate on
@@ -120,7 +123,74 @@ export function TranscriptionSettings() {
             the same sentence.
           </span>
         </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void run('provider', () => voiceApi.setTranscription({ provider: 'assemblyai' }))}
+          className={cn(
+            'rounded-lg border p-3 text-left transition-colors duration-quick',
+            streaming ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent',
+          )}
+        >
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <Radio className="size-4" aria-hidden="true" />
+            AssemblyAI, streaming
+            {streaming ? <Check className="size-3.5 text-primary" aria-hidden="true" /> : null}
+          </span>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            {/*
+              The one that is both, and the copy has to say why rather than
+              leaving it to read as "the best one". A stream sends the audio once
+              and the partial text comes back as part of it, which is what makes
+              live words affordable here and not above.
+            */}
+            Accurate <em>and</em> live, because the audio goes over once as you speak instead of
+            being re-sent for every update.{' '}
+            <strong className="font-medium text-foreground">
+              Your microphone is streamed to AssemblyAI
+            </strong>{' '}
+            and billed to your key.
+          </span>
+        </button>
       </div>
+
+      {streaming ? (
+        <div className="space-y-2 rounded-lg border border-border p-3">
+          <label className="block text-xs font-medium" htmlFor="assembly-key">
+            AssemblyAI API key
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id="assembly-key"
+              type="password"
+              value={streamingKey}
+              onChange={(event) => setStreamingKey(event.target.value)}
+              placeholder={status.streamingConfigured
+                ? `Saved ${status.streamingKeyHint ?? ''}`
+                : 'Paste your key'}
+              data-tails-part="input"
+              className="min-w-56 flex-1 p-2 text-sm outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+            />
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void run('streaming-key', async () => {
+                const next = await voiceApi.setStreamingKey(streamingKey);
+                setStreamingKey('');
+                return next;
+              })}
+              className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground transition-transform duration-instant ease-emphasis active:scale-95 disabled:opacity-50"
+            >
+              {streamingKey.trim() ? 'Save key' : 'Remove key'}
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Stored on this machine only, in your TAILS folder. If the stream cannot be reached,
+            dictation quietly falls back to transcribing the sentence after you stop — you get the
+            words either way, without the live text.
+          </p>
+        </div>
+      ) : null}
 
       {cloud ? (
         <div className="space-y-2 rounded-lg border border-border p-3">

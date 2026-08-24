@@ -106,3 +106,34 @@ describe('transcription provider', () => {
     assert.equal(readKey(), 'sk-test-padded-0000000000');
   });
 });
+
+describe('the streaming provider', () => {
+  it('can actually be selected', () => {
+    // The clamp before the file used to rewrite anything it did not recognise
+    // to `local`, which was right with two providers and a bug with three:
+    // choosing this one appeared to work, wrote `local`, and left the settings
+    // panel arguing with the file.
+    assert.equal(writeSettings({ provider: 'assemblyai' }).provider, 'assemblyai');
+    assert.equal(readSettings().provider, 'assemblyai');
+  });
+
+  it('is the one hosted provider that can show words as you speak', () => {
+    // Not a vendor difference — a transport one. A live pass re-transcribes the
+    // same audio and is billed again; a stream sends it once and the partials
+    // come back as part of it.
+    assert.equal(activeProvider().supportsPartials, true);
+  });
+
+  it('says what is missing rather than falling back to something else', () => {
+    const active = activeProvider();
+    assert.equal(active.ready, false, 'no key on a test machine');
+    assert.match(active.reason ?? '', /AssemblyAI/);
+    assert.equal(active.id, 'assemblyai', 'and it is still the selected provider');
+  });
+
+  it('nonsense in the file is still local', () => {
+    // The default that matters: an unreadable provider must never resolve to
+    // one that uploads.
+    assert.equal(writeSettings({ provider: 'wiretap' as never }).provider, 'local');
+  });
+});
