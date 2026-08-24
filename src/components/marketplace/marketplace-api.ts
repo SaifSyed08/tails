@@ -68,7 +68,14 @@ export type PetDefinition = {
   frame: FrameGrid;
   states: PetStates;
   personality?: string;
-  voice?: { engine: 'none' | 'system'; name?: string; pitch: number; rate: number };
+  /** Mirrors `petVoiceSchema`. `elevenVoiceId` is a cloud voice, when one was chosen. */
+  voice?: {
+    engine: 'none' | 'system';
+    name?: string;
+    pitch: number;
+    rate: number;
+    elevenVoiceId?: string;
+  };
 };
 
 /**

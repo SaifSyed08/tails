@@ -1,5 +1,5 @@
 import { Brain, Check, Copy, Paperclip, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
 import { onDesktopPetVoiceToggle, reportVoiceState } from '@/components/petstage/desktop-handoff';
+import { DEFAULT_VOICE, readDefaultVoice, resolveVoice, type DefaultVoice } from '@/components/settings/default-voice';
 import { useArmedWakeWords } from '@/components/voice/useArmedWakeWords';
 import { chimeArmed, chimeOff, chimeWake } from '@/components/voice/voice-chime';
 import { useSpeech } from '@/components/voice/useSpeech';
@@ -346,11 +347,50 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     mode being on, so a message typed while the wake word happens to be armed
     is answered on screen and in silence, like every other typed message.
   */
+  /**
+   * The pet whose voice these replies are in, or null.
+   *
+   * Only set for `override`: the avatar beside a reply is a claim about who is
+   * speaking, so it appears exactly when that claim is true. A chatty pet
+   * comments from the sidelines and is not the author of anything.
+   */
+  const [voicedBy, setVoicedBy] = useState<InstalledPet | null>(null);
+
+  /**
+   * The app's own voice, for everything the pet does not answer.
+   *
+   * Read once. It is a preference rather than a live value, and re-reading it
+   * per turn would be a request every time anybody said anything.
+   */
+  const [appVoice, setAppVoice] = useState<DefaultVoice>(DEFAULT_VOICE);
+  useEffect(() => {
+    let cancelled = false;
+    void readDefaultVoice().then((next) => { if (!cancelled) setAppVoice(next); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  /*
+    Which voice reads the reply.
+
+    This was missing, and its absence was the whole gap between "the pet is
+    speaking" and "the pet's voice is speaking": a pet in override mode writes
+    the reply in character and it was then read aloud in the app's default
+    voice, by somebody else.
+
+    `resolveVoice` is the one place that decides — the pet's own, then the app
+    default, then the platform's — so this hands it the pet and lets it answer.
+  */
+  const replyVoice = useMemo(
+    () => resolveVoice(voicedBy?.definition.voice ?? null, appVoice, speech.voices) ?? undefined,
+    [voicedBy, appVoice, speech.voices],
+  );
+
   const lastAssistant = [...rows].reverse().find((row) => row.type === 'assistant');
   const spokenReply = useSpokenReply({
     reply: lastAssistant?.type === 'assistant' ? lastAssistant.content : '',
     busy,
     speak: speech,
+    settings: replyVoice,
   });
   /*
     Approvals, answered out loud.
@@ -456,14 +496,6 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   }, [voice.intent, spokenReply]);
   const [petPickerOpen, setPetPickerOpen] = useState(false);
   const [pet, setPet] = useState<{ id: string; name: string; phrases: string[] } | null>(null);
-  /**
-   * The pet whose voice these replies are in, or null.
-   *
-   * Only set for `override`: the avatar beside a reply is a claim about who is
-   * speaking, so it appears exactly when that claim is true. A chatty pet
-   * comments from the sidelines and is not the author of anything.
-   */
-  const [voicedBy, setVoicedBy] = useState<InstalledPet | null>(null);
   /*
     Starts as "still reading" rather than "nothing": the badge holds its place
     from the first frame, so the name arriving is a text swap and not a jolt.
