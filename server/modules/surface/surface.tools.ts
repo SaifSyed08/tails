@@ -2,7 +2,8 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 import { surfaceService } from '@/modules/surface/surface.service.js';
-import { LIMITS, MONITOR_STATUSES, TONES } from '@/modules/surface/widget-spec.js';
+import { SURFACE_GUIDE } from '@/modules/surface/guide.js';
+import { LIMITS, MONITOR_STATUSES, TONES, WIDGET_ICONS } from '@/modules/surface/widget-spec.js';
 import { AppError } from '@/shared/utils.js';
 
 /**
@@ -41,6 +42,9 @@ const failureResult = (error: unknown) => {
   );
 };
 
+const icon = z.enum(WIDGET_ICONS).optional()
+  .describe("A small picture beside the label, from the app's own set. Optional, and it sits next to words that already say the thing — it is drawn hidden from screen readers, so an icon carrying meaning of its own is meaning some readers never get. Call surface_guide for the full list.");
+
 const tone = z.enum(TONES).optional()
   .describe('What the value means, never what colour it is: neutral, positive, warning, danger, accent. It resolves to the user\'s current theme, so a widget stays readable in whatever look they are running.');
 
@@ -61,6 +65,7 @@ const widget = z.discriminatedUnion('kind', [
     delta: z.string().optional().describe('A change worth showing beside it, e.g. "+12 today".'),
     hint: z.string().optional().describe('One line under the value, for the caveat a number needs.'),
     tone,
+    icon,
   }),
   z.object({
     kind: z.literal('chart'),
@@ -81,7 +86,7 @@ const widget = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('checklist'),
     title: z.string().optional(),
-    items: z.array(z.object({ label: z.string(), done: z.boolean(), tone })),
+    items: z.array(z.object({ label: z.string(), done: z.boolean(), tone, icon })),
   }).describe('Progress through named steps. This is for showing state, not for collecting it — the user cannot tick these.'),
   z.object({
     kind: z.literal('timeline'),
@@ -91,6 +96,7 @@ const widget = z.discriminatedUnion('kind', [
       at: z.string().optional().describe('Free text: "14:02", "two minutes ago". Displayed exactly as written and never parsed.'),
       detail: z.string().optional(),
       tone,
+      icon,
     })),
   }),
   z.object({
@@ -105,6 +111,7 @@ const widget = z.discriminatedUnion('kind', [
     title: z.string().optional(),
     body: z.string().describe('Plain text, drawn as text. Not markdown, and not a place to reproduce something the transcript already says better.'),
     tone,
+    icon,
   }),
   z.object({
     kind: z.literal('monitor'),
@@ -137,6 +144,7 @@ const surfaceShape = {
 export const SURFACE_ALLOWED_TOOLS = [
   'mcp__tails-surface__surface_show',
   'mcp__tails-surface__surface_close',
+  'mcp__tails-surface__surface_guide',
 ];
 
 export function createSurfaceServer(sessionId: string) {
@@ -178,9 +186,20 @@ export function createSurfaceServer(sessionId: string) {
     },
   );
 
+  const guideTool = tool(
+    'surface_guide',
+    [
+      'How panels are built: the rules, worked examples of the shapes that come up most, and the full list of icon names.',
+      'Read it before composing anything unusual, and read it once in any conversation where panels are going to be a running part of the work. The schema says what is accepted; this says what is good, and the difference between those two is the difference between a panel and a spreadsheet of things that were never rows.',
+      'The examples are not a menu. Copying one is the failure this exists to prevent — they are panels somebody already thought of, and the request in front of you is for one they did not.',
+    ].join(' '),
+    {},
+    async () => textResult({ ok: true, guide: SURFACE_GUIDE }),
+  );
+
   return createSdkMcpServer({
     name: 'tails-surface',
     version: '1.0.0',
-    tools: [showTool, closeTool],
+    tools: [showTool, closeTool, guideTool],
   });
 }

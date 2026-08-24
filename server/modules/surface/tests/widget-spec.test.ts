@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AppError } from '@/shared/utils.js';
-import { LIMITS, readSurfaceSpec, WIDGET_KINDS } from '@/modules/surface/widget-spec.js';
+import { LIMITS, readSurfaceSpec, WIDGET_ICONS, WIDGET_KINDS } from '@/modules/surface/widget-spec.js';
 
 const stat = { kind: 'stat', label: 'Tests passing', value: '516' };
 
@@ -161,4 +161,40 @@ test('every kind in the union parses, so none is unreachable', () => {
     const surface = readSurfaceSpec({ title: 'x', widgets: [samples[kind]] });
     assert.equal(surface.widgets[0].kind, kind);
   }
+});
+
+/* Icons. A vocabulary, like every other one here. */
+
+test('an icon outside the set is refused', () => {
+  // Including plausible ones. A name the app cannot draw renders as a gap where
+  // a meaning was supposed to be, and "close enough" is not a drawing.
+  for (const name of ['rocket-ship', 'FaCheck', 'sparkle', '🚀', 'check-circle']) {
+    assert.deepEqual(
+      issuePaths({ title: 'x', widgets: [{ ...stat, icon: name }] }),
+      ['widgets.0.icon'],
+      name,
+    );
+  }
+});
+
+test('every icon in the vocabulary is accepted', () => {
+  for (const icon of WIDGET_ICONS) {
+    const surface = readSurfaceSpec({ title: 'x', widgets: [{ ...stat, icon }] });
+    assert.equal(surface.widgets[0].kind === 'stat' ? surface.widgets[0].icon : null, icon);
+  }
+});
+
+test('an icon is optional everywhere it appears', () => {
+  // It decorates; it never carries meaning of its own. A widget that needed one
+  // would be a widget unreadable to anyone listening to the panel.
+  const surface = readSurfaceSpec({
+    title: 'x',
+    widgets: [
+      stat,
+      { kind: 'note', body: 'no icon' },
+      { kind: 'checklist', items: [{ label: 'a', done: false }] },
+      { kind: 'timeline', events: [{ label: 'a' }] },
+    ],
+  });
+  assert.equal(surface.widgets.length, 4);
 });

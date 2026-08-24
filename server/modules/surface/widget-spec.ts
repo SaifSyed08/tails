@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { WIDGET_ICONS } from '@/modules/surface/icons.js';
 import { AppError } from '@/shared/utils.js';
 
 /**
@@ -116,6 +117,15 @@ function cleanText(value: string): string {
 const text = (max: number) => z.string().max(max).transform(cleanText);
 const title = text(LIMITS.title).optional();
 const tone = z.enum(TONES).optional();
+/**
+ * A picture beside a label.
+ *
+ * Optional everywhere it appears. An icon that carries meaning the text does
+ * not is a widget whose meaning is unavailable to anyone using a screen reader,
+ * so these are drawn `aria-hidden` and every one of them sits next to words
+ * that already say the thing.
+ */
+const icon = z.enum(WIDGET_ICONS).optional();
 
 const statWidget = z.object({
   kind: z.literal('stat'),
@@ -132,6 +142,7 @@ const statWidget = z.object({
   delta: text(LIMITS.label).optional(),
   hint: text(LIMITS.text).optional(),
   tone,
+  icon,
 });
 
 const chartWidget = z.object({
@@ -161,6 +172,7 @@ const checklistWidget = z.object({
     label: text(LIMITS.text),
     done: z.boolean(),
     tone,
+    icon,
   })).min(1).max(LIMITS.items),
 });
 
@@ -173,6 +185,7 @@ const timelineWidget = z.object({
     at: text(40).optional(),
     detail: text(LIMITS.text).optional(),
     tone,
+    icon,
   })).min(1).max(LIMITS.items),
 });
 
@@ -191,6 +204,7 @@ const noteWidget = z.object({
   /** Plain text. Rendered as text — this is not a markdown or HTML slot. */
   body: text(LIMITS.text),
   tone,
+  icon,
 });
 
 /**
@@ -271,6 +285,7 @@ export const surfaceSchema = z.object({
 });
 
 export type Widget = z.infer<typeof widgetSchema>;
+export { WIDGET_ICONS, type WidgetIcon } from '@/modules/surface/icons.js';
 export type SurfaceSpec = z.infer<typeof surfaceSchema>;
 
 /** A widget once the server has given it an identity. */

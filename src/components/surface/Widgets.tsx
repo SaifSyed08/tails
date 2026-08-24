@@ -1,9 +1,11 @@
 import { Check, CircleDot, Minus, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { WIDGET_ICON_COMPONENTS } from '@/components/surface/icons';
+
 import { AnimatedNumber, GrowBar, Reveal, Stagger } from '@/shared/ui/Motion';
 import { cn } from '@/lib/utils';
-import type { IdentifiedWidget, Tone, Widget } from '@/types/surface';
+import type { IdentifiedWidget, Tone, Widget, WidgetIcon } from '@/types/surface';
 
 /**
  * How each widget kind is drawn.
@@ -42,6 +44,20 @@ const TONE_FILL: Record<Tone, string> = {
 const toneText = (tone: Tone = 'neutral') => TONE_TEXT[tone];
 const toneFill = (tone: Tone = 'neutral') => TONE_FILL[tone];
 
+/**
+ * The picture beside a label, when one was named.
+ *
+ * Always `aria-hidden`, and always next to words that already say the thing. An
+ * icon carrying meaning the text does not is meaning unavailable to anyone
+ * listening to the panel rather than looking at it — and at this size, to
+ * plenty of people looking at it too.
+ */
+function Glyph({ icon, tone, className }: { icon?: WidgetIcon; tone?: Tone; className?: string }) {
+  if (!icon) return null;
+  const Drawing = WIDGET_ICON_COMPONENTS[icon];
+  return <Drawing className={cn('size-3.5 shrink-0', toneText(tone), className)} aria-hidden="true" />;
+}
+
 /** The heading a widget carries when it has one. Absent rather than empty. */
 function WidgetTitle({ children }: { children?: string }) {
   if (!children) return null;
@@ -61,7 +77,10 @@ function Card({ children, className }: { children: ReactNode; className?: string
 function StatWidget({ widget }: { widget: Extract<Widget, { kind: 'stat' }> }) {
   return (
     <Card>
-      <div className="text-xs text-muted-foreground">{widget.label}</div>
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Glyph icon={widget.icon} tone={widget.tone} />
+        {widget.label}
+      </div>
       <div className="mt-0.5 flex items-baseline gap-2">
         {/*
           A number that visibly moves says it changed; one that swaps does not.
@@ -182,6 +201,7 @@ function ChecklistWidget({ widget }: { widget: Extract<Widget, { kind: 'checklis
             >
               {item.done ? <Check className="size-2.5 text-background" /> : null}
             </span>
+            <Glyph icon={item.icon} tone={item.tone} className="mt-0.5 size-3" />
             <span className={cn(item.done && 'text-muted-foreground line-through')}>
               {item.label}
             </span>
@@ -199,7 +219,11 @@ function TimelineWidget({ widget }: { widget: Extract<Widget, { kind: 'timeline'
       <Stagger variant="fade" as="ul" className="space-y-2">
         {widget.events.map((event, index) => (
           <li key={`${event.label}-${index}`} className="flex gap-2 text-xs">
-            <CircleDot className={cn('mt-0.5 size-3 shrink-0', toneText(event.tone))} aria-hidden="true" />
+            {/* The named icon in place of the generic dot, not beside it: two
+                marks per row on a narrow panel is a column of noise. */}
+            {event.icon
+              ? <Glyph icon={event.icon} tone={event.tone} className="mt-0.5 size-3" />
+              : <CircleDot className={cn('mt-0.5 size-3 shrink-0', toneText(event.tone))} aria-hidden="true" />}
             <div className="min-w-0">
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium">{event.label}</span>
@@ -244,7 +268,10 @@ function NoteWidget({ widget }: { widget: Extract<Widget, { kind: 'note' }> }) {
       <WidgetTitle>{widget.title}</WidgetTitle>
       {/* `whitespace-pre-wrap`, so the lines the agent wrote are the lines that
           appear. Not markdown: the transcript is where prose belongs. */}
-      <p className={cn('whitespace-pre-wrap text-xs', toneText(widget.tone))}>{widget.body}</p>
+      <div className="flex gap-1.5">
+        <Glyph icon={widget.icon} tone={widget.tone} className="mt-0.5 size-3" />
+        <p className={cn('whitespace-pre-wrap text-xs', toneText(widget.tone))}>{widget.body}</p>
+      </div>
     </Card>
   );
 }

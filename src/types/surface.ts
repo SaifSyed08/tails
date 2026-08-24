@@ -29,8 +29,50 @@ export type Tone = 'neutral' | 'positive' | 'warning' | 'danger' | 'accent';
 
 export type MonitorStatus = 'idle' | 'watching' | 'match' | 'error';
 
+/**
+ * The icons a widget may name.
+ *
+ * Mirrors `server/modules/surface/icons.ts`, which is the authority and carries
+ * the reasoning for why the list is a curated hundred rather than the library's
+ * five thousand. Restated here so the renderer's mapping can be a total record
+ * over it — a name the server can send and this side cannot draw is then a
+ * compile error rather than a gap in a panel.
+ */
+export const WIDGET_ICONS = [
+  'check', 'x', 'triangle-alert', 'circle-alert', 'circle-check', 'circle-x',
+  'info', 'circle-help', 'ban', 'clock', 'hourglass', 'trending-up',
+  'trending-down', 'arrow-up', 'arrow-down', 'arrow-right', 'minus', 'plus',
+  'code', 'terminal', 'git-branch', 'git-commit-horizontal', 'git-merge', 'git-pull-request',
+  'bug', 'package', 'box', 'layers', 'database', 'server',
+  'cpu', 'hard-drive', 'cloud', 'cloud-off', 'file', 'file-text',
+  'file-code', 'folder', 'folder-open', 'save', 'download', 'upload',
+  'trash2', 'copy', 'mail', 'message-square', 'bell', 'bell-off',
+  'send', 'share2', 'user', 'users', 'user-check', 'heart',
+  'star', 'thumbs-up', 'thumbs-down', 'dollar-sign', 'credit-card', 'receipt',
+  'wallet', 'coins', 'calendar', 'timer', 'history', 'refresh-cw',
+  'play', 'pause', 'square', 'skip-forward', 'globe', 'link',
+  'search', 'filter', 'eye', 'eye-off', 'lock', 'unlock',
+  'key', 'shield', 'zap', 'flame', 'sparkles', 'wand2',
+  'lightbulb', 'target', 'flag', 'map-pin', 'compass', 'gauge',
+  'activity', 'chart-bar', 'chart-pie', 'list', 'grid3x3', 'settings',
+  'sliders-horizontal', 'wrench', 'rocket', 'coffee', 'moon', 'sun',
+  'cloud-rain', 'leaf', 'music', 'image', 'camera', 'mic',
+  'volume2', 'bookmark', 'pin', 'tag', 'inbox', 'archive',
+  'external-link',
+] as const;
+
+export type WidgetIcon = typeof WIDGET_ICONS[number];
+
 export type Widget =
-  | { kind: 'stat'; label: string; value: string; delta?: string; hint?: string; tone?: Tone }
+  | {
+    kind: 'stat';
+    label: string;
+    value: string;
+    delta?: string;
+    hint?: string;
+    tone?: Tone;
+    icon?: WidgetIcon;
+  }
   | {
     kind: 'chart';
     title?: string;
@@ -41,15 +83,15 @@ export type Widget =
   | {
     kind: 'checklist';
     title?: string;
-    items: { label: string; done: boolean; tone?: Tone }[];
+    items: { label: string; done: boolean; tone?: Tone; icon?: WidgetIcon }[];
   }
   | {
     kind: 'timeline';
     title?: string;
-    events: { label: string; at?: string; detail?: string; tone?: Tone }[];
+    events: { label: string; at?: string; detail?: string; tone?: Tone; icon?: WidgetIcon }[];
   }
   | { kind: 'progress'; label: string; fraction: number; detail?: string; tone?: Tone }
-  | { kind: 'note'; title?: string; body: string; tone?: Tone }
+  | { kind: 'note'; title?: string; body: string; tone?: Tone; icon?: WidgetIcon }
   | {
     kind: 'monitor';
     label: string;
