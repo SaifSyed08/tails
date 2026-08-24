@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { clampVoiceSettings, toSpeech } from '@/components/voice/speech-text';
+import { createElevenSpeaker } from '@/components/voice/eleven-client';
 import { PiperSpeaker, readPiperStatus, type PiperStatus } from '@/components/voice/piper-client';
 
 /**
@@ -56,6 +57,15 @@ export type SpeechSettings = {
   engine?: 'system' | 'auto';
   /** Which Piper voice. Omit for the default, which is norman. */
   piperVoice?: string;
+  /**
+   * An ElevenLabs voice, which outranks both local engines when present.
+   *
+   * Only ever set by something that named it — a pet whose voice was chosen, or
+   * a session given one. There is no path from "a key exists" to "everything is
+   * now billed per character", which is the whole reason this is an id on the
+   * settings rather than a mode on the app.
+   */
+  elevenVoiceId?: string;
 };
 
 export type SpeechController = {
@@ -148,9 +158,22 @@ export function useSpeech(): SpeechController {
     };
   }, [supported]);
 
+  /*
+    ElevenLabs, when a voice has been named for this line.
+
+    First, because it is the only engine somebody explicitly chose — the other
+    two are what the machine happens to have. And it falls back rather than
+    failing: a refused key or an exhausted quota should sound like the local
+    voice, not like silence. The user asked for a nicer voice, not for a new
+    class of error.
+  */
+  const eleven = useRef<ReturnType<typeof createElevenSpeaker> | null>(null);
+  eleven.current ??= createElevenSpeaker(setSpeaking);
+
   const hush = useCallback(() => {
-    // Both engines, unconditionally. Whichever one is talking, "stop" has to
+    // Every engine, unconditionally. Whichever one is talking, "stop" has to
     // mean stop — and after a fallback the wrong one could be mid-sentence.
+    eleven.current?.stop();
     speaker?.stop();
     if (!supported) return;
     queueRef.current = [];
@@ -164,13 +187,11 @@ export function useSpeech(): SpeechController {
    * `replace` is the only difference, and it is the whole difference: one
    * cancels what is playing, the other lets it finish first.
    */
-  const say = useCallback((
-    markdown: string,
+  const sayLocally = useCallback((
+    chunks: string[],
     settings: SpeechSettings | undefined,
     replace: boolean,
   ) => {
-    const chunks = toSpeech(markdown);
-    if (chunks.length === 0) return;
 
     /*
       Piper, when it is there and the caller has not asked for the platform
@@ -232,6 +253,27 @@ export function useSpeech(): SpeechController {
     setSpeaking(true);
     for (const utterance of utterances) window.speechSynthesis.speak(utterance);
   }, [supported, piper?.ready, speaker]);
+
+  const say = useCallback((
+    markdown: string,
+    settings: SpeechSettings | undefined,
+    replace: boolean,
+  ) => {
+    const chunks = toSpeech(markdown);
+    if (chunks.length === 0) return;
+
+    const voiceId = settings?.elevenVoiceId;
+    if (voiceId && eleven.current) {
+      // The whole chunk as one line, for the reason Piper takes one: a request
+      // per sentence is a round trip per sentence, and this one crosses the
+      // internet.
+      eleven.current.enqueue(chunks.join(' '), voiceId, replace)
+        .catch(() => sayLocally(chunks, settings, replace));
+      return;
+    }
+
+    sayLocally(chunks, settings, replace);
+  }, [sayLocally]);
 
   const speak = useCallback(
     (markdown: string, settings?: SpeechSettings) => say(markdown, settings, true),

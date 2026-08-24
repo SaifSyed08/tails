@@ -21,9 +21,21 @@ export type DefaultVoice = {
   name: string | null;
   pitch: number;
   rate: number;
+  /**
+   * An ElevenLabs voice, when the user has chosen one.
+   *
+   * Stored beside the platform name rather than instead of it, so turning the
+   * cloud voice off returns them to the local one they had rather than to
+   * nothing. Also an opaque id and never resolved here — the same rule the
+   * comment above states for `name`, and for the stronger reason that only the
+   * vendor knows what ids exist.
+   */
+  elevenVoiceId: string | null;
 };
 
-export const DEFAULT_VOICE: DefaultVoice = { name: null, pitch: 1, rate: 1 };
+export const DEFAULT_VOICE: DefaultVoice = {
+  name: null, pitch: 1, rate: 1, elevenVoiceId: null,
+};
 
 const PREFERENCE_KEY = 'voice.default';
 
@@ -53,6 +65,9 @@ export function normalizeDefaultVoice(value: unknown): DefaultVoice {
     name: name || null,
     pitch: clamp(record.pitch, 0, 2, DEFAULT_VOICE.pitch),
     rate: clamp(record.rate, 0.1, 3, DEFAULT_VOICE.rate),
+    elevenVoiceId: typeof record.elevenVoiceId === 'string' && record.elevenVoiceId.trim()
+      ? record.elevenVoiceId.trim()
+      : null,
   };
 }
 

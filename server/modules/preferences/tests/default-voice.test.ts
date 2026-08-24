@@ -31,12 +31,30 @@ test('nonsense from the wire cannot reach the database', () => {
   assert.deepEqual(normalizeDefaultVoice('Zira'), DEFAULT_VOICE);
   assert.deepEqual(
     normalizeDefaultVoice({ name: 'Zira', pitch: 99, rate: -4 }),
-    { name: 'Zira', pitch: 2, rate: 0.1 },
+    { name: 'Zira', pitch: 2, rate: 0.1, elevenVoiceId: null },
   );
   assert.deepEqual(
     normalizeDefaultVoice({ name: 'Zira', pitch: Number.NaN, rate: 'fast' }),
-    { name: 'Zira', pitch: 1, rate: 1 },
+    { name: 'Zira', pitch: 1, rate: 1, elevenVoiceId: null },
   );
+});
+
+test('a cloud voice is kept beside the local one, not instead of it', () => {
+  // Turning the cloud voice off has to return the user to the platform voice
+  // they had, rather than to nothing — so both are stored and the resolver
+  // decides which answers.
+  const voice = normalizeDefaultVoice({ name: 'Zira', elevenVoiceId: '  abc123  ' });
+  assert.equal(voice.elevenVoiceId, 'abc123', 'trimmed, like every other pasted value');
+  assert.equal(voice.name, 'Zira');
+});
+
+test('an empty or absent cloud voice is null, never an empty string', () => {
+  // "" is what a cleared control sends, and storing it would be an id no vendor
+  // will ever report — "chosen, but missing" rather than "not chosen".
+  assert.equal(normalizeDefaultVoice({ elevenVoiceId: '' }).elevenVoiceId, null);
+  assert.equal(normalizeDefaultVoice({ elevenVoiceId: '   ' }).elevenVoiceId, null);
+  assert.equal(normalizeDefaultVoice({ elevenVoiceId: 42 }).elevenVoiceId, null);
+  assert.equal(normalizeDefaultVoice({}).elevenVoiceId, null);
 });
 
 test('the name is stored exactly as picked, never resolved on the server', () => {

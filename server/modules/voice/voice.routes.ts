@@ -2,6 +2,7 @@ import express from 'express';
 
 import { downloadVoice, readSpeechStatus, synthesise } from '@/modules/voice/piper.js';
 import { writeKey } from '@/modules/voice/cloud-transcribe.js';
+import * as eleven from '@/modules/voice/elevenlabs.js';
 import { activeProvider, readTranscriptionStatus, writeSettings } from '@/modules/voice/transcription.js';
 import { downloadModel, MODEL_MIB } from '@/modules/voice/whisper.js';
 import { bytesNeeded, downloadWakeWord } from '@/modules/voice/wake-download.js';
@@ -238,6 +239,79 @@ export function createVoiceRouter(): express.Router {
         error instanceof Error ? error.message : 'Speech synthesis failed',
         { code: 'VOICE_TTS_FAILED', statusCode: 500 },
       ));
+    }
+  });
+
+  /*
+    ElevenLabs: the key, the voices, and a sample of one.
+
+    The renderer never talks to the vendor. It asks this server, which holds the
+    key and forwards the bytes — the same arrangement the pet catalogue uses, and
+    for the same two reasons: a key that reaches the page is a key in a devtools
+    network tab, and the app has exactly one place where it is true that it
+    talks to a third party.
+  */
+  router.get('/elevenlabs', async (_req, res, next) => {
+    try {
+      res.json({
+        configured: eleven.hasKey(),
+        keyHint: eleven.keyHint(),
+        // Empty without a key, rather than an error: "no key yet" is the
+        // ordinary state of this feature, not a failure of it.
+        voices: await eleven.listVoices(),
+        sampleLine: eleven.SAMPLE_LINE,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/elevenlabs/key', (req, res, next) => {
+    const key = typeof req.body?.key === 'string' ? req.body.key : '';
+    try {
+      // An empty string is how the key is removed, which is why this is not
+      // guarded as a missing field.
+      eleven.writeKey(key);
+      res.json({ configured: eleven.hasKey(), keyHint: eleven.keyHint() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/elevenlabs/say', async (req, res, next) => {
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    const voiceId = typeof req.body?.voiceId === 'string' ? req.body.voiceId : '';
+
+    try {
+      const spoken = await eleven.speak(text, voiceId);
+      if (!spoken) {
+        // 502 rather than 500: this app is fine, the call out of it did not
+        // work. The client's answer either way is to use the local voice.
+        next(new AppError('ElevenLabs did not return audio.', {
+          code: 'VOICE_ELEVEN_FAILED',
+          statusCode: 502,
+        }));
+        return;
+      }
+      res.type(spoken.mediaType).send(Buffer.from(spoken.audio));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/elevenlabs/sample/:voiceId', async (req, res, next) => {
+    try {
+      const spoken = await eleven.sample(req.params.voiceId);
+      if (!spoken) {
+        next(new AppError('Could not fetch a sample.', {
+          code: 'VOICE_ELEVEN_FAILED',
+          statusCode: 502,
+        }));
+        return;
+      }
+      res.type(spoken.mediaType).send(Buffer.from(spoken.audio));
+    } catch (error) {
+      next(error);
     }
   });
 

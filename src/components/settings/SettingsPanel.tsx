@@ -17,6 +17,7 @@ import {
 import { useSpeech } from '@/components/voice/useSpeech';
 import { RoutingSettings } from '@/components/settings/RoutingSettings';
 import { TranscriptionSettings } from '@/components/voice/TranscriptionSettings';
+import { ElevenLabsSettings } from '@/components/voice/ElevenLabsSettings';
 import { VoiceSettings } from '@/components/voice/VoiceSettings';
 import {
   collisionSoundEnabled,
@@ -55,6 +56,7 @@ const SECTIONS = [
   { id: 'settings-routing', label: 'Model routing' },
   { id: 'settings-transcription', label: 'Speech recognition' },
   { id: 'settings-voice', label: 'Default voice' },
+  { id: 'settings-eleven', label: 'Cloud voice' },
   { id: 'settings-pets', label: 'Pets' },
   { id: 'settings-startup', label: 'Startup' },
 ] as const;
@@ -971,6 +973,10 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
             </div>
 
             <DefaultVoiceControl />
+
+            <div id="settings-eleven" className="border-t border-border pt-5">
+              <ElevenLabsSettings />
+            </div>
 
             <section id="settings-pets" className="space-y-2 border-t border-border pt-5">
               <h3 className="text-sm font-semibold">Pets</h3>

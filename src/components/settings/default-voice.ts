@@ -30,9 +30,13 @@ export type DefaultVoice = {
   name: string | null;
   pitch: number;
   rate: number;
+  /** An ElevenLabs voice, when one has been chosen. Mirrors the server's shape. */
+  elevenVoiceId: string | null;
 };
 
-export const DEFAULT_VOICE: DefaultVoice = { name: null, pitch: 1, rate: 1 };
+export const DEFAULT_VOICE: DefaultVoice = {
+  name: null, pitch: 1, rate: 1, elevenVoiceId: null,
+};
 
 /**
  * Which voice actually speaks, given a pet and the user's default.
@@ -63,6 +67,29 @@ export function resolveVoice(
 
   const own = resolvePetVoice(petVoice, available);
   if (own) return own;
+
+  /*
+    The chosen cloud voice, above the local fallback and below the pet's own.
+
+    Above, because picking one is an explicit act and the local default is
+    whatever was there already. Below, because a pet that names its own voice
+    has been given a character, and overriding that with an app-wide setting
+    would make every companion sound the same — which is most of the point of
+    having them.
+
+    It still carries the platform name and the two numbers. Nothing uses them
+    while the cloud voice answers, and they are what the fallback needs the
+    moment it does not.
+  */
+  if (fallback.elevenVoiceId) {
+    return {
+      engine: 'system',
+      ...(fallback.name ? { voiceName: fallback.name } : {}),
+      pitch: fallback.pitch,
+      rate: fallback.rate,
+      elevenVoiceId: fallback.elevenVoiceId,
+    };
+  }
 
   // No pet, or a pet with nothing stored. `name: null` reaches `matchVoiceName`
   // as `undefined`, which is already its "pick something sensible" path — the
