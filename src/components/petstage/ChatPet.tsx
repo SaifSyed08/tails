@@ -38,7 +38,7 @@ import { PetDetailsPanel } from './PetDetailsPanel';
 import { PetPill } from './PetPill';
 import { PetSpeechBubble, usePetRemark } from './PetSpeechBubble';
 import { advanceMotion, type Bounds, type Motion } from './pet-motion';
-import { collisionSoundEnabled, playCollision } from './pet-sfx';
+import { collisionSoundEnabled, playCollision, playFootstep } from './pet-sfx';
 import { fpsForState } from './sprite-rate';
 import { useChatActivity } from './useChatActivity';
 import { useDesktopPetAlerts } from './useDesktopPetAlerts';
@@ -108,6 +108,27 @@ const GUTTER_INSET = 6;
 const WANDER_MIN_MS = 7000;
 const WANDER_MAX_MS = 16000;
 
+/**
+ * Gap between idle glances, and how long one lasts.
+ *
+ * Shorter than a wander and much smaller in effect: standing perfectly still
+ * between strolls is what makes a pet read as a sprite rather than as someone
+ * waiting. A glance costs no position, interrupts nothing, and is the cheapest
+ * thing in this file that makes him look alive.
+ */
+const GLANCE_MIN_MS = 4000;
+const GLANCE_MAX_MS = 11000;
+const GLANCE_MS = 1100;
+
+/**
+ * Time between footsteps while walking, in ms.
+ *
+ * Tied to the clock rather than to distance travelled on purpose: the sprite's
+ * run cycle is a fixed frame rate, so steps that tracked pixels would drift out
+ * of time with the legs on a narrow window and into a gallop on a wide one.
+ */
+const FOOTSTEP_MS = 190;
+
 /** How long each beat of the arrival greeting lasts. */
 const GREETING_MS = 900;
 
@@ -137,7 +158,7 @@ const EDGE_HYSTERESIS = 12;
  * every wander a narrow margin offered him, which is a large part of why he
  * never appeared to walk left.
  */
-const MIN_STROLL = 12;
+const MIN_STROLL = 40;
 
 /**
  * How long after a drag ends a new assignment still counts as that drop.
@@ -207,9 +228,34 @@ function pickWanderTarget(geometry: Geometry, spriteWidth: number, from: number)
   const high = Math.min(maxX, limit);
   if (high <= GUTTER_INSET) return null;
 
-  const target = randomBetween(GUTTER_INSET, high);
-  // A stroll of two pixels is a twitch. Ask again rather than perform it.
-  return Math.abs(target - from) < MIN_STROLL ? null : target;
+  /*
+    Which way, and how far.
+
+    A uniform pick anywhere in the gutter was mostly *short* walks: over a strip
+    a couple of hundred pixels wide, most points are near most other points, and
+    the minimum-stroll guard turned the rest into no walk at all. So he mostly
+    stood still and occasionally took a step, which is the tiptoe.
+
+    Two changes. The side is chosen in proportion to the room on it, so he sets
+    off across the space rather than into the wall he is already beside; and the
+    distance is weighted toward the far end of whatever room that side has, so a
+    walk is a walk. `Math.sqrt` of a uniform value is the weighting — it leans
+    high without ever exceeding the space available.
+  */
+  const room = { left: from - GUTTER_INSET, right: high - from };
+  const total = room.left + room.right;
+  if (total <= 0) return null;
+
+  const preferRight = Math.random() < room.right / total;
+  const first = preferRight ? 'right' : 'left';
+  const side = room[first] >= MIN_STROLL ? first : (first === 'right' ? 'left' : 'right');
+  const available = room[side];
+  // Both sides too tight: he is in a gutter with nowhere to go, and a stroll of
+  // two pixels is a twitch. Stand still rather than perform it.
+  if (available < MIN_STROLL) return null;
+
+  const distance = MIN_STROLL + (available - MIN_STROLL) * Math.sqrt(Math.random());
+  return side === 'right' ? from + distance : from - distance;
 }
 
 export function ChatPet({ sessionId }: ChatPetProps) {
@@ -613,6 +659,58 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     };
   }, [here, geometry, reduced, activity, hovered, fullWidth, walkTo, stage.walks]);
 
+  /*
+    Footsteps, for as long as his legs are going.
+
+    On a clock rather than on the animation, because the sprite's run cycle is a
+    fixed frame rate and there is no event to hang a step on. Read through the
+    preference *inside* the interval so switching the sound off silences a walk
+    already in progress — checking once when the walk started would leave him
+    stomping until he arrived.
+  */
+  const walking = Boolean(here && here.target !== null && !here.carried && here.y >= 0);
+  useEffect(() => {
+    if (!walking || reduced) return undefined;
+
+    const timer = window.setInterval(() => {
+      if (collisionSoundEnabled()) playFootstep();
+    }, FOOTSTEP_MS);
+
+    return () => window.clearInterval(timer);
+  }, [walking, reduced]);
+
+  /*
+    A glance, now and then, while nothing is happening.
+
+    The gap between wanders is long — he is company, not a screensaver — and for
+    most of it he stands perfectly still, which is what makes a pet read as a
+    sprite that has stopped rather than as someone waiting. This costs no
+    position and interrupts nothing: it sets the same gesture a greeting does,
+    for about a second.
+
+    Only from the states his sheet actually has. A pet drawn without a
+    look-aside is not one to fake it for — the sprite would hold whatever frame
+    it fell back to, which is worse than standing still on purpose.
+  */
+  useEffect(() => {
+    if (!here || !pet || reduced || here.carried) return undefined;
+    if (activity !== 'idle' || hovered) return undefined;
+    // Busy, in the air, or already mid-gesture. Each of them ends with him
+    // standing still and this effect running again.
+    if (here.target !== null || here.y < 0 || here.gesture !== null) return undefined;
+
+    const options = (['look-left-side', 'look-right-side'] as const)
+      .filter((name) => pet.definition.states[name]);
+    if (options.length === 0) return undefined;
+
+    const timer = window.setTimeout(
+      () => gesture(options[Math.floor(Math.random() * options.length)], GLANCE_MS),
+      randomBetween(GLANCE_MIN_MS, GLANCE_MAX_MS),
+    );
+
+    return () => window.clearTimeout(timer);
+  }, [here, pet, reduced, activity, hovered, gesture]);
+
   /**
    * Carrying him.
    *
@@ -912,10 +1010,26 @@ export function ChatPet({ sessionId }: ChatPetProps) {
     is what keeps a chat's pet on the desktop after you navigate away, and the
     handoff is what stops this conversation drawing him — clearing one without
     the other leaves him either invisible or straight back outside.
+
+    A third thing, which this comment claimed and the code did not do. The
+    entrance runs once per arrival and this is the same arrival, so it was
+    skipped and he did not walk back in at all — he reappeared at whatever
+    position the motion still held from before he was carried out. That is the
+    reported bug in both its forms: standing half under the floor when the
+    conversation had been resized since, and hanging in mid-air when he had been
+    picked up rather than put down, with nothing to correct it because gravity
+    only runs on a motion that believes it is airborne.
+
+    Clearing the entrance marker makes the walk-in real. The recent-drop branch
+    is cleared with it: a hand that opened somewhere else, seconds ago, is not
+    where a docked pet should land, and honouring it would put him back at the
+    same invalid position by a second route.
   */
   useEffect(() => {
     onDesktopPetDock((petId) => {
       releaseDesktopClaim(petId);
+      enteredRef.current = null;
+      dropRef.current = null;
       setHandedOffArrival(null);
     });
   }, []);

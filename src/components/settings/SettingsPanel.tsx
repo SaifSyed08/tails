@@ -985,16 +985,21 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
                   className="mt-0.5 size-4 accent-primary"
                 />
                 <span>
-                  <span className="block text-sm">Sound when a pet hits a wall</span>
+                  <span className="block text-sm">Pet sounds</span>
                   {/*
                     Off by default, and the copy says why rather than leaving it
-                    to be discovered: this one fires on bounces the user did not
-                    aim, which is the kind of noise people switch off once and
-                    never switch back on.
+                    to be discovered: these fire on bounces and steps the user
+                    did not aim, which is the kind of noise people switch off
+                    once and never switch back on.
+
+                    One row for both, because it is one decision — should the
+                    pet be audible — and a toggle per sound is a settings screen
+                    that grows a line every time somebody adds a noise.
                   */}
                   <span className="block text-xs text-muted-foreground">
-                    A soft thud when a thrown pet reaches the edge of the chat, louder for a
-                    harder throw. Off by default, because it happens without being asked for.
+                    A thud when a thrown pet meets a wall, the floor or the ceiling, louder the
+                    harder it lands, and a quiet footstep while he walks. Off by default,
+                    because it happens without being asked for.
                   </span>
                 </span>
               </label>

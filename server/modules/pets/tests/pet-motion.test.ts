@@ -204,3 +204,51 @@ test('a throw cancels a walk', () => {
   const interrupted: Motion = { ...STANDING, x: 100, target: 300, vx: -500 };
   assert.equal(advanceMotion(interrupted, 1 / 60, ROOM).target, null);
 });
+
+/*
+  Contact.
+
+  `bumped` is the speed of an impact, reported for exactly one frame so a sound
+  can be played from it. It used to be cleared inside the throw branch, so only
+  the side walls could report one — the floor and the ceiling are reached by
+  falling, and falling is not throwing. That is why a thrown pet thudded against
+  the sidebar and landed in silence.
+*/
+
+test('landing reports the speed it landed at', () => {
+  const falling: Motion = { ...STANDING, x: 200, y: -300, vy: 900 };
+  const { motion } = until(falling, (next) => next.y === 0, 60, ROOM);
+
+  assert.ok(motion.bumped !== undefined && motion.bumped > 0, 'the floor is a surface too');
+});
+
+test('a harder landing reports a bigger number', () => {
+  // The whole point of carrying the speed rather than a boolean: every impact
+  // sounding identical reads as a bug within about three bounces.
+  const gentle = until({ ...STANDING, x: 200, y: -40, vy: 0 }, (n) => n.y === 0, 60, ROOM);
+  const hard = until({ ...STANDING, x: 200, y: -300, vy: 1200 }, (n) => n.y === 0, 60, ROOM);
+
+  assert.ok((hard.motion.bumped ?? 0) > (gentle.motion.bumped ?? 0));
+});
+
+test('hitting the ceiling reports it', () => {
+  const upwards: Motion = { ...STANDING, x: 200, y: -190, vx: 0, vy: -2000 };
+  const { motion } = until(upwards, (next) => next.y <= ROOM.ceiling, 60, ROOM);
+
+  assert.ok(motion.bumped !== undefined && motion.bumped > 0);
+});
+
+test('contact lasts one frame, not for as long as he rests there', () => {
+  // A pet sitting on the floor reporting contact on frame after frame is a
+  // drum roll rather than a thud.
+  const landed = until({ ...STANDING, x: 200, y: -200, vy: 600 }, (n) => n.y === 0, 60, ROOM);
+  assert.ok((landed.motion.bumped ?? 0) > 0, 'the landing itself');
+
+  const resting = advanceMotion(landed.motion, 1 / 60, ROOM);
+  assert.equal(resting.bumped, 0, 'and nothing after it');
+});
+
+test('a walk is not an impact', () => {
+  const strolling: Motion = { ...STANDING, x: 100, target: 300 };
+  assert.equal(advanceMotion(strolling, 1 / 60, ROOM).bumped, 0);
+});

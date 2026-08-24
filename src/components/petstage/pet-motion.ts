@@ -125,9 +125,32 @@ export function advanceMotion(
   const airborne = motion.y < 0 || motion.vy !== 0;
   const thrown = motion.vx !== 0;
   const growing = motion.grow < 1;
-  if (!airborne && !thrown && !growing && motion.target === null) return motion;
+  if (!airborne && !thrown && !growing && motion.target === null) {
+    /*
+      Settled, and returned by reference: the caller holds this in React state,
+      and a new object every frame is a render every frame.
+
+      With one exception, which is the frame after an impact. `bumped` is a
+      per-frame report, and a pet who lands and then stops moving takes this
+      path immediately — so returning him unchanged would leave the last thud's
+      speed on him for as long as he stands there. One allocation, once, on the
+      single frame where there is something to clear.
+    */
+    return motion.bumped ? { ...motion, bumped: 0 } : motion;
+  }
 
   const next = { ...motion };
+
+  /*
+    Contact, cleared first and set by whichever surface he reaches.
+
+    `bumped` records the speed of contact for whatever wants to react to it, and
+    it is per-frame: cleared on every path, or the consumer reads one bounce as
+    a continuous stream of them. It used to be cleared inside the throw branch,
+    which is why only the side walls could report a hit — the floor and the
+    ceiling are reached by falling, and falling is not throwing.
+  */
+  next.bumped = 0;
 
   if (growing) next.grow = Math.min(1, motion.grow + (elapsed * 1000) / GROW_MS);
 
@@ -136,12 +159,16 @@ export function advanceMotion(
     next.y = motion.y + next.vy * elapsed;
 
     if (next.y >= 0) {
+      // The floor. The speed he arrives at is the impact — read before it is
+      // zeroed, because afterwards every landing looks identically gentle.
+      next.bumped = Math.abs(next.vy);
       next.y = 0;
       next.vy = 0;
       next.squash = true;
     } else if (next.y <= bounds.ceiling) {
       // The top of the room. Thrown hard enough to reach it he comes back down
       // rather than sailing out through the header.
+      next.bumped = Math.abs(next.vy);
       next.y = bounds.ceiling;
       next.vy = Math.abs(next.vy) * BOUNCE;
     }
@@ -151,10 +178,6 @@ export function advanceMotion(
     next.x = motion.x + motion.vx * elapsed;
 
     // The walls. He is in a room, so a throw ends against one of them.
-    // `bumped` records the speed of contact for whatever wants to react to it;
-    // it is per-frame, so it has to be cleared on every other path or the
-    // consumer sees one bounce as a continuous stream of them.
-    next.bumped = 0;
     if (next.x <= 0) {
       next.x = 0;
       next.bumped = Math.abs(motion.vx);
