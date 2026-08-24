@@ -10,6 +10,7 @@ import {
   destroyPetWindow,
   clearPetAlert,
   isPetHidden,
+  setPetVoiceState,
   notifyPetOfCompletion,
   placePetFromWindow,
   refreshPetWindow,
@@ -563,6 +564,21 @@ function startPetWindow() {
       mainWindow.webContents.send('tails:pet-dock', petId);
     },
 
+    /*
+      The pill's microphone was pressed.
+
+      Not raised first, unlike the two above. Their result is something to
+      *look* at — a panel, a pet walking back into a chat — and one behind a
+      window you cannot see reads as nothing happening. This one's result is
+      the app listening, which is a thing you hear, and stealing focus from
+      whatever the user was reading in order to deliver it would defeat the
+      point of a pet who lives outside the window in the first place.
+    */
+    onToggleVoice: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send('tails:pet-voice-toggle');
+    },
+
     onOpenPetDetails: (petId) => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -630,6 +646,14 @@ function installPetBridge() {
   // other renderer channels rather than beside the permission handlers,
   // because it is a message from the page, not a policy.
   ipcMain.on('tails:voice-intent', (_event, wanted) => { voiceIntent = wanted === true; });
+
+  /*
+    The app reporting whether it is listening, on its way to the pet's own
+    button. Distinct from `tails:voice-intent` above, which is the permission
+    gate and answers a different question — that one is "does the user want the
+    microphone", this one is "is it open right now".
+  */
+  ipcMain.on('tails:voice-state', (_event, listening) => setPetVoiceState(listening === true));
 
   ipcMain.on('tails:desktop-pet', (event, payload) => {
     const action = payload?.action;

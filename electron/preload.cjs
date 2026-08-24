@@ -115,6 +115,19 @@ contextBridge.exposeInMainWorld('tailsDesktop', {
   },
 
   /**
+   * The desktop pet's microphone was pressed. Toggle voice mode.
+   *
+   * A toggle rather than an on/off, because the little window cannot know what
+   * the app is doing — see the note on the button it comes from.
+   */
+  onPetVoiceToggle: (handler) => {
+    ipcRenderer.on('tails:pet-voice-toggle', () => handler());
+  },
+
+  /** Tell the desktop pet whether the app is listening, so his button can say so. */
+  reportVoiceState: (listening) => ipcRenderer.send('tails:voice-state', listening === true),
+
+  /**
    * The pill's arrow was pressed: put this pet back in the chat.
    *
    * The shell only carries the press; where a pet lives is the app's own state,

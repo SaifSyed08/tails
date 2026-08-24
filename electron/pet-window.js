@@ -94,6 +94,7 @@ let writeState = () => {};
 let onOpenPetDetails = () => {};
 let onOpenSession = () => {};
 let onDockPet = () => {};
+let onToggleVoice = () => {};
 
 /**
  * Whether the app is showing a conversation this pet lives in.
@@ -1067,6 +1068,12 @@ function installIpc() {
   ipcMain.on('pet:hide', () => hideFromPill());
 
   /*
+    The pill's microphone. Carried straight through: whether the app is
+    listening, and what listening even means, is entirely the renderer's.
+  */
+  ipcMain.on('pet:voice-toggle', () => onToggleVoice());
+
+  /*
    * The pill's arrow: hand the pet back to the chat.
    *
    * The shell does not decide what that means — the app owns where a pet lives —
@@ -1123,6 +1130,7 @@ export function createPetWindow(options) {
   onOpenPetDetails = options.onOpenPetDetails ?? (() => {});
   onOpenSession = options.onOpenSession ?? (() => {});
   onDockPet = options.onDockPet ?? (() => {});
+  onToggleVoice = options.onToggleVoice ?? (() => {});
 
   // On by default while the drift is unexplained. It is a bounded, buffered
   // append to userData; the cost is far smaller than another round of guessing
@@ -1434,6 +1442,16 @@ export function isPetHidden() {
 }
 
 /** Asks the page to re-read the active pet now, rather than at its next poll. */
+/**
+ * Tells the pet whether the app is listening.
+ *
+ * Silent when there is no window: the pet being closed is the ordinary case,
+ * not a failure, and the state is pushed again when he next appears.
+ */
+export function setPetVoiceState(listening) {
+  if (isAlive()) petWindow.webContents.send('pet:voice-state', listening === true);
+}
+
 export function refreshPetWindow() {
   if (isAlive()) petWindow.webContents.send('pet:refresh');
 }

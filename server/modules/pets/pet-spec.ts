@@ -249,6 +249,18 @@ export const petVoiceSchema = z.object({
     .describe('Platform voice name, e.g. a SpeechSynthesis voice.'),
   pitch: z.number().min(0).max(2).default(1),
   rate: z.number().min(0.1).max(3).default(1),
+  /*
+    A cloud voice, when the pet has been given one.
+
+    Beside `name` rather than a third `engine` value, for the reason the field
+    it mirrors on the app default gives: a pet whose cloud voice cannot be
+    reached — no key, no quota — should fall back to the platform voice it was
+    authored with, and an engine enum would have thrown that away. `engine:
+    'none'` still outranks it, because silence is a choice rather than an empty
+    field.
+  */
+  elevenVoiceId: z.string().max(80).optional()
+    .describe('An ElevenLabs voice id. Used only when the user has a key; falls back to `name` otherwise.'),
 }).strict();
 
 export type PetVoice = z.infer<typeof petVoiceSchema>;

@@ -19,6 +19,7 @@ import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/utils';
 import { ToolRow } from '@/components/chat/ToolRow';
 import { useChatSession } from '@/components/chat/useChatSession';
+import { onDesktopPetVoiceToggle, reportVoiceState } from '@/components/petstage/desktop-handoff';
 import { useArmedWakeWords } from '@/components/voice/useArmedWakeWords';
 import { chimeArmed, chimeOff, chimeWake } from '@/components/voice/voice-chime';
 import { useSpeech } from '@/components/voice/useSpeech';
@@ -407,6 +408,25 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     The microphone opens for an answer only once the question has finished being
     asked. Capturing while the app is still talking would record the app.
   */
+  /*
+    The desktop pet's microphone.
+
+    Registered once and reads the live intent through a ref, because the handler
+    is installed on the shell bridge for the lifetime of this component and the
+    intent changes underneath it. Starting voice mode rather than dictation on
+    purpose: a pet on the desktop is nowhere near the composer, so filling a box
+    the user cannot see would be a press that appeared to do nothing.
+  */
+  const voiceRef = useRef(voice);
+  useEffect(() => { voiceRef.current = voice; }, [voice]);
+  useEffect(() => {
+    onDesktopPetVoiceToggle(() => {
+      const live = voiceRef.current;
+      if (live.intent === 'voice') live.disable();
+      else live.start('voice');
+    });
+  }, []);
+
   const awaitingAnswer = approval.asking?.awaiting ?? false;
   const startCapture = voice.capture;
   useEffect(() => {
@@ -425,6 +445,9 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
     if (on === voiceOnRef.current) return;
     voiceOnRef.current = on;
     setVoiceArmed(on);
+    // The desktop pet's microphone shows this, and it has to be pushed for the
+    // same reason the chimes are driven from here: voice mode can end by itself.
+    reportVoiceState(on);
     if (on) chimeArmed();
     else {
       chimeOff();

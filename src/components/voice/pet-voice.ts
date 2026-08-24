@@ -23,6 +23,8 @@ export type PetVoice = {
   name?: string;
   pitch: number;
   rate: number;
+  /** A cloud voice, when the pet has one. See `petVoiceSchema` for why it sits here. */
+  elevenVoiceId?: string;
 };
 
 /**
@@ -116,5 +118,9 @@ export function resolvePetVoice(
     // passing the authored values on unmodified keeps one place responsible.
     rate: voice.rate,
     pitch: voice.pitch,
+    // Carried alongside, never instead of: the platform voice above is what
+    // speaks if the cloud one cannot be reached, and a pet that loses its key
+    // should sound like itself rather than fall silent.
+    ...(voice.elevenVoiceId ? { elevenVoiceId: voice.elevenVoiceId } : {}),
   };
 }

@@ -30,8 +30,22 @@ contextBridge.exposeInMainWorld('petBridge', {
   /** The pill's settings button: open this pet's panel in the app. */
   openDetails: (petId) => ipcRenderer.send('pet:details', { petId }),
 
-  /** The pill's X: put the pet away. Persisted, like the app's own hide. */
+  /** Put the pet away. Now reached through his details rather than the pill. */
   hidePet: () => ipcRenderer.send('pet:hide'),
+
+  /**
+   * The pill's microphone: turn voice mode on or off in the app.
+   *
+   * Sent as a toggle rather than a state, because this window does not know
+   * whether the app is listening — only that the button was pressed. The app
+   * decides and reports back through `onVoiceState`.
+   */
+  toggleVoice: () => ipcRenderer.send('pet:voice-toggle'),
+
+  /** The app says whether it is listening. See the note on the button. */
+  onVoiceState: (handler) => {
+    ipcRenderer.on('pet:voice-state', (_event, listening) => handler(listening === true));
+  },
 
   /**
    * The pill's arrow: go back into the chat.

@@ -319,6 +319,15 @@ export function renderDesktopWindowHtml(options: DesktopWindowOptions = {}): str
 
   #pill.open button { opacity: 1; pointer-events: auto; }
   #pill button:hover { background: rgba(255, 255, 255, 0.16); }
+  /*
+    Listening is amber, the same hue the chat stage uses when the wake word
+    fires, so the two read as one signal rather than two features. Colour and a
+    steady fill rather than a pulse: an indicator that exists only as motion is
+    invisible to anyone who has motion turned off, and "is my microphone on" is
+    the one question in this app that must never be a guess.
+  */
+  #pill button.listening { background: rgba(245, 158, 11, 0.85); color: #1a1206; }
+  #pill button.listening:hover { background: rgba(245, 158, 11, 1); }
   #pill button svg { display: block; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -341,7 +350,7 @@ export function renderDesktopWindowHtml(options: DesktopWindowOptions = {}): str
 </style>
 </head>
 <body>
-<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="bubble"><button id="bubble-open" type="button"></button><span id="bubble-more" hidden></span><button id="bubble-close" type="button" aria-label="Dismiss">×</button></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-dock" type="button" aria-label="Send back into the chat" title="Send back into the chat" hidden><svg id="pill-dock-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button><button id="pill-hide" type="button" aria-label="Hide pet" title="Hide pet"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div></div>
+<div id="stage"><div id="pet" role="img" aria-label="Desktop pet"></div><div id="handle"></div><div id="bubble"><button id="bubble-open" type="button"></button><span id="bubble-more" hidden></span><button id="bubble-close" type="button" aria-label="Dismiss">×</button></div><div id="pill"><button id="pill-settings" type="button" aria-label="Pet details" title="Pet details"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg></button><button id="pill-dock" type="button" aria-label="Send back into the chat" title="Send back into the chat" hidden><svg id="pill-dock-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button><button id="pill-voice" type="button" aria-label="Start voice mode" title="Start voice mode" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v4"></path></svg></button></div></div>
 <script type="module" nonce="${nonce}">
 const POLL_MS = ${POLL_MS};
 const PET_HEIGHT = ${PET_HEIGHT};
@@ -357,7 +366,7 @@ const RESTING_RATES = ${JSON.stringify(RESTING_RATES)};
 
 const bridge = window.petBridge ?? {
   reportVisibility() {}, reportSize() {}, reportPointerOverPet() {},
-  openDetails() {}, hidePet() {}, dockPet() {},
+  openDetails() {}, hidePet() {}, dockPet() {}, toggleVoice() {}, onVoiceState() {},
   onFacing() {}, onRefresh() {}, onCarry() {}, onResync() {}, onProbe() {},
   onAlert() {}, openAlert() {}, dismissAlert() {}, onDock() {},
 };
@@ -396,7 +405,7 @@ const bubbleClose = document.getElementById('bubble-close');
 const pillSettings = document.getElementById('pill-settings');
 const pillDock = document.getElementById('pill-dock');
 const pillDockArrow = document.getElementById('pill-dock-arrow');
-const pillHide = document.getElementById('pill-hide');
+const pillVoice = document.getElementById('pill-voice');
 
 /**
  * The pill's sizes, in CSS pixels.
@@ -1064,10 +1073,37 @@ pillSettings.addEventListener('click', (event) => {
   if (current) bridge.openDetails(current.definition.id);
 });
 
-pillHide.addEventListener('click', (event) => {
+/*
+  The microphone, where the X used to be.
+
+  Deliberately the swap rather than a fourth button. This pet is *out of the
+  window* — on the desktop, over whatever else is open — and the thing someone
+  reaches for at that moment is almost never "put him away"; it is "let me just
+  say something". Hiding him is still there, one press further in, under the
+  details he is already the door to.
+
+  It toggles voice mode in the app, which is where the microphone, the wake word
+  and the conversation all live. Nothing about listening happens in this window.
+*/
+pillVoice.addEventListener('click', (event) => {
   event.preventDefault();
   event.stopPropagation();
-  bridge.hidePet();
+  bridge.toggleVoice();
+});
+
+/**
+ * Reflecting whether the app is listening.
+ *
+ * Pushed from the app rather than assumed from the press, because voice mode
+ * can also end by itself — a failed microphone, a chat closing — and a button
+ * that latched on its own click would then be lying about an open microphone.
+ * That is the one thing this app has decided a control must never do.
+ */
+bridge.onVoiceState((listening) => {
+  pillVoice.setAttribute('aria-pressed', listening ? 'true' : 'false');
+  pillVoice.setAttribute('aria-label', listening ? 'Stop voice mode' : 'Start voice mode');
+  pillVoice.setAttribute('title', listening ? 'Listening — press to stop' : 'Start voice mode');
+  pillVoice.classList.toggle('listening', listening);
 });
 
 bridge.onFacing((next) => {

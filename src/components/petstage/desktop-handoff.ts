@@ -18,6 +18,8 @@ type PlacingBridge = {
 type TailsDesktop = {
   desktopPet?: PlacingBridge;
   onOpenPetDetails?: (handler: (petId: string) => void) => void;
+  onPetVoiceToggle?: (handler: () => void) => void;
+  reportVoiceState?: (listening: boolean) => void;
 };
 
 const desktop = () => (window as unknown as { tailsDesktop?: TailsDesktop }).tailsDesktop;
@@ -51,4 +53,30 @@ export function placeDesktopPetAt(clientX: number, clientY: number, holding = fa
  */
 export function onDesktopPetDetails(handler: (petId: string) => void): void {
   desktop()?.onOpenPetDetails?.(handler);
+}
+
+/**
+ * The desktop pet's microphone was pressed.
+ *
+ * Where the X used to be, and the swap is the point: a pet out on the desktop
+ * is being looked at in the moment somebody wants to *say* something, not in
+ * the moment they want to put him away.
+ *
+ * The little window sends a toggle, because it cannot know whether the app is
+ * listening. This side decides.
+ */
+export function onDesktopPetVoiceToggle(handler: () => void): void {
+  desktop()?.onPetVoiceToggle?.(handler);
+}
+
+/**
+ * Tells the desktop pet whether the app is listening.
+ *
+ * Pushed rather than inferred from the press, because voice mode can also end
+ * on its own — a refused microphone, a chat closing — and a button that latched
+ * on its own click would then be claiming an open microphone that is shut. That
+ * is the one lie this app's voice controls are arranged to never tell.
+ */
+export function reportVoiceState(listening: boolean): void {
+  desktop()?.reportVoiceState?.(listening);
 }
