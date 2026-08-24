@@ -26,6 +26,7 @@ import {
 } from 'react';
 
 import { ModelPicker } from '@/components/chat/ModelPicker';
+import { NEW_CHAT_DRAFT, readDraft, useDraft } from '@/components/chat/draft-store';
 import { useComposerHeight } from '@/components/chat/useComposerHeight';
 import { atDraft, newer, older, rememberInput } from '@/components/chat/input-history';
 import {
@@ -497,26 +498,29 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     into one and appeared in whichever chat you opened next. That reads as the
     app leaking other conversations into this one.
 
-    Keying the state by conversation removes the bug rather than patching it:
-    there is no switch to handle, because the draft on screen is *defined* as
-    this conversation's draft. Clearing on change would also have fixed the
-    leak, by throwing away work; this keeps what you left behind.
+    Keying by conversation removes the bug rather than patching it: there is no
+    switch to handle, because the draft on screen is *defined* as this
+    conversation's draft. Clearing on change would also have fixed the leak, by
+    throwing away work; this keeps what you left behind.
+
+    It is not held here, though. The composer is unmounted by anything that
+    replaces the chat — the marketplace, settings — and state that lives here
+    goes with it, which lost the draft on a trip the user reasonably thought was
+    a detour. See `draft-store.ts`.
   */
   /** One line per row, and the thing the arrow keys check for. */
   const NEWLINE = String.fromCharCode(10);
 
-  const draftKey = sessionId ?? '__unsaved';
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const draft = drafts[draftKey] ?? '';
+  const draftKey = sessionId ?? NEW_CHAT_DRAFT;
+  const [draft, writeDraft] = useDraft(draftKey);
 
   const setDraft = useCallback((next: string | ((current: string) => string)) => {
-    setDrafts((all) => {
-      const current = all[draftKey] ?? '';
-      const value = typeof next === 'function' ? next(current) : next;
-      draftRef.current = value;
-      return { ...all, [draftKey]: value };
-    });
-  }, [draftKey]);
+    const value = typeof next === 'function' ? next(readDraft(draftKey)) : next;
+    // Written before the store announces, so `submit` can append a transcript
+    // and send it in the same tick without waiting for a render.
+    draftRef.current = value;
+    writeDraft(value);
+  }, [draftKey, writeDraft]);
 
   /*
     The ref follows the conversation too.
@@ -526,7 +530,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     chat's text for as long as nobody typed, which is the same leak by a
     narrower route — and the one that would actually *send* the wrong thing.
   */
-  useEffect(() => { draftRef.current = drafts[draftKey] ?? ''; }, [draftKey, drafts]);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
 
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [paletteIndex, setPaletteIndex] = useState(0);
