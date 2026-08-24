@@ -6,8 +6,18 @@
  * per tool the way these views usually do.
  */
 export type ToolDisplay = {
-  /** Human label shown on the row. */
+  /** Human label shown on the row once the call has finished. */
   label: string;
+  /**
+   * What to call it while it is still running.
+   *
+   * A separate word rather than a suffix on `label`, because English will not
+   * cooperate: "Terminal…" is not what running a command is called, and
+   * "Read…" beside a filename reads as a finished read of something long. A
+   * row that says "Read" while it is still reading is a row claiming to be
+   * done, which is exactly what it was reported as.
+   */
+  active?: string;
   /** Pulls the one-line summary out of the tool's input. */
   summarize?: (input: Record<string, unknown>) => string | undefined;
   /** How the result body should be rendered when expanded. */
@@ -30,60 +40,70 @@ const shortenPath = (value: unknown): string | undefined => {
 export const TOOL_DISPLAYS: Record<string, ToolDisplay> = {
   Bash: {
     label: 'Terminal',
+    active: 'Running',
     summarize: (input) => readString(input.command),
     resultFormat: 'code',
     collapsed: true,
   },
   Read: {
     label: 'Read',
+    active: 'Reading',
     summarize: (input) => shortenPath(input.file_path),
     resultFormat: 'code',
     collapsed: true,
   },
   Write: {
     label: 'Write',
+    active: 'Writing',
     summarize: (input) => shortenPath(input.file_path),
     resultFormat: 'text',
     collapsed: true,
   },
   Edit: {
     label: 'Edit',
+    active: 'Editing',
     summarize: (input) => shortenPath(input.file_path),
     resultFormat: 'diff',
     collapsed: true,
   },
   Glob: {
     label: 'Find files',
+    active: 'Looking for files',
     summarize: (input) => readString(input.pattern),
     resultFormat: 'text',
     collapsed: true,
   },
   Grep: {
     label: 'Search',
+    active: 'Searching',
     summarize: (input) => readString(input.pattern),
     resultFormat: 'text',
     collapsed: true,
   },
   WebFetch: {
     label: 'Fetch',
+    active: 'Fetching',
     summarize: (input) => readString(input.url),
     resultFormat: 'text',
     collapsed: true,
   },
   WebSearch: {
     label: 'Web search',
+    active: 'Searching the web',
     summarize: (input) => readString(input.query),
     resultFormat: 'text',
     collapsed: true,
   },
   TodoWrite: {
     label: 'Plan',
+    active: 'Planning',
     summarize: () => 'Updated the task list',
     resultFormat: 'text',
     collapsed: true,
   },
   Task: {
     label: 'Subagent',
+    active: 'Working',
     summarize: (input) => readString(input.description),
     resultFormat: 'text',
     collapsed: true,

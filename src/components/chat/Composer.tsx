@@ -2,6 +2,7 @@ import {
   ArrowUp,
   AudioLines,
   ImagePlus,
+  ListPlus,
   Loader2,
   MessageCircleQuestion,
   Mic,
@@ -404,6 +405,14 @@ type ComposerProps = {
   ) => void;
   onAbort: () => void;
   /**
+   * Holds a message written while a turn is running.
+   *
+   * Separate from `onSend` rather than decided inside it, because the two are
+   * different promises to the user and the button says which one is on offer
+   * before it is pressed.
+   */
+  onQueue: (content: string, attachments: AttachmentPayload[], spoken: boolean) => void;
+  /**
    * The agent's guess at the user's next message, if it offered one.
    *
    * Shown as ghost text and accepted with Tab. It is a suggestion, never
@@ -461,7 +470,7 @@ export type ComposerHandle = {
 };
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer({
-  sessionId, busy, mode, onModeChange, onSend, onAbort, suggestion, onSuggestionDismiss,
+  sessionId, busy, mode, onModeChange, onSend, onAbort, onQueue, suggestion, onSuggestionDismiss,
   onAssignPet, petName, models, fallbackModel, turnSettings, onTurnSettingsChange, voice,
 }, ref) {
   const reduced = useReducedMotion();
@@ -632,15 +641,27 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
    */
   const submit = (spoken = false) => {
     const content = draftRef.current.trim();
-    if ((!content && attachments.length === 0) || busy) return;
+    if (!content && attachments.length === 0) return;
 
     // Recorded before it is cleared, so Up can bring it back.
     if (content) rememberInput(content);
     setWalk(atDraft(''));
 
+    const message = content || 'Have a look at this.';
+    const carried = attachments;
     setDraft('');
     setAttachments([]);
-    onSend(content || 'Have a look at this.', attachments, { spoken });
+
+    /*
+      Queued rather than refused while a turn runs.
+
+      Pressing enter mid-turn used to do nothing at all, which reads as a
+      dropped keystroke — you had written the thing and watched it not happen.
+      The box still empties either way, because the message has been accepted;
+      what changes is when it is sent.
+    */
+    if (busy) onQueue(message, carried, spoken);
+    else onSend(message, carried, { spoken });
   };
 
   useEffect(() => { submitRef.current = submit; });
@@ -1062,7 +1083,28 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           )}
         </button>
 
-        {busy ? (
+        {/*
+          Three states, not two, and the third is why this is not a ternary on
+          `busy` alone.
+
+          While a turn runs an empty box means "stop that", and a box with
+          something in it means "hold this for after" — the same press, two
+          entirely different intentions, and the only thing that separates them
+          is whether the user has written anything. A single stop button there
+          made writing the next message and pressing enter *cancel the work you
+          were waiting on*, which is the opposite of what was meant.
+        */}
+        {busy && (draft.trim() || attachments.length > 0) ? (
+          <button
+            type="button"
+            onClick={() => submit()}
+            aria-label="Queue this message for when the turn ends"
+            title="Send when this turn ends"
+            className="rounded-full bg-primary/80 p-2 text-primary-foreground transition-transform duration-instant ease-emphasis active:scale-95"
+          >
+            <ListPlus className="size-4" />
+          </button>
+        ) : busy ? (
           <button
             type="button"
             onClick={onAbort}

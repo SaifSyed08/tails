@@ -81,6 +81,10 @@ export default {
       keyframes: {
         // Opacity and transform only, so an animating list never triggers
         // layout.
+        'working-dot': {
+          '0%, 70%, 100%': { opacity: '0.25' },
+          '35%': { opacity: '1' },
+        },
         'rise-in': {
           from: { opacity: '0', transform: 'translateY(8px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
@@ -144,6 +148,15 @@ export default {
         'grow-x': 'grow-x var(--duration-reflow) var(--ease-enter) both',
         'attention-pulse': 'attention-pulse 520ms var(--ease-emphasis) 2',
         shimmer: 'shimmer 2s linear infinite',
+        /*
+          The dots beside a running tool call.
+
+          Three elements sharing one keyframe, offset by their delay, so the
+          wave costs no JavaScript and no re-render — see `WorkingDots`. Slow
+          enough to read as breathing rather than as blinking, which is the
+          difference between "working" and "something is wrong".
+        */
+        'working-dot': 'working-dot 1.35s var(--ease-standard) infinite',
         // Long enough that the wave crosses the word and then rests before it
         // starts again, which is what makes it read as a loop rather than as
         // continuous jitter.

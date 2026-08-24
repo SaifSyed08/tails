@@ -38,6 +38,21 @@ type ThinkingIndicatorProps = {
    * "work is happening" rather than as an idle animation.
    */
   petPhrases?: readonly string[];
+  /**
+   * Whether the reply is currently arriving on screen.
+   *
+   * The indicator used to be unmounted entirely while tokens streamed, on the
+   * reasoning that the streaming row has its own caret and two things saying
+   * "working" is one too many. That reasoning holds for the *word* and not for
+   * the rest: a turn is a text block, then tools, then more text, and hiding
+   * the whole indicator through the first block meant the one durable "this is
+   * still running, and for how long" disappeared and came back repeatedly
+   * through a single turn.
+   *
+   * So it stays for the whole turn, and goes quiet while the caret is talking:
+   * no rotating word, no pulse, just the elapsed time.
+   */
+  streaming?: boolean;
 };
 
 /**
@@ -47,7 +62,7 @@ type ThinkingIndicatorProps = {
  * thing during a long tool run is knowing how long it has actually been —
  * that is the difference between patience and reaching for the stop button.
  */
-export function ThinkingIndicator({ detail, petPhrases }: ThinkingIndicatorProps) {
+export function ThinkingIndicator({ detail, petPhrases, streaming = false }: ThinkingIndicatorProps) {
   const reduced = useReducedMotion();
   /**
    * The two words on screen, and which of them is showing.
@@ -77,7 +92,10 @@ export function ThinkingIndicator({ detail, petPhrases }: ThinkingIndicatorProps
   }, []);
 
   useEffect(() => {
-    if (reduced) return undefined;
+    // Not while the caret is talking: the words are not on screen then, and
+    // rotating them anyway is a re-render of the transcript every few seconds
+    // to change something nobody can see.
+    if (reduced || streaming) return undefined;
 
     const rotate = window.setInterval(() => {
       setActive((current) => {
@@ -98,9 +116,25 @@ export function ThinkingIndicator({ detail, petPhrases }: ThinkingIndicatorProps
     }, WORD_INTERVAL_MS);
 
     return () => window.clearInterval(rotate);
-  }, [reduced, rotation]);
+  }, [reduced, rotation, streaming]);
 
   const shimmerClass = !reduced && 'animate-shimmer bg-clip-text text-transparent';
+
+  /*
+    The quiet form, while the reply is being typed out.
+
+    The elapsed time only — which is the number worth having on screen for the
+    whole turn, because it is the difference between waiting and reaching for
+    the stop button, and it was previously only visible during the silences.
+  */
+  if (streaming) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-hidden="true">
+        <span className="size-1.5 rounded-full bg-primary/60" />
+        <span className="tabular-nums opacity-60">{seconds}s</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">

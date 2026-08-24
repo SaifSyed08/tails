@@ -13,6 +13,29 @@ type ToolRowProps = { row: Extract<ChatRow, { type: 'tool' }> };
  * Pure router over `toolConfigs` — every tool-specific decision lives in the
  * config, so this file does not grow when tools are added.
  */
+/**
+ * Three dots, cycling.
+ *
+ * CSS rather than state: a component re-rendering three times a second to
+ * animate punctuation is a re-render of every tool row on screen, and the
+ * animation is the same one every time. `animate-fade-in` alone would play
+ * once; the staggered opacity keyframes are in the Tailwind config beside the
+ * other motion tokens.
+ */
+function WorkingDots() {
+  return (
+    <span className="flex shrink-0 items-center gap-0.5" aria-hidden="true">
+      {[0, 1, 2].map((index) => (
+        <span
+          key={index}
+          className="size-1 rounded-full bg-muted-foreground animate-working-dot"
+          style={{ animationDelay: `${index * 180}ms` }}
+        />
+      ))}
+    </span>
+  );
+}
+
 export function ToolRow({ row }: ToolRowProps) {
   const display = readToolDisplay(row.toolName);
   const [expanded, setExpanded] = useState(!display.collapsed);
@@ -46,12 +69,30 @@ export function ToolRow({ row }: ToolRowProps) {
           aria-hidden="true"
         />
         <Wrench className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <span className="shrink-0 font-medium">{display.label}</span>
+        {/*
+          The present tense while it is running, the plain noun once it is done.
+          A row that says "Read" beside a filename for the eight seconds it
+          spends reading is a row claiming to have finished — which is what it
+          was reported as, and it is the difference between the app looking
+          stuck and the app looking busy.
+        */}
+        <span className="shrink-0 font-medium">
+          {status === 'running' ? display.active ?? display.label : display.label}
+        </span>
         {summary ? (
           <span className="truncate font-mono text-xs text-muted-foreground" title={summary}>
             {summary}
           </span>
         ) : null}
+        {/*
+          Three dots that come and go while the call is open.
+
+          The spinner on the right already says "running", and it is on the
+          right — at the end of a long row, far from the words. This sits where
+          the reading happens, and it is the thing that reads as *in progress*
+          rather than as a decoration.
+        */}
+        {status === 'running' ? <WorkingDots /> : null}
         <StatusIcon
           className={cn(
             'ml-auto size-3.5 shrink-0',

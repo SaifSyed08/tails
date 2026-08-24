@@ -120,6 +120,20 @@ export function buildChatRows(messages: NormalizedMessage[]): ChatRow[] {
   return rows;
 }
 
+/**
+ * A message written while the previous turn was still running.
+ *
+ * Kept whole rather than as text, because an attachment picked before the queue
+ * button was pressed belongs to the message that was written, not to whatever
+ * the composer happens to hold when the turn finally ends.
+ */
+export type QueuedMessage = {
+  id: string;
+  content: string;
+  attachments: AttachmentPayload[];
+  spoken: boolean;
+};
+
 type ChatSessionState = {
   rows: ChatRow[];
   busy: boolean;
@@ -128,6 +142,14 @@ type ChatSessionState = {
   pendingPermissions: PendingPermission[];
   /** Questions and plans awaiting an answer, rendered as their own cards. */
   pendingPrompts: PendingPrompt[];
+  /**
+   * Written, not yet sent, waiting for the running turn to end.
+   *
+   * A list rather than one, because someone typing while a long turn runs will
+   * write two or three — and dropping all but the last would silently throw
+   * away work they watched themselves submit.
+   */
+  queued: QueuedMessage[];
   error: string | null;
 };
 
@@ -141,7 +163,7 @@ export function useChatSession(sessionId: string | null) {
   const [realtime, setRealtime] = useState<NormalizedMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [state, setState] = useState<ChatSessionState>({
-    rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], error: null,
+    rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], queued: [], error: null,
   });
 
   /**
@@ -241,7 +263,7 @@ export function useChatSession(sessionId: string | null) {
     setHistory([]);
     setRealtime([]);
     resetStream();
-    setState({ rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], error: null });
+    setState({ rows: [], busy: false, pendingPermissions: [], pendingPrompts: [], queued: [], error: null });
     // A new conversation starts in the default mode until the server says
     // otherwise, which it does in the subscribe acknowledgement.
     modeAdoptedRef.current = false;
@@ -523,6 +545,56 @@ export function useChatSession(sessionId: string | null) {
     });
   }, [sessionId, send]);
 
+  /**
+   * Writes a message while a turn is still running.
+   *
+   * The alternative this replaces is the one everybody hits: you think of the
+   * next thing halfway through a long turn, type it, press enter, and either
+   * nothing happens or you have interrupted the work you were waiting for.
+   * Neither is what pressing enter meant.
+   *
+   * Held whole — text and attachments together — and drained one at a time as
+   * turns end, so two queued messages are two turns rather than one run-on.
+   */
+  const queueMessage = useCallback((
+    content: string,
+    attachments: AttachmentPayload[] = [],
+    spoken = false,
+  ) => {
+    if (!content.trim() && attachments.length === 0) return;
+    setState((current) => ({
+      ...current,
+      queued: [...current.queued, { id: crypto.randomUUID(), content, attachments, spoken }],
+    }));
+  }, []);
+
+  const unqueue = useCallback((id: string) => {
+    setState((current) => ({
+      ...current,
+      queued: current.queued.filter((entry) => entry.id !== id),
+    }));
+  }, []);
+
+  /*
+    Draining the queue.
+
+    Watches `busy` falling rather than hooking the `complete` event, because a
+    turn also ends by being aborted or by failing, and a message someone queued
+    is still a message they want sent — the queue is about *when*, not about
+    whether the previous turn went well.
+
+    One per fall, and the send sets `busy` again immediately, so the next only
+    goes when that one finishes too.
+  */
+  const sendRef = useRef(sendMessage);
+  useEffect(() => { sendRef.current = sendMessage; }, [sendMessage]);
+  useEffect(() => {
+    if (state.busy || state.queued.length === 0 || !sessionId) return;
+    const [next, ...rest] = state.queued;
+    setState((current) => ({ ...current, queued: rest }));
+    sendRef.current(next.content, { attachments: next.attachments, spoken: next.spoken });
+  }, [state.busy, state.queued, sessionId]);
+
   const abort = useCallback(() => {
     if (!sessionId) return;
     send({ type: 'chat.abort', sessionId });
@@ -588,6 +660,8 @@ export function useChatSession(sessionId: string | null) {
     suggestion,
     clearSuggestion,
     sendMessage,
+    queueMessage,
+    unqueue,
     abort,
     answerPermission,
     answerQuestion,

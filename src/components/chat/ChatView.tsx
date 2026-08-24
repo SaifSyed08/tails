@@ -1,4 +1,4 @@
-import { Brain, Check, Copy, Paperclip, X } from 'lucide-react';
+import { Brain, Check, Copy, Paperclip, X, Clock } from 'lucide-react';
 import { useEffect, useRef, useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -329,7 +329,8 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
   const {
     rows, busy, lastTurnMs, pendingPermissions, pendingPrompts, error, mode, changeMode,
     turnSettings, changeTurnSettings, suggestion, clearSuggestion,
-    sendMessage, abort, answerPermission, answerQuestion, answerPlan,
+    sendMessage, queueMessage, unqueue, queued, abort,
+    answerPermission, answerQuestion, answerPlan,
   } = useChatSession(sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true);
@@ -712,9 +713,50 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
             */}
             {!busy && lastTurnMs !== undefined ? <TurnFooter ms={lastTurnMs} /> : null}
 
-            {busy && !isStreaming(rows[rows.length - 1]) ? (
-              <ThinkingIndicator petPhrases={pet?.phrases} />
+            {/*
+              For the whole turn, at the bottom of it.
+
+              It used to vanish the moment tokens started arriving and come back
+              in the gaps, so a turn that wrote a paragraph, ran four tools and
+              wrote another had the "still working" affordance flicker in and out
+              of existence — and the elapsed seconds restarted each time, which
+              made the one number worth watching unreadable.
+            */}
+            {busy ? (
+              <ThinkingIndicator
+                petPhrases={pet?.phrases}
+                streaming={isStreaming(rows[rows.length - 1])}
+              />
             ) : null}
+
+            {/*
+              What is waiting to be sent.
+
+              Shown as its own rows rather than folded into the transcript,
+              because these have not happened: a queued message drawn like a
+              sent one is a message the user believes was answered. Each one can
+              be taken back, since changing your mind about the next thing while
+              the current thing is still running is the ordinary case.
+            */}
+            {queued.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex items-start justify-between gap-2 self-end rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
+              >
+                <span className="flex items-start gap-2">
+                  <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="whitespace-pre-wrap">{entry.content}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => unqueue(entry.id)}
+                  aria-label="Do not send this"
+                  className="shrink-0 rounded p-0.5 transition-colors duration-quick hover:bg-accent hover:text-foreground"
+                >
+                  <X className="size-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            ))}
 
             {error ? (
               <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -795,6 +837,7 @@ export function ChatView({ sessionId, cwd, onFirstMessage }: ChatViewProps) {
           onModeChange={changeMode}
           onSend={submit}
           onAbort={abort}
+          onQueue={queueMessage}
           suggestion={suggestion}
           onSuggestionDismiss={clearSuggestion}
           onAssignPet={() => setPetPickerOpen(true)}
