@@ -22,6 +22,8 @@ import { AppError } from '@/shared/utils.js';
 import { stopAllDevServers } from '@/modules/devserver/dev-servers.js';
 import { stopAllWatchers } from '@/modules/surface/bindings.js';
 import { surfaceService } from '@/modules/surface/surface.service.js';
+import { createSceneRouter } from '@/modules/scene/scene.routes.js';
+import { sceneService } from '@/modules/scene/scene.service.js';
 
 const PORT = Number(process.env.TAILS_SERVER_PORT || 4317);
 const HOST = '127.0.0.1';
@@ -70,6 +72,7 @@ app.use('/api/voice', createVoiceRouter());
 // routed to a local model. See `routing.routes.ts`.
 app.use('/api/routing', createRoutingRouter());
 app.use('/api/surface', createSurfaceRouter());
+app.use('/api/scene', createSceneRouter());
 
 // In production the built client is served from the same origin, so the app
 // and its API share cookies, websockets, and CSP with no special casing.
@@ -144,6 +147,9 @@ server.listen(PORT, HOST, () => {
   if (restored.panels > 0 || restored.pruned > 0) {
     console.log(`Restored ${restored.panels} panel(s), pruned ${restored.pruned}.`);
   }
+  // Scenery needs no restarting — it is drawn by the client from a row — so
+  // this is only the sweep for conversations that have gone.
+  sceneService.prune();
 });
 
 const shutdown = () => {

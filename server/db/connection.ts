@@ -102,6 +102,20 @@ CREATE TABLE IF NOT EXISTS surfaces (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- The world a conversation is sitting in: scenery behind the interface, or
+-- something to play with in the corner.
+--
+-- Kept for the same reason a generated theme is. "Make it sunshine and
+-- rainbows" is a personalisation, and a personalisation that evaporates when
+-- the app restarts is a demo rather than a setting.
+CREATE TABLE IF NOT EXISTS scenes (
+  session_id TEXT PRIMARY KEY,
+  layer TEXT NOT NULL CHECK (layer IN ('behind', 'corner')),
+  spec_json TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Tools the user chose to stop being asked about, per folder.
 --
 -- Keyed by folder rather than by conversation, because that is the shape of the

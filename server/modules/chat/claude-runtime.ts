@@ -35,6 +35,7 @@ import { peekSessionModels } from '@/modules/chat/model.service.js';
 import { runRegistry } from '@/modules/chat/run-registry.js';
 import { trustRepository } from '@/db/trust.repository.js';
 import { createSurfaceServer, SURFACE_ALLOWED_TOOLS } from '@/modules/surface/surface.tools.js';
+import { createSceneServer, SCENE_ALLOWED_TOOLS } from '@/modules/scene/scene.tools.js';
 import { resolveTurnSettings, type TurnSettings } from '@/modules/chat/turn-settings.js';
 import { sessionsService } from '@/modules/sessions/sessions.service.js';
 import { publishSessionsChanged } from '@/shared/broadcast.js';
@@ -575,6 +576,15 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
             'You can build a small panel beside this conversation with mcp__tails-surface__surface_show: figures, charts, tables, checklists, timelines, progress and monitors, composed from parts the app draws. It is for the part of an answer worth looking at rather than reading, and for anything the user asked you to keep an eye on while they get on with something else — a monitor widget set to "match" flashes the panel and chimes.',
             'Sending it again replaces the whole panel, which is how you update one. There is no HTML, CSS or code in it, and no widget for "anything else": if a kind is genuinely missing, say which rather than approximating it.',
           ].join(' '),
+          // The third thing the app can change about itself, and the one a
+          // model will otherwise never reach for: asked for an atmosphere it
+          // answers with a colour scheme, because a colour scheme is the only
+          // lever it knows it has. Naming the distinction is the whole job of
+          // this paragraph.
+          [
+            'The window has a behind, and mcp__tails-scene__scene_set fills it: weather, a starfield, a neon horizon, blocky terrain scrolling past, grass and birds along the bottom — or a playable game in the empty corner. There is also a custom kind that runs a small page you write yourself, in a sandbox with no access to this app and no network.',
+            'This is a different question from how the app looks. Colour, shape and motion are the appearance tools; a scene is what everything else is sitting in. If someone asks for an atmosphere, a world, a time of day or something to fiddle with, they mean this — answering with a palette is the mistake.',
+          ].join(' '),
           formatPetVoice(petVoice),
           formatConversationInstructions(readConversationInstructions()),
         ].filter(Boolean).join('\n\n'),
@@ -603,6 +613,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         // fallback read as canned. See `pet-reaction.ts`.
         'tails-pet': createPetVoiceServer(sessionId),
         'tails-surface': createSurfaceServer(sessionId),
+        'tails-scene': createSceneServer(sessionId),
       },
       // Every appearance tool runs unprompted; see the comment on the constant
       // for why the two that used to be gated no longer are. What guards the
@@ -615,6 +626,7 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
         ...DEVSERVER_ALLOWED_TOOLS,
         ...PET_PERSONA_ALLOWED_TOOLS,
         ...SURFACE_ALLOWED_TOOLS,
+        ...SCENE_ALLOWED_TOOLS,
       ],
       // Per-turn rather than mid-session: a string prompt spawns a fresh CLI
       // each turn, so any live mode change would be discarded anyway. The same

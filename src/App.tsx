@@ -4,6 +4,7 @@ import { AppearancePanel } from '@/components/appearance/AppearancePanel';
 import { ChatView } from '@/components/chat/ChatView';
 import { ChatPet } from '@/components/petstage/ChatPet';
 import { PreviewPane } from '@/components/preview/PreviewPane';
+import { SceneBackdrop, SceneCorner } from '@/components/scene/SceneHost';
 import { SurfacePane } from '@/components/surface/SurfacePane';
 import { Intro } from '@/components/intro/Intro';
 import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
@@ -194,7 +195,18 @@ export default function App() {
             />
           ) : null}
 
-          <main className="flex min-w-0 flex-1 flex-col">
+          <main className="relative flex min-w-0 flex-1 flex-col">
+            {/*
+              The scenery, under everything this main column draws.
+
+              Inside `main` rather than at the root so the sidebar keeps its own
+              solid background — a sky behind the conversation list as well makes
+              the two columns stop reading as separate places. `relative` on the
+              parent is what the absolutely-positioned backdrop is measured
+              against, and is the only reason this line changed.
+            */}
+            <SceneBackdrop sessionId={view === 'chat' ? sessionId : null} />
+
             <Header
               sessionId={sessionId}
               sessionTitle={view === 'marketplace' ? 'Marketplace' : sessionTitle}
@@ -247,6 +259,10 @@ export default function App() {
                 produces both should not have to choose which the user sees.
               */}
               <SurfacePane key={sessionId ?? 'no-session'} sessionId={sessionId} />
+
+              {/* Fixed to the window rather than to this row, so a toy stays
+                  where it was put when a preview or a panel opens beside it. */}
+              <SceneCorner sessionId={view === 'chat' ? sessionId : null} />
             </div>
           </main>
         </div>

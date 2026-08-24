@@ -44,6 +44,8 @@ export type MessageKind =
   | 'preview_changed'
   /** The generated panel beside a conversation changed, or closed. JSON in `content`. */
   | 'surface_changed'
+  /** The scenery behind a conversation changed, or cleared. JSON in `content`. */
+  | 'scene_changed'
   | 'protocol_error';
 
 /**
