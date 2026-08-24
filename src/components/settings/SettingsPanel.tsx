@@ -17,6 +17,13 @@ import {
 import { useSpeech } from '@/components/voice/useSpeech';
 import { RoutingSettings } from '@/components/settings/RoutingSettings';
 import { TranscriptionSettings } from '@/components/voice/TranscriptionSettings';
+import {
+  INTRO_COMPONENTS,
+  INTRO_LABELS,
+  INTRO_VARIANTS,
+  type IntroVariant,
+} from '@/components/intro/variants';
+import { readIntroVariant, writeIntroVariant } from '@/components/intro/Intro';
 import { ElevenLabsSettings } from '@/components/voice/ElevenLabsSettings';
 import { VoiceSettings } from '@/components/voice/VoiceSettings';
 import {
@@ -644,6 +651,75 @@ function TrustedTools() {
   );
 }
 
+/**
+ * Choosing which cold start plays.
+ *
+ * The list on the left and the thing itself on the right, because the names are
+ * not the choice — "Orbit" and "Pixels" tell you nothing you can act on, and a
+ * five-way preference decided from five words is a preference decided at
+ * random. The box runs the real component, so what is being chosen is exactly
+ * what will run.
+ *
+ * Replayed on every selection and on a press of the box, since a two-second
+ * animation you have to reopen settings to watch again is one you will watch
+ * once.
+ */
+function IntroPicker() {
+  const [chosen, setChosen] = useState<IntroVariant>(readIntroVariant);
+  const [replay, setReplay] = useState(0);
+  const Preview = INTRO_COMPONENTS[chosen];
+
+  const pick = (variant: IntroVariant) => {
+    setChosen(variant);
+    writeIntroVariant(variant);
+    setReplay((count) => count + 1);
+  };
+
+  return (
+    <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+      <ul className="flex-1 space-y-1">
+        {INTRO_VARIANTS.map((variant) => (
+          <li key={variant}>
+            <button
+              type="button"
+              onClick={() => pick(variant)}
+              aria-pressed={chosen === variant}
+              className={cn(
+                'w-full rounded-md border px-2.5 py-1.5 text-left transition-colors duration-quick',
+                chosen === variant
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border hover:bg-accent',
+              )}
+            >
+              <span className="flex items-center gap-1.5 text-sm">
+                {chosen === variant ? <Check className="size-3.5 text-primary" aria-hidden="true" /> : null}
+                {INTRO_LABELS[variant].name}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {INTRO_LABELS[variant].note}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <button
+        type="button"
+        onClick={() => setReplay((count) => count + 1)}
+        aria-label={`Play the ${INTRO_LABELS[chosen].name} intro again`}
+        className="relative flex h-40 w-full shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-background sm:w-56"
+      >
+        {/* Keyed on the variant and the replay count together: a component that
+            only changed props would keep its phase timers, and the sequence
+            would appear to start halfway through. */}
+        <div key={`${chosen}-${replay}`} className="flex flex-col items-center">
+          <Preview preview />
+        </div>
+      </button>
+    </div>
+  );
+}
+
 function SectionIndex() {
   const reduced = useReducedMotion();
 
@@ -1027,6 +1103,8 @@ export function SettingsPanel({ sessionId, onClose }: SettingsPanelProps) {
                   </span>
                 </span>
               </label>
+
+              {introDisabled ? null : <IntroPicker />}
             </section>
           </div>
         </Reveal>

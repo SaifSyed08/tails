@@ -81,6 +81,14 @@ export default {
       keyframes: {
         // Opacity and transform only, so an animating list never triggers
         // layout.
+        /*
+          A terminal caret. Hard steps rather than a fade: a cursor that eases
+          in and out is a glow, and the thing being imitated blinks.
+        */
+        'caret-blink': {
+          '0%, 49%': { opacity: '1' },
+          '50%, 100%': { opacity: '0' },
+        },
         'working-dot': {
           '0%, 70%, 100%': { opacity: '0.25' },
           '35%': { opacity: '1' },
@@ -157,6 +165,7 @@ export default {
           difference between "working" and "something is wrong".
         */
         'working-dot': 'working-dot 1.35s var(--ease-standard) infinite',
+        'caret-blink': 'caret-blink 1.06s steps(1, end) infinite',
         // Long enough that the wave crosses the word and then rests before it
         // starts again, which is what makes it read as a loop rather than as
         // continuous jitter.

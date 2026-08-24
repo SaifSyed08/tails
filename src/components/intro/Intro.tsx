@@ -1,19 +1,41 @@
 import { useEffect, useState } from 'react';
 
+import {
+  INTRO_COMPONENTS,
+  INTRO_DURATION,
+  INTRO_VARIANTS,
+  type IntroVariant,
+} from '@/components/intro/variants';
 import { cn } from '@/lib/utils';
 import { useReducedMotion } from '@/shared/ui/Motion';
 
-/**
- * How long the full sequence runs before handing off.
- *
- * Short enough that it never feels like a gate on a fast machine, long enough
- * that the wordmark and the caption both land. The app is loading underneath
- * the whole time, so this is largely spent on work that had to happen anyway.
- */
-const SEQUENCE_MS = 2200;
+/** Where the chosen sequence lives. Beside the switch that turns it off. */
+export const INTRO_VARIANT_KEY = 'tails.introVariant';
 
-/** The point at which the caption appears, after the wordmark has settled. */
-const CAPTION_AT_MS = 900;
+export const DEFAULT_INTRO: IntroVariant = 'assemble';
+
+/** How long the fade out takes, so the app is not revealed mid-wipe. */
+const LEAVE_MS = 420;
+
+/** The stored choice, or the default. Never throws: this runs before anything. */
+export function readIntroVariant(): IntroVariant {
+  try {
+    const stored = localStorage.getItem(INTRO_VARIANT_KEY);
+    return (INTRO_VARIANTS as readonly string[]).includes(stored ?? '')
+      ? stored as IntroVariant
+      : DEFAULT_INTRO;
+  } catch {
+    return DEFAULT_INTRO;
+  }
+}
+
+export function writeIntroVariant(variant: IntroVariant): void {
+  try {
+    localStorage.setItem(INTRO_VARIANT_KEY, variant);
+  } catch {
+    // A blocked store costs the preference, not the app.
+  }
+}
 
 type IntroProps = {
   onDone: () => void;
@@ -26,10 +48,24 @@ type IntroProps = {
  * somewhere". It is skippable on any key or click because the twentieth launch
  * of a working day should not cost two seconds, and it is skipped outright
  * under reduced motion.
+ *
+ * ## What this owns, and what the variants own
+ *
+ * Everything about *leaving* is here: the overlay, the fade, the skip handlers
+ * and the hand-off. A variant draws content and nothing else — five components
+ * each owning their own dismissal would be five chances to leave the app behind
+ * a screen that never left, and the one that got it wrong would be the one
+ * nobody had picked yet.
+ *
+ * The variants themselves are in `variants.tsx`, along with why there are five.
  */
 export function Intro({ onDone }: IntroProps) {
   const reduced = useReducedMotion();
-  const [phase, setPhase] = useState<'mark' | 'caption' | 'leaving'>('mark');
+  const [leaving, setLeaving] = useState(false);
+  // Read once, on mount. A preference changed while the sequence is playing is
+  // a preference for the *next* launch.
+  const [variant] = useState(readIntroVariant);
+  const Sequence = INTRO_COMPONENTS[variant];
 
   useEffect(() => {
     if (reduced) {
@@ -37,17 +73,15 @@ export function Intro({ onDone }: IntroProps) {
       return undefined;
     }
 
-    const captionTimer = window.setTimeout(() => setPhase('caption'), CAPTION_AT_MS);
-    const leaveTimer = window.setTimeout(() => setPhase('leaving'), SEQUENCE_MS);
-    // The extra 420ms covers the fade-out so the app is not revealed mid-wipe.
-    const doneTimer = window.setTimeout(onDone, SEQUENCE_MS + 420);
+    const runFor = INTRO_DURATION[variant];
+    const leaveTimer = window.setTimeout(() => setLeaving(true), runFor);
+    const doneTimer = window.setTimeout(onDone, runFor + LEAVE_MS);
 
     return () => {
-      window.clearTimeout(captionTimer);
       window.clearTimeout(leaveTimer);
       window.clearTimeout(doneTimer);
     };
-  }, [reduced, onDone]);
+  }, [reduced, onDone, variant]);
 
   // Any interaction skips straight to the app.
   useEffect(() => {
@@ -67,47 +101,11 @@ export function Intro({ onDone }: IntroProps) {
       className={cn(
         'fixed inset-0 z-50 flex flex-col items-center justify-center bg-background',
         'transition-opacity duration-reflow ease-standard',
-        phase === 'leaving' ? 'pointer-events-none opacity-0' : 'opacity-100',
+        leaving ? 'pointer-events-none opacity-0' : 'opacity-100',
       )}
       role="presentation"
     >
-      {/* A single soft bloom behind the mark. Cheap, and it keeps the frame
-          from reading as a flat loading screen. */}
-      <div
-        className="pointer-events-none absolute size-[36rem] rounded-full opacity-40 blur-3xl"
-        style={{ background: 'radial-gradient(circle, hsl(var(--primary) / 0.35), transparent 70%)' }}
-        aria-hidden="true"
-      />
-
-      <div className="relative flex flex-col items-center">
-        <h1 // 300 rather than 900: Segoe UI and SF Pro both ship a real Light face,
-        // so this is a drawn weight rather than a synthesised one. The wide
-        // tracking is what makes "TAILS" read as an initialism, and the heavy
-        // weight was working against it.
-        className="flex font-display text-5xl font-light tracking-[0.2em] text-foreground sm:text-6xl">
-          {'TAILS'.split('').map((letter, index) => (
-            <span
-              key={letter}
-              className="animate-rise-in"
-              // Letters arrive in sequence rather than together — the wordmark
-              // assembles itself, which is the whole gesture.
-              style={{ animationDelay: `${index * 90}ms`, animationDuration: '520ms' }}
-            >
-              {letter}
-              {index < 4 ? <span className="opacity-40">.</span> : null}
-            </span>
-          ))}
-        </h1>
-
-        <p
-          className={cn(
-            'mt-5 max-w-md text-center text-sm text-muted-foreground transition-all duration-settle ease-enter',
-            phase === 'mark' ? 'translate-y-1 opacity-0' : 'translate-y-0 opacity-100',
-          )}
-        >
-          Totally Awesome Intelligent Local Sidekick
-        </p>
-      </div>
+      <Sequence />
 
       <p className="absolute bottom-8 text-xs text-muted-foreground/60">
         Press any key to skip
