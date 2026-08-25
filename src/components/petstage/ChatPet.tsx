@@ -131,6 +131,15 @@ const GLANCE_MS = 1100;
  */
 const FOOTSTEP_MS = 190;
 
+/**
+ * How far he has to have travelled since the last step for it to make a sound.
+ *
+ * At `WALK_SPEED` a `FOOTSTEP_MS` interval covers about 23 pixels, so this is a
+ * quarter of a normal stride — comfortably clear of "he is moving" and
+ * comfortably above "the frame loop is stopped and he is not".
+ */
+const MIN_STRIDE_PX = 6;
+
 /** How long each beat of the arrival greeting lasts. */
 const GREETING_MS = 900;
 
@@ -675,19 +684,47 @@ export function ChatPet({ sessionId }: ChatPetProps) {
   }, [here, geometry, reduced, activity, hovered, fullWidth, walkTo, stage.walks]);
 
   /*
-    Footsteps, for as long as his legs are going.
+    Footsteps, for as long as his legs are actually going.
 
     On a clock rather than on the animation, because the sprite's run cycle is a
     fixed frame rate and there is no event to hang a step on. Read through the
     preference *inside* the interval so switching the sound off silences a walk
     already in progress — checking once when the walk started would leave him
     stomping until he arrived.
+
+    ## Why it checks that he moved, rather than that he is walking
+
+    The two are not the same thing, and the gap between them was audible. The
+    walk advances on `requestAnimationFrame`, which stops when the window is
+    hidden; this timer is a `setInterval`, which does not. So a pet who set off
+    just before the window went away never arrived — his target stayed set, this
+    stayed "walking", and the footsteps carried on in an app nobody was looking
+    at, for as long as it took somebody to come back.
+
+    Gating on `document.hidden` would fix that one case. Comparing his actual
+    position fixes the whole class: the sound now follows the thing it is
+    describing rather than a clock that assumes it. Anything that stalls the
+    motion — a hidden window, a busy frame, a stopped loop — silences the steps
+    without this file having to know why.
   */
   const walking = Boolean(here && here.target !== null && !here.carried && here.y >= 0);
+
+  /** Where he is right now, readable from a timer that outlives the render. */
+  const strideRef = useRef(0);
+  useEffect(() => { strideRef.current = here?.x ?? 0; });
+
   useEffect(() => {
     if (!walking || reduced) return undefined;
 
+    let lastStepAt = strideRef.current;
     const timer = window.setInterval(() => {
+      const now = strideRef.current;
+      const travelled = Math.abs(now - lastStepAt);
+      lastStepAt = now;
+
+      // A step is worth a sound once he has covered a stride's worth of ground.
+      // At walking pace that is most intervals; at a standstill it is none.
+      if (travelled < MIN_STRIDE_PX) return;
       if (collisionSoundEnabled()) playFootstep();
     }, FOOTSTEP_MS);
 

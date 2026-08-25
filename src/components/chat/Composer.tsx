@@ -118,6 +118,7 @@ type ComposerMenuProps = {
   onPickFiles: () => void;
   onPickImages: () => void;
   onPersonalize: () => void;
+  onGenerate: () => void;
   onAssignPet: () => void;
   /** The pet this conversation already has, shown so the entry reads as state. */
   petName: string | null;
@@ -141,11 +142,7 @@ type ComposerMenuProps = {
  */
 type NotYetEntry = { title: string; detail: string };
 
-const NOT_YET: Record<'generate' | 'voice', NotYetEntry> = {
-  generate: {
-    title: 'Generate',
-    detail: 'The entry point is here, but nothing is wired behind it yet — no generators have been defined. Ask for one and it lands here.',
-  },
+const NOT_YET: Record<'voice', NotYetEntry> = {
   voice: {
     /*
       Shown only when voice mode cannot start yet. It is a setup instruction
@@ -183,7 +180,7 @@ const MENU_CLOSE_DELAY_MS = 200;
  * outside, or when focus leaves.
  */
 function ComposerMenu({
-  onPickFiles, onPickImages, onPersonalize, onAssignPet, petName, voice,
+  onPickFiles, onPickImages, onPersonalize, onGenerate, onAssignPet, petName, voice,
 }: ComposerMenuProps) {
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -349,15 +346,9 @@ function ComposerMenu({
                   <span className="ml-auto max-w-[7rem] truncate text-xs text-muted-foreground">{petName}</span>
                 ) : null}
               </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => setNotYet(NOT_YET.generate)}
-                className={itemClass}
-              >
+              <button type="button" role="menuitem" onClick={() => choose(onGenerate)} className={itemClass}>
                 <Sparkles className="size-4 text-muted-foreground" aria-hidden="true" />
                 Generate
-                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground/70">soon</span>
               </button>
               <button
                 type="button"
@@ -680,6 +671,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     textareaRef.current?.focus();
   };
 
+  /**
+   * The other half of what the app can build for itself.
+   *
+   * Filled rather than sent, exactly like `/personalize` above and for the same
+   * reason: the command asks what you want, so sending it bare is a valid move
+   * — but it should be the user's move rather than the menu's.
+   */
+  const generate = () => {
+    setDraft('/generate ');
+    onSuggestionDismiss?.();
+    textareaRef.current?.focus();
+  };
+
   const acceptCommand = (command: SlashCommand) => {
     // Leaves a trailing space so an argument hint can be typed straight away.
     setDraft(`/${command.name} `);
@@ -916,6 +920,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           onPickFiles={() => fileInputRef.current?.click()}
           onPickImages={() => imageInputRef.current?.click()}
           onPersonalize={personalize}
+          onGenerate={generate}
           onAssignPet={onAssignPet}
           petName={petName ?? null}
           voice={voice}

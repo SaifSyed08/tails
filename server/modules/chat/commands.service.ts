@@ -56,6 +56,38 @@ export const LOCAL_COMMANDS: Record<string, { description: string; argumentHint?
   },
 
   /**
+   * The other half of what this app can build for itself.
+   *
+   * `/personalize` covers how the interface *looks*. This covers what it
+   * *contains* — a panel of figures beside the conversation, something watching
+   * a file or an address, weather behind the window, a game in the corner. Three
+   * separate tool families that a model will otherwise never reach for, because
+   * nothing in a chat box suggests the app has a behind or a beside.
+   *
+   * Written as a routing decision rather than a menu of features. The failure
+   * without one is specific and predictable: asked for "something to watch the
+   * build", a model that knows only about panels builds a static table of the
+   * last known state, which is a screenshot of the thing that was wanted.
+   */
+  generate: {
+    description: 'Build something into the app for this conversation',
+    argumentHint: '<what you want>',
+    expand: (args) => [
+      'Build something into T.A.I.L.S. itself for this conversation.',
+      args.trim()
+        ? `Here is what I want: ${args.trim()}`
+        : 'I have not said what yet — ask me with AskUserQuestion, offering concrete things you could build rather than "what would you like?".',
+      'You have three families of tool for this, and picking the right one is most of the job.',
+      'A **panel** beside the conversation, with mcp__tails-surface__surface_show: figures, charts, tables, checklists, timelines, progress, and monitors. Call mcp__tails-surface__surface_guide first — it carries the rules, worked examples and the icon names, and it is what stops every answer becoming a table. Reach for this when the answer is structured and prose would flatten it.',
+      'If what I asked for is something to keep an eye on while I get on with other work, the monitor widget takes a `watch` — a loopback address polled for a phrase, or a file watched for a change — and that is what keeps it running after your turn ends. Without it the panel freezes at the moment I walked away, which is the moment it was for. Use it whenever the answer can be found by looking at a local address or a file.',
+      'A **scene**, with mcp__tails-scene__scene_set: weather, a starfield, a neon horizon, blocky terrain, grass and birds along the bottom — or a playable game in the corner. This is what the window is sitting in, not what it is drawn like. If I asked for an atmosphere, a world, a time of day, or something to fiddle with, this is the one, and answering with a colour scheme is the mistake.',
+      'If neither vocabulary can express it, the scene tool has a `custom` kind that runs a small page you write yourself — markup, styles and script — in a sandbox with no access to this app and no network at all. Everything it needs has to be in the markup you write; a URL to anything on the internet will silently draw nothing. Prefer a named scene when one fits, because it starts instantly and follows my theme.',
+      'If what I want is really about how the app *looks* — colour, shape, density, motion — say so and use /personalize instead; that is a different set of tools and this one will do it badly.',
+      'Build the thing I asked for. If some part of it genuinely cannot be built from what you have, tell me which piece is missing rather than approximating it with something that looks similar.',
+    ].join(' '),
+  },
+
+  /**
    * Claude Code's "go wide" gesture, as an instruction rather than a mood.
    *
    * The whole value is in being specific about *how* to spread the work, so
