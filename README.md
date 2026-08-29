@@ -143,13 +143,20 @@ Give a conversation a character. A pet is a sprite that lives in the chat, walks
 be picked up and thrown, put out onto your desktop above your other windows, and, if you want,
 made to **speak as the assistant** rather than beside it.
 
+<div align="center">
+<img src="docs/media/pet-lineup.png" alt="Seven animated pets side by side: a blue hedgehog, a spiky-haired fighter, a suited man, a girl in a penguin hoodie, a Shiba Inu, a paperclip, and a purple blob" width="100%">
+<br>
+<sub>Seven of the thirteen on this machine. Each is a full sprite sheet with idle, walk, jump and
+wave, and the shelf takes whatever you bring it.</sub>
+</div>
+
 ▸ &nbsp;**Assigned per conversation.** Drag one onto a chat and that chat has a face in the
 sidebar, so a list of twelve sessions stops being a list of twelve titles
 ▸ &nbsp;**It tells you when a chat is done**, by name, while the app is buried. Clicking the
 bubble opens that conversation
 ▸ &nbsp;Three modes: a quiet sprite, an occasional commentator, or the voice of the reply itself
 ▸ &nbsp;Each carries its own persona, thinking phrases, theme and voice, local or ElevenLabs
-▸ &nbsp;**Bring your own.** Import a sprite sheet and it joins the shelf
+▸ &nbsp;**Bring your own.** Import a sprite sheet and it joins the shelf, animations and all
 ▸ &nbsp;Out on the desktop its button is a **microphone**, because a pet you can see while the
 app is buried is a pet you want to talk to
 
