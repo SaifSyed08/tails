@@ -34,6 +34,12 @@ import { Reveal } from '@/shared/ui/Motion';
 type Status = {
   cli: { found: boolean; reason: string | null; installUrl: string | null };
   packageManager: boolean;
+  node: {
+    found: boolean;
+    canInstall: boolean;
+    /** Named before anything is fetched, so the URL is shown beside the button. */
+    download: { version: string; url: string } | null;
+  };
   command: string;
   installing: boolean;
 };
@@ -69,6 +75,15 @@ export function SetupPanel({ onOpenTerminal }: { onOpenTerminal: () => void }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [installing, setInstalling] = useState(false);
+  /*
+    Which of the two installs is running.
+
+    They stream to the same broadcast and land in the same log, so sharing that
+    state is what keeps them from racing each other into it. This exists only so
+    the right button spins, and it is declared up here with the rest because the
+    completion handler below closes over it.
+  */
+  const [busyStep, setBusyStep] = useState<'node' | 'cli' | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [outcome, setOutcome] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -93,6 +108,7 @@ export function SetupPanel({ onOpenTerminal }: { onOpenTerminal: () => void }) {
 
       if (progress.done) {
         setInstalling(false);
+        setBusyStep(null);
         setOutcome({ ok: progress.ok === true, message: progress.message ?? '' });
         // Re-read rather than assume: the verdict is npm's exit code, and
         // whether the binary is now findable is a different question with its
@@ -113,14 +129,18 @@ export function SetupPanel({ onOpenTerminal }: { onOpenTerminal: () => void }) {
     if (log) log.scrollTop = log.scrollHeight;
   }, [lines]);
 
-  const install = async (): Promise<void> => {
+  const run = async (step: 'node' | 'cli'): Promise<void> => {
     setInstalling(true);
+    setBusyStep(step);
     setLines([]);
     setOutcome(null);
     try {
-      await fetch('/api/setup/install-cli', { method: 'POST' });
+      await fetch(step === 'node' ? '/api/setup/install-node' : '/api/setup/install-cli', {
+        method: 'POST',
+      });
     } catch {
       setInstalling(false);
+      setBusyStep(null);
       setOutcome({ ok: false, message: 'The install could not be started.' });
     }
   };
@@ -163,11 +183,48 @@ export function SetupPanel({ onOpenTerminal }: { onOpenTerminal: () => void }) {
             ) : (
               <>
                 <p className="text-xs text-muted-foreground">
-                  {/* Named as the blocker it is: the next step cannot run
-                      without it, and there is no version of this app that can
-                      install a runtime for you. */}
-                  Not found, and the next step needs it. Install Node, then reopen T.A.I.L.S.
+                  Not found, and the next step needs it.
                 </p>
+
+                {/* The offer, when it can be made. `download` is null whenever
+                    nodejs.org could not be reached or this is not a machine
+                    the installer was built for, and both of those end at the
+                    same link rather than at a button that would fail. */}
+                {status.node.canInstall && status.node.download ? (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      This downloads the official installer, checks it against the checksum
+                      nodejs.org publishes, and hands it to Windows. You will be asked to approve
+                      it.
+                    </p>
+                    {/* The URL before the click, for the same reason the npm
+                        command is shown before it runs. */}
+                    <pre
+                      data-tails-part="code"
+                      className="overflow-x-auto p-2 font-mono text-[11px]"
+                    >
+                      {status.node.download.url}
+                    </pre>
+                    <button
+                      type="button"
+                      disabled={installing}
+                      onClick={() => void run('node')}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground transition-transform duration-instant ease-emphasis active:scale-95 disabled:opacity-50"
+                    >
+                      {busyStep === 'node'
+                        ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                        : <Download className="size-3.5" aria-hidden="true" />}
+                      {busyStep === 'node'
+                        ? 'Installing Node…'
+                        : `Install Node ${status.node.download.version} for me`}
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Install Node yourself, then reopen T.A.I.L.S.
+                  </p>
+                )}
+
                 <a
                   href="https://nodejs.org"
                   target="_blank"
@@ -196,13 +253,13 @@ export function SetupPanel({ onOpenTerminal }: { onOpenTerminal: () => void }) {
             <button
               type="button"
               disabled={installing || !status.packageManager}
-              onClick={() => void install()}
+              onClick={() => void run('cli')}
               className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground transition-transform duration-instant ease-emphasis active:scale-95 disabled:opacity-50"
             >
-              {installing
+              {busyStep === 'cli'
                 ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
                 : <Download className="size-3.5" aria-hidden="true" />}
-              {installing ? 'Installing…' : 'Install it for me'}
+              {busyStep === 'cli' ? 'Installing…' : 'Install it for me'}
             </button>
 
             {lines.length > 0 ? (
