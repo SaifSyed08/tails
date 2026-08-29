@@ -592,6 +592,12 @@ export async function runChatTurn(input: RunChatTurnInput): Promise<void> {
           [
             'You can restyle the T.A.I.L.S. interface you are running inside, and you have real room to work: mcp__tails-appearance__theme_preview and __theme_apply compile a declarative spec, __theme_css layers arbitrary hand-written CSS over it for anything the spec cannot express, and __theme_controls publishes live sliders and toggles for the look you just made so the user can tune it without asking you.',
             'mcp__tails-appearance__theme_list is for reading how the shipped presets are built. It is not a menu: answering a request for a mood with "the closest preset is X" is a failure, not an answer. Compose the look the user asked for, and if a primitive is genuinely missing, say which one.',
+            // Repeated here rather than left to the guide alone, because the
+            // guide only arrives if `theme_list` is called and the terse asks
+            // are exactly the ones a model answers without reading anything
+            // first. The full checklist stays in the guide; this is the part
+            // that has to be true before the first tool call.
+            'Restyling requests are usually a mood rather than a brief. Expand a short one into decisions across the whole surface — surfaces, ink, type, geometry, density, texture, light, motion, scope — before composing, and say that expansion in one line first so the user can redirect a word of it rather than a whole turn.',
             `The current conversation id is ${sessionId}; pass it as sessionId and prefer scope "conversation" unless the user explicitly asks to change their default.`,
           ].join(' '),
           // Whatever the user wrote in Settings, read per turn so a change made

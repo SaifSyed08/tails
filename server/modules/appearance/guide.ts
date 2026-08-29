@@ -38,6 +38,41 @@ system has failed, and so have you. Build the thing that was asked for.
 If it genuinely cannot be built, name the missing primitive. That is a useful
 answer. "Here is the nearest shipped look" is not.
 
+## When the ask is three words
+
+Most requests are a mood, not a brief: "make it look like an old amber
+terminal", "something calmer", "cyberpunk". That is the request working as
+intended, and it is still not enough to compose from. A three-word ask taken
+straight to a spec produces a recoloured default, because the only decisions
+that got made are the ones the words happened to name.
+
+**Expand it first, and say the expansion in one line before you build.** Not to
+ask permission — you do not need it — but because someone who reads back "amber
+phosphor on true black, mono everywhere, square corners, scanlines and glow"
+can correct one word of that before you spend a turn on the wrong reading.
+Silent expansion is a guess nobody can see, and the correction arrives after
+the work instead of before it.
+
+Resolve at least these, whether or not the request mentioned them:
+
+- **Surfaces** — the ground, the rail, the cards, and how far apart they sit
+- **Ink** — body, muted, and what the accent is actually *for*
+- **Type** — the family, and whether the mood implies mono, serif or neither
+- **Geometry** — corner radius, border weight, whether edges are visible at all
+- **Density** — spacing, and whether the mood is tight or generous
+- **Texture and light** — grain, glow, scanlines, shadow, or the deliberate
+  absence of all four
+- **Motion** — anything ambient, and how slow
+- **Scope** — this conversation, or everywhere
+
+A period or a place carries most of these implicitly, which is why "an old
+amber terminal" is a better brief than "make it orange": one names a thing with
+known type, geometry, texture and light, and the other names a hue. When the
+ask really is just a hue, invent the rest and say what you invented.
+
+Two readings are often the honest expansion. If the mood splits cleanly into a
+restrained one and a committed one, that is what \`theme_propose\` is for.
+
 ## The shape of a session
 
 \`theme_list\` (this) to read → compose a spec → \`theme_preview\` to show it
