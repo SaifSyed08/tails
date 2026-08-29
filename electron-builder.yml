@@ -126,6 +126,20 @@ win:
   target:
     - target: nsis
       arch: [x64]
+    # The same app without an installer: unzip it, run TAILS.exe.
+    #
+    # Worth the second artifact because the two are not the same offer. NSIS
+    # writes to Program Files, registers an uninstaller and drops shortcuts,
+    # which is right for keeping the app and wrong for looking at it once. The
+    # zip touches nothing outside the folder it is extracted into, needs no
+    # elevation, and can be deleted by deleting that folder. `~/.tails` is
+    # still where state lives either way, so a zip run and an installed run see
+    # the same conversations.
+    - target: zip
+      arch: [x64]
+  # Only the zip reads this; `nsis.artifactName` below overrides it for the
+  # installer, which keeps the "Setup" in its name because that is what it is.
+  artifactName: TAILS-${version}-windows-${arch}-portable.${ext}
   icon: electron/assets/icon.png
   # A GUI app that spawns a server, a PTY and the Claude Code CLI has no reason
   # to ask for elevation, and asking for it would be the difference between an
