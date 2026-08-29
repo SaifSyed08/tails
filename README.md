@@ -6,9 +6,10 @@
  ╩   ╩ ╩  ╩  ╩═╝  ╚═╝
 </pre>
 
-### Claude Code UI &nbsp;·&nbsp; a desktop app for the Claude Code CLI
+### The Claude Code CLI, with a UI fully personalized to your preferences
 
-**The interface the agent can redesign, mid-conversation, because you asked it to.**
+**Claude Code UI** &nbsp;·&nbsp; a desktop app for the Claude Code terminal agent, where the
+interface is something you ask for rather than something you are given.
 
 <br>
 
@@ -19,12 +20,32 @@
 [![Electron](https://img.shields.io/badge/Electron-38-47848F?style=for-the-badge&logo=electron&logoColor=white&labelColor=0D0D0D)](https://electronjs.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white&labelColor=0D0D0D)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white&labelColor=0D0D0D)](https://typescriptlang.org)
-[![Tests](https://img.shields.io/badge/tests-587%20passing-10B981?style=for-the-badge&labelColor=0D0D0D)](#verification)
+[![Tests](https://img.shields.io/badge/tests-602%20passing-10B981?style=for-the-badge&labelColor=0D0D0D)](#verification)
 
-<br>
+</div>
 
-<img src="docs/media/hero-chat.png" alt="Claude Code UI: the T.A.I.L.S. desktop GUI for the Claude Code CLI, showing the conversation sidebar with pet avatars and the new-chat screen" width="100%">
+<table>
+<tr>
+<td width="33%" valign="top">
+<img src="docs/media/theme-amber.png" alt="Claude Code UI restyled as an amber phosphor terminal: amber text on true black, monospaced, with scanlines">
+</td>
+<td width="33%" valign="top">
+<img src="docs/media/theme-paper.png" alt="Claude Code UI restyled as a warm paper notebook: cream stock, ink-dark serif text, paper grain">
+</td>
+<td width="33%" valign="top">
+<img src="docs/media/theme-neon.png" alt="Claude Code UI restyled as cyberpunk neon: near-black surfaces with electric cyan and magenta glow">
+</td>
+</tr>
+<tr>
+<td align="center"><sub><b>“make it look like an old amber terminal”</b></sub></td>
+<td align="center"><sub><b>“make it feel like a warm paper notebook”</b></sub></td>
+<td align="center"><sub><b>“cyberpunk neon, cyan and magenta”</b></sub></td>
+</tr>
+</table>
 
+<div align="center">
+<sub>Three messages, three turns, three themes. Nobody picked those colours and none of them is a
+preset.</sub>
 </div>
 
 <div align="center">
@@ -40,19 +61,28 @@ change the window it runs in, because that window is a terminal: one font, one g
 no panels, no idea who you are. A number, a chart, a warning and a plan all arrive the same way,
 as scrolling text.
 
-**T.A.I.L.S. gives the agent a real interface, then hands it the controls.** Ask for a different
-look and it composes one. Ask it to watch something and it builds a panel that keeps updating
-after the turn ends. Point it at a model running on your own machine and everything else stays
-exactly where it was.
+**T.A.I.L.S. gives the agent a real interface, then hands it the controls.**
 
-This gets more useful as the models get better, not less. The limit on a coding agent is shifting
-from what it can work out to what it can *show* you, and a terminal caps that at eighty columns
-of monospace.
+It syncs with the Claude Code sessions you already have, so the chat you started in the terminal
+this morning is in the sidebar. It supports local model integrations, so the same agent can run
+against something on your own machine. It has wake word activation, so you can ask for something
+without touching the keyboard. And it has a library of animated **pets** that keep an eye on your
+favourite chats and tell you when one is finished.
 
-Underneath, it is the real thing: T.A.I.L.S. spawns the actual Claude Code CLI through the
+Everything Claude Code can do, personalized to your way.
+
+<img src="docs/media/pet-alert.png" alt="The desktop pet, a pixel Shiba Inu, floating above the other windows with a speech bubble reading Add pagination to /api/... is ready, and a +1 badge for a second finished chat" width="270" align="right">
+
+Underneath, it is the real thing. T.A.I.L.S. spawns the actual Claude Code CLI through the
 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript), so your
-`CLAUDE.md`, your MCP servers, your settings and your permission prompts behave exactly as they
-do in the terminal. Nothing is reimplemented. What is added is everything a terminal cannot have.
+`CLAUDE.md`, your MCP servers, your settings and your permission prompts behave exactly as they do
+in the terminal. Nothing is reimplemented. What is added is everything a terminal cannot have.
+
+That includes knowing where to look. Assign a pet to a conversation and it sits out on your
+desktop above whatever you are working in. When that chat finishes, it says so by name, and
+clicking it takes you there. Two chats waiting means a name and a **+1**.
+
+<br clear="right">
 
 <div align="center">
 
@@ -66,33 +96,8 @@ Ask the app to redesign itself, in the chat, in plain English. The agent compose
 from a closed vocabulary of design primitives, previews two readings of the request when the
 change is structural, and publishes the three or four knobs worth tuning afterwards.
 
-A handful of looks ship with the app, and **they are not the point**. Ask for something they do
-not cover and you get a new one, composed for the sentence you typed. Every screenshot below came
-from a single message in the chat box: not one of them is a preset, and no human picked the
-colours.
-
-<table>
-<tr>
-<td width="50%" valign="top">
-<img src="docs/media/theme-amber.png" alt="Claude Code UI restyled as an amber phosphor terminal: warm amber text on near-black, monospaced">
-<br><sub><b>“an amber phosphor terminal from 1984”</b></sub>
-</td>
-<td width="50%" valign="top">
-<img src="docs/media/theme-paper.png" alt="Claude Code UI restyled as a warm paper notebook: cream surfaces, ink-dark serif text, low contrast">
-<br><sub><b>“a warm paper notebook, ink-dark serif, calm”</b></sub>
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-<img src="docs/media/theme-neon.png" alt="Claude Code UI restyled as high-contrast cyberpunk neon: violet-black with electric cyan and magenta">
-<br><sub><b>“high-contrast cyberpunk neon, cyan and magenta”</b></sub>
-</td>
-<td width="50%" valign="top">
-<img src="docs/media/appearance.png" alt="The appearance panel, itself wearing a generated theme: looks scoped to one chat or the whole app">
-<br><sub><b>Whatever it makes lands here, scoped to one chat or all of them, and revertable. The panel is wearing the amber theme too.</b></sub>
-</td>
-</tr>
-</table>
+A handful of looks ship with the app, and they are not the point. The three at the top of this
+page each came from one sentence typed into the chat box.
 
 ▸ &nbsp;Scoped **per chat** or **everywhere**, so one conversation can be amber phosphor while
 the rest of the app stays as it was
@@ -102,6 +107,8 @@ re-serialised from its own AST, so none of the model's bytes reach the renderer
 monitors, composed by the agent and still updating after the turn ends
 ▸ &nbsp;**Scenes** behind the window. Weather, a starfield, a neon horizon, scrolling terrain,
 or a playable game in the empty corner
+
+<img src="docs/media/appearance.png" alt="The appearance panel in the Claude Code UI: generated and built-in looks, each scopeable to one chat or the whole app" width="100%">
 
 <div align="center">
 
@@ -133,17 +140,20 @@ cloud only if you say so
 ## ❸ &nbsp; Pets as session avatars
 
 Give a conversation a character. A pet is a sprite that lives in the chat, walks the gutter, can
-be picked up and thrown, put out onto the desktop over your other windows, and, if you want, made
-to **speak as the assistant** rather than beside it.
+be picked up and thrown, put out onto your desktop above your other windows, and, if you want,
+made to **speak as the assistant** rather than beside it.
 
 ▸ &nbsp;**Assigned per conversation.** Drag one onto a chat and that chat has a face in the
 sidebar, so a list of twelve sessions stops being a list of twelve titles
+▸ &nbsp;**It tells you when a chat is done**, by name, while the app is buried. Clicking the
+bubble opens that conversation
 ▸ &nbsp;Three modes: a quiet sprite, an occasional commentator, or the voice of the reply itself
 ▸ &nbsp;Each carries its own persona, thinking phrases, theme and voice, local or ElevenLabs
+▸ &nbsp;**Bring your own.** Import a sprite sheet and it joins the shelf
 ▸ &nbsp;Out on the desktop its button is a **microphone**, because a pet you can see while the
 app is buried is a pet you want to talk to
 
-<img src="docs/media/pets.png" alt="The pet marketplace: browse sprite companions, put one on the desktop, assign one to a chat as a session avatar" width="100%">
+<img src="docs/media/pets.png" alt="The pet marketplace in the Claude Code UI: browse sprite companions, put one on the desktop, assign one to a chat as a session avatar" width="100%">
 
 <div align="center">
 
@@ -162,7 +172,7 @@ app is buried is a pet you want to talk to
 | ◈ &nbsp;**Five cold starts** | Pick the launch animation, with the real thing previewing beside the list |
 | ⬒ &nbsp;**Preview pane** | The agent opens what it just built, loopback only |
 | ⌘ &nbsp;**Built-in terminal** | A real PTY, for when you want the shell back |
-| ⌾ &nbsp;**First-run setup** | Detects a missing CLI and installs it for you, showing the command first |
+| ⌾ &nbsp;**First-run setup** | Missing Node or CLI? It shows you the command, then runs it for you |
 
 <img src="docs/media/startup.png" alt="Startup settings in the Claude Code UI: choosing between five launch animations with a live preview" width="100%">
 
@@ -173,10 +183,6 @@ app is buried is a pet you want to talk to
 </div>
 
 ## Install
-
-> **You need** [Node.js](https://nodejs.org) 20+ and the
-> [Claude Code CLI](https://claude.com/claude-code) signed in. If the CLI is missing, the app
-> detects it on first run and offers to install it for you.
 
 ### ⬇ &nbsp;Windows, no build step
 
@@ -189,6 +195,12 @@ and uninstalls by deleting that folder. The build is unsigned, so SmartScreen wi
 Prefer Start-menu shortcuts and a proper uninstaller? Take **`TAILS-Setup-<version>-x64.exe`**
 from the same release instead. Both keep their state in `~/.tails`, so you can switch between
 them and keep your conversations.
+
+> **What you need first.** The [Claude Code CLI](https://claude.com/claude-code), signed in, and
+> [Node.js](https://nodejs.org) 20+ to install it with. **If either is missing, the app offers to
+> fix it on first run**: it shows you the exact download and the exact command, checks the Node
+> installer against the checksum nodejs.org publishes, and lets Windows ask you to approve it.
+> Signing in stays yours to do, in a terminal, because that part is a browser flow.
 
 ### ⌨ &nbsp;From source
 
@@ -239,10 +251,10 @@ same-origin access and no network at all.
 
 ## Scope
 
-**Supported today.** Windows 10 and 11, x64, shipped as a portable zip and an NSIS installer.
-The binaries are unsigned, so SmartScreen warns on first run and "More info" then "Run anyway"
-is the way past it. macOS and Linux build targets are not wired up yet; the codebase carries no
-Windows-only dependencies, so that work is packaging rather than porting.
+**Supported today.** Windows 10 and 11, x64, shipped as a portable zip and an NSIS installer. The
+binaries are unsigned, so SmartScreen warns on first run. macOS and Linux build targets are not
+wired up yet; the codebase carries no Windows-only dependencies, so that work is packaging rather
+than porting.
 
 **Security posture.** T.A.I.L.S. is a single-user desktop app. The server binds `127.0.0.1` and
 carries no auth, because that binding is the boundary: nothing is exposed to the network, and
@@ -259,9 +271,113 @@ They are off unless you turn them on, and the on-device engines are the default 
 
 ### Verification
 
-587 tests, weighted toward the places where being wrong is silent: the spec validators and every
-one of their refusal paths, the sanitiser, the spoken-permission grammar, the pet physics, and the
-state reducers. `npm test`, `npm run typecheck` and `npm run lint` are all green on `master`.
+602 tests, weighted toward the places where being wrong is silent: the spec validators and every
+one of their refusal paths, the sanitiser, the spoken-permission grammar, the pet physics, the
+state reducers, and the release-picking and checksum matching behind the Node installer.
+`npm test`, `npm run typecheck` and `npm run lint` are all green on `master`.
+
+<div align="center">
+
+`─────────────────────────  ✦  ─────────────────────────`
+
+</div>
+
+## FAQ
+
+<details>
+<summary><b>What does T.A.I.L.S. stand for?</b></summary>
+<br>
+
+**Totally Awesome Intelligent Local Sidekick.** The dots are the brand; the Start-menu shortcut is
+plain `TAILS`, because Windows Search splits a dotted name into five single letters and typing
+"tails" would find nothing.
+
+</details>
+
+<details>
+<summary><b>Is this a replacement for Claude Code?</b></summary>
+<br>
+
+No. It runs the real CLI as a subprocess through the Claude Agent SDK. Same agent, same tools,
+same permissions, same `CLAUDE.md`, same MCP servers. If you uninstall T.A.I.L.S. tomorrow, your
+Claude Code setup is untouched.
+
+</details>
+
+<details>
+<summary><b>Will it see the sessions I started in the terminal?</b></summary>
+<br>
+
+Yes. Conversations you started in the terminal show up in the sidebar, and opening one adopts it
+so you can carry on where you left off. It reads them through the SDK rather than parsing the
+transcript files, so the format staying stable is not your problem.
+
+</details>
+
+<details>
+<summary><b>Do I need an Anthropic subscription?</b></summary>
+<br>
+
+You need whatever the Claude Code CLI needs, which is a Claude account or an API key. Or point it
+at a local model instead: with Ollama, LM Studio, llama.cpp or vLLM running, T.A.I.L.S. finds it
+and routes the CLI's traffic there, and nothing leaves the machine.
+
+</details>
+
+<details>
+<summary><b>Is it safe to let a model rewrite the interface?</b></summary>
+<br>
+
+That question is why the app is built the way it is. The agent never sends code for the UI to run.
+It names things from a closed vocabulary, the server validates the name, and the app decides what
+that name draws. A missing primitive is an error the agent has to report, not a gap it can fill
+with markup.
+
+The two exceptions are fenced. Freeform CSS is parsed into an AST and re-serialised, so none of
+the model's own bytes reach the renderer, and it can never touch a permission prompt. A custom
+scene runs in a sandboxed frame with no same-origin access and no network.
+
+</details>
+
+<details>
+<summary><b>What do the pets actually do?</b></summary>
+<br>
+
+More than sit there. A pet assigned to a conversation gives it a face in the sidebar, can speak
+the assistant's replies in its own voice, and, when it is out on your desktop, tells you by name
+when that chat has finished so you do not have to keep checking. They also get thrown around and
+land on things, which is less a feature than a consequence of giving them physics.
+
+</details>
+
+<details>
+<summary><b>Can I add my own pet?</b></summary>
+<br>
+
+Yes. Import a sprite sheet with its frame grid and it joins the shelf, with its own persona,
+thinking phrases, theme and voice.
+
+</details>
+
+<details>
+<summary><b>Does it work on macOS or Linux?</b></summary>
+<br>
+
+Not yet, as a build. The code has no Windows-only dependencies, so running it from source on
+another platform is a much shorter road than a port, but neither target is packaged or exercised
+and this README will not pretend otherwise.
+
+</details>
+
+<details>
+<summary><b>Why is the download so large?</b></summary>
+<br>
+
+Electron, plus the on-device speech engines that ship inside it so voice works without an account.
+The Claude Code CLI itself is deliberately **not** bundled, which saves 300 MB and means the app
+uses the copy you have already signed in to.
+
+</details>
 
 ## License
 
